@@ -84,7 +84,7 @@
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| POST | `/api/attachments` | multipart `{file, docPath}` → 文書と同フォルダに保存+コミットし、参照名を返す |
+| POST | `/api/attachments?docPath=` | multipart `{file}`(docPathはクエリ。フィールド順非依存)→ 添付フォルダに保存+コミットし、参照名を返す |
 | GET | `/api/files/*` | ライブラリ内ファイルのraw配信(画像表示用)。Markdownは対象外。`Content-Disposition` と MIME を適切に設定 |
 
 ### ごみ箱(FR-DOC-07)

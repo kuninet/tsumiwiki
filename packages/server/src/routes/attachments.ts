@@ -20,16 +20,15 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 
 export function registerAttachmentRoutes(app: FastifyInstance): void {
+  // docPathはクエリで受ける(multipartのフィールド順に依存しないため)
   app.post('/api/attachments', async (req, reply) => {
+    const { docPath } = req.query as { docPath?: string };
+    if (!docPath) {
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'docPathを指定してください');
+    }
     const file = await req.file();
     if (!file) {
       return sendError(reply, 400, 'VALIDATION_ERROR', 'ファイルを指定してください');
-    }
-    const docPathField = file.fields.docPath;
-    const docPath =
-      docPathField && 'value' in docPathField ? String(docPathField.value) : undefined;
-    if (!docPath) {
-      return sendError(reply, 400, 'VALIDATION_ERROR', 'docPathを指定してください');
     }
     const ext = path.posix.extname(file.filename.normalize('NFC')).toLowerCase();
     if (!DocService.ATTACHMENT_EXTENSIONS.has(ext)) {
@@ -44,14 +43,18 @@ export function registerAttachmentRoutes(app: FastifyInstance): void {
     let data: Buffer;
     try {
       data = await file.toBuffer();
-    } catch {
-      // fileSize上限超過(@fastify/multipartのlimits)
-      return sendError(
-        reply,
-        413,
-        'PAYLOAD_TOO_LARGE',
-        `ファイルサイズが上限(${app.config.maxUploadMb}MB)を超えています`,
-      );
+    } catch (e) {
+      // サイズ超過とそれ以外(不正なmultipart等)を区別する
+      if ((e as { code?: string }).code === 'FST_REQ_FILE_TOO_LARGE') {
+        return sendError(
+          reply,
+          413,
+          'PAYLOAD_TOO_LARGE',
+          `ファイルサイズが上限(${app.config.maxUploadMb}MB)を超えています`,
+        );
+      }
+      req.log?.warn({ err: e }, 'アップロードの解析に失敗しました');
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'アップロードの解析に失敗しました');
     }
     return handling(reply, async () => {
       const result = await app.docService.addAttachment(docPath, file.filename, data, authorOf(req));
@@ -95,13 +98,17 @@ export function registerAttachmentRoutes(app: FastifyInstance): void {
       return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
     }
 
+    // 配信は既知の拡張子に限定する(防御的措置)
     const ext = path.posix.extname(normalized).toLowerCase();
-    const mime = MIME_BY_EXT[ext] ?? 'application/octet-stream';
+    const mime = MIME_BY_EXT[ext];
+    if (!mime) {
+      return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
+    }
     return reply
       .header('X-Content-Type-Options', 'nosniff')
       // SVG内スクリプト等の実行を封じる(NFR-SEC-03)
       .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'")
-      .header('Content-Disposition', 'inline')
+      .header('Content-Disposition', ext === '.svg' ? 'attachment' : 'inline')
       .header('Cache-Control', 'private, max-age=60')
       .type(mime)
       .send(createReadStream(abs));
