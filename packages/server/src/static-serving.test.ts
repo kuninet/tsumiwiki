@@ -81,3 +81,24 @@ describe('静的配信', () => {
     await app2.close();
   });
 });
+
+describe('レビュー指摘の回帰テスト', () => {
+  it('存在しないビルドアセットは404(index.htmlへフォールバックしない)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/assets/missing.js' });
+    expect(res.statusCode).toBe(404);
+    expect(res.body).not.toContain('TsumiWiki SPA');
+  });
+
+  it('ドットファイルは配信されない', async () => {
+    const { writeFile: wf } = await import('node:fs/promises');
+    const { join: j } = await import('node:path');
+    await wf(j(staticDir, '.env'), 'SECRET=1', 'utf8');
+    const res = await app.inject({ method: 'GET', url: '/.env' });
+    expect(res.body).not.toContain('SECRET');
+  });
+
+  it('/API/(大文字)もJSONエラーになる', async () => {
+    const res = await app.inject({ method: 'GET', url: '/API/unknown' });
+    expect(res.headers['content-type']).toContain('application/json');
+  });
+});

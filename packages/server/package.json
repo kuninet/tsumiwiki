@@ -24,6 +24,7 @@
     "gray-matter": "^4.0.3",
     "pino": "^10.3.1",
     "simple-git": "^3.36.0",
+    "tsx": "^4.20.0",
     "yaml": "^2.9.0",
     "zod": "^3.25.76"
   },
@@ -31,7 +32,6 @@
     "@types/bcryptjs": "^3.0.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.19.43",
-    "tsx": "^4.20.0",
     "typescript": "^5.8.0",
     "vitest": "^3.2.0"
   }

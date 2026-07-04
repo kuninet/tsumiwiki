@@ -106,13 +106,23 @@ export function buildApp(options: BuildAppOptions) {
 
   // クライアントの静的配信(本番の単一ポート運用。設計01章1.4)
   if (config.staticRoot) {
-    app.register(fastifyStatic, { root: config.staticRoot, prefix: '/' });
+    app.register(fastifyStatic, {
+      root: config.staticRoot,
+      prefix: '/',
+      // ドットファイルは配信しない(防御的措置)
+      dotfiles: 'ignore',
+    });
     // SPAフォールバック: /api以外の未知パスはindex.htmlを返す
     app.setNotFoundHandler((req, reply) => {
-      if (req.url.startsWith('/api/')) {
+      const lower = req.url.toLowerCase();
+      if (lower.startsWith('/api/')) {
         return reply
           .code(404)
           .send({ error: { code: 'NOT_FOUND', message: 'エンドポイントがありません' } });
+      }
+      // ビルドアセットの取り違えはHTMLでなく404を返す(Unexpected token < の防止)
+      if (lower.startsWith('/assets/')) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'ファイルがありません' } });
       }
       return reply.sendFile('index.html');
     });

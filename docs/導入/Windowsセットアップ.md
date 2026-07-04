@@ -6,7 +6,7 @@ TsumiWikiをWindows PCで本番運用するための手順(設計01章1.4)。
 
 | ソフトウェア | バージョン | 備考 |
 |---|---|---|
-| Node.js | 20.19以上(LTS推奨) | https://nodejs.org/ |
+| Node.js | 20.19以上(22系推奨。Dockerイメージは22) | https://nodejs.org/ |
 | Git for Windows | 2.30以上 | https://gitforwindows.org/ 。履歴管理・バックアップに必須 |
 
 インストール後、PowerShellで確認:
@@ -55,6 +55,8 @@ git init --bare \\fileserver\share\tsumiwiki.git
 ```powershell
 cd C:\tsumiwiki
 $env:LIBRARY_PATH="C:\tsumiwiki-library"
+# DB_PATHを既定から変える場合は、ここでも同じ値を設定すること
+# (異なるDBに管理者が作られるとログインできない)
 pnpm --filter @tsumiwiki/server create-admin -- --username admin --display-name 管理者
 # パスワードは対話入力
 
@@ -68,14 +70,19 @@ pnpm --filter @tsumiwiki/server start
 常時稼働にはNSSM(https://nssm.cc/)でサービス登録する:
 
 ```powershell
+# --import tsx で単一プロセス起動にする(tsx CLI経由の二段プロセスだと
+# サービス停止時のシグナルが実サーバーへ届かず、最終pushが実行されないため)
 nssm install TsumiWiki "C:\Program Files\nodejs\node.exe"
-nssm set TsumiWiki AppParameters "C:\tsumiwiki\node_modules\tsx\dist\cli.mjs C:\tsumiwiki\packages\server\src\index.ts"
+nssm set TsumiWiki AppParameters "--import tsx C:\tsumiwiki\packages\server\src\index.ts"
 nssm set TsumiWiki AppDirectory "C:\tsumiwiki\packages\server"
 nssm set TsumiWiki AppEnvironmentExtra LIBRARY_PATH=C:\tsumiwiki-library DB_PATH=C:\tsumiwiki-data\app.db PORT=3000 BACKUP_REMOTE=\\fileserver\share\tsumiwiki.git LOG_FILE=C:\tsumiwiki-data\app.log
+nssm set TsumiWiki AppStopMethodSkip 0
+nssm set TsumiWiki AppStopMethodConsole 15000
 nssm start TsumiWiki
 ```
 
-停止時はSIGTERM相当で、最終sync・バックアップpush・WALチェックポイントが実行される。
+停止時は最終sync・バックアップpush・WALチェックポイントが実行される
+(実際に発火することを9章のチェックリストで必ず確認すること)。
 
 ## 7. 復旧手順(設計06章6.6)
 
@@ -101,3 +108,4 @@ docker run -d --name tsumiwiki -p 3000:3000 `
 - [ ] サーバーテスト一式のパス: `pnpm --filter @tsumiwiki/server test`(#16)
 - [ ] MS-IMEでの編集(変換確定・ショートカット・`[[`補完)— issue #6のチェックリストA〜D(#12)
 - [ ] サービス再起動後のロック・インデックス整合
+- [ ] **サービス停止時に最終バックアップpushが実行される**(停止→bareリポジトリのログに直前の変更が含まれること)(#16)
