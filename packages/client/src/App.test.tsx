@@ -63,11 +63,14 @@ describe('App', () => {
             json: () => Promise.resolve({ folders: [], docs: [] }),
           });
         }
+        if (url.startsWith('/api/docs/recent')) {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ docs: [] }) });
+        }
         return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ tags: [] }) });
       }),
     );
 
     renderApp('/');
-    expect(await screen.findByText('文書を選択してください')).toBeTruthy();
+    expect(await screen.findByText('最近更新した文書')).toBeTruthy();
   });
 });

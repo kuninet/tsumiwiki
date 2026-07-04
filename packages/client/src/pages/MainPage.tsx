@@ -1,11 +1,49 @@
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useMe } from '../api/auth';
 import { ApiRequestError } from '../api/client';
 import { useDoc } from '../api/docs';
+import { useRecentDocs } from '../api/search';
 import { DocView } from '../components/DocView';
+import { docUrl } from '../lib/doc-path';
 import { useEditStore } from '../stores/edit';
 
-// メイン画面(SC-02)。文書未選択時はプレースホルダ、選択時はDocViewで閲覧・編集する
+// メイン画面(SC-02)。文書未選択時は最近更新一覧、選択時はDocViewで閲覧・編集する
+
+function RecentDocsList() {
+  const { data: docs, isLoading } = useRecentDocs();
+  const navigate = useNavigate();
+
+  return (
+    <div className="p-6">
+      <h1 className="text-lg font-bold text-gray-800">最近更新した文書</h1>
+
+      {isLoading && <p className="mt-4 text-sm text-gray-500">読み込み中...</p>}
+
+      {!isLoading && (docs ?? []).length === 0 && (
+        <p className="mt-4 text-sm text-gray-500">文書がありません</p>
+      )}
+
+      {!isLoading && (docs ?? []).length > 0 && (
+        <ul className="mt-4 divide-y divide-gray-100">
+          {(docs ?? []).map((doc) => (
+            <li key={doc.path}>
+              <button
+                type="button"
+                onClick={() => navigate(docUrl(doc.path))}
+                className="block w-full py-2 text-left hover:bg-gray-50"
+              >
+                <div className="text-sm font-medium text-gray-800">{doc.title}</div>
+                <div className="text-xs text-gray-500">
+                  {doc.folder || '(ルート)'} ・ {doc.updatedAt}
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 export function MainPage() {
   const params = useParams();
@@ -18,11 +56,7 @@ export function MainPage() {
   const { data: currentUser } = useMe();
 
   if (!docPath) {
-    return (
-      <div className="p-6 text-gray-500">
-        <p>文書を選択してください</p>
-      </div>
-    );
+    return <RecentDocsList />;
   }
 
   if (isLoading) {
