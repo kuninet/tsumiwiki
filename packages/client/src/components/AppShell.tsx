@@ -108,9 +108,9 @@ export function AppShell() {
           <aside
             data-testid="sidebar"
             style={{ width: sidebarWidth }}
-            className="relative flex-shrink-0 overflow-y-auto border-r border-gray-200"
+            className="relative flex flex-shrink-0 flex-col border-r border-gray-200"
           >
-            <div className="flex border-b border-gray-200">
+            <div className="flex flex-shrink-0 border-b border-gray-200">
               <button
                 type="button"
                 onClick={() => setSidebarTab('folder')}
@@ -134,7 +134,15 @@ export function AppShell() {
                 タグ
               </button>
             </div>
-            {sidebarTab === 'folder' ? <FolderTree /> : <TagPane />}
+            <div className="flex-1 overflow-y-auto">
+              {sidebarTab === 'folder' ? <FolderTree /> : <TagPane />}
+            </div>
+            <Link
+              to="/trash"
+              className="flex-shrink-0 border-t border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-100"
+            >
+              🗑 ごみ箱
+            </Link>
             <div
               onMouseDown={(e) => {
                 e.preventDefault(); // ドラッグ中のテキスト選択を防ぐ

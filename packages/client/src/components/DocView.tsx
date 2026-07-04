@@ -12,6 +12,7 @@ import { resolveWikilink } from '../lib/resolve-wikilink';
 import { useToastStore } from '../stores/toast';
 import { ConfirmDialog } from './ConfirmDialog';
 import { EditorToolbar } from './EditorToolbar';
+import { HistoryPanel } from './HistoryPanel';
 import { PromptDialog } from './PromptDialog';
 
 // 文書閲覧・編集画面(SC-02のMainPane。設計04章4.2/4.4・05章5.3〜5.5)
@@ -42,6 +43,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   const [tagsInput, setTagsInput] = useState(doc.tags.join(', '));
   const [cancelConfirmVisible, setCancelConfirmVisible] = useState(false);
   const [linkDialogVisible, setLinkDialogVisible] = useState(false);
+  const [historyVisible, setHistoryVisible] = useState(false);
 
   const navigate = useNavigate();
   const showToast = useToastStore((s) => s.show);
@@ -230,6 +232,15 @@ export function DocView({ doc, currentUser }: DocViewProps) {
           </p>
         </div>
         <div className="flex flex-shrink-0 gap-2">
+          <button
+            type="button"
+            onClick={() => setHistoryVisible(true)}
+            disabled={session.mode === 'edit'}
+            title={session.mode === 'edit' ? '編集中は使用できません' : undefined}
+            className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            履歴
+          </button>
           {session.mode === 'view' ? (
             <button
               type="button"
@@ -328,6 +339,8 @@ export function DocView({ doc, currentUser }: DocViewProps) {
           onCancel={() => setLinkDialogVisible(false)}
         />
       )}
+
+      {historyVisible && <HistoryPanel path={doc.path} onClose={() => setHistoryVisible(false)} />}
     </div>
   );
 }
