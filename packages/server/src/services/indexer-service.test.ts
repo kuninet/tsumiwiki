@@ -211,3 +211,56 @@ describe('IndexerService', () => {
     expect(hits).toEqual(['議事録/週次ミーティング.md']);
   });
 });
+
+describe('IndexerService: 堅牢性(レビュー指摘対応)', () => {
+  it('読めないファイルが混ざってもscanAllは継続し、他の文書は索引される', async () => {
+    const { mkdtemp, writeFile, chmod, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { openDatabase } = await import('../db/index.js');
+    const { IndexerService } = await import('./indexer-service.js');
+
+    const lib = await mkdtemp(join(tmpdir(), 'tsumiwiki-robust-'));
+    try {
+      await writeFile(join(lib, '正常.md'), '読める文書\n', 'utf8');
+      await writeFile(join(lib, '読めない.md'), '権限なし\n', 'utf8');
+      await chmod(join(lib, '読めない.md'), 0o000);
+
+      const db = openDatabase(':memory:');
+      const svc = new IndexerService(db, lib);
+      const result = await svc.scanAll();
+
+      expect(result.indexed).toBe(1);
+      expect(result.failedPaths).toEqual(['読めない.md']);
+      const rows = db.prepare('SELECT doc_path FROM doc_index').all() as { doc_path: string }[];
+      expect(rows.map((r) => r.doc_path)).toEqual(['正常.md']);
+    } finally {
+      await chmod(join(lib, '読めない.md'), 0o644).catch(() => {});
+      await rm(lib, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('ネストした.trashフォルダも索引から除外される', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { openDatabase } = await import('../db/index.js');
+    const { IndexerService } = await import('./indexer-service.js');
+
+    const lib = await mkdtemp(join(tmpdir(), 'tsumiwiki-nest-'));
+    try {
+      await mkdir(join(lib, 'サブ', '.trash'), { recursive: true });
+      await writeFile(join(lib, 'サブ', '.trash', '削除済み.md'), 'x\n', 'utf8');
+      await writeFile(join(lib, 'サブ', '通常.md'), 'y\n', 'utf8');
+
+      const db = openDatabase(':memory:');
+      const svc = new IndexerService(db, lib);
+      await svc.scanAll();
+
+      const rows = db.prepare('SELECT doc_path FROM doc_index').all() as { doc_path: string }[];
+      expect(rows.map((r) => r.doc_path)).toEqual(['サブ/通常.md']);
+    } finally {
+      await rm(lib, { recursive: true, force: true });
+    }
+  }, 20_000);
+});

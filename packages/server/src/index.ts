@@ -18,6 +18,9 @@ const scan = await indexer.scanAll();
 logger.info(
   `起動時リインデックス完了: 更新${scan.indexed}件 / 削除${scan.removed}件 / 変更なし${scan.unchanged}件`,
 );
+if (scan.failedPaths.length > 0) {
+  logger.warn({ failedPaths: scan.failedPaths }, '読み込みに失敗した文書があります(索引は継続)');
+}
 
 const app = buildApp({ config, db, logger });
 

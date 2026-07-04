@@ -22,6 +22,12 @@ async function main(): Promise<void> {
   console.log(
     `インデックス再構築完了: 更新${result.indexed}件 / 削除${result.removed}件 / 変更なし${result.unchanged}件`,
   );
+  if (result.failedPaths.length > 0) {
+    console.warn(`読み込みに失敗した文書(${result.failedPaths.length}件):`);
+    for (const p of result.failedPaths) console.warn(`  - ${p}`);
+  }
+  // WALチェックポイントを確実に行う
+  db.close();
 }
 
 main();
