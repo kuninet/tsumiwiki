@@ -4,6 +4,7 @@ import { Link, Outlet, useNavigate } from 'react-router-dom';
 import { useLogout, useMe } from '../api/auth';
 import { api } from '../api/client';
 import { TAGS_QUERY_KEY, TREE_QUERY_KEY } from '../api/docs';
+import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
 import { FolderTree } from './FolderTree';
@@ -11,6 +12,11 @@ import { TagPane } from './TagPane';
 import { Toast } from './Toast';
 
 // 認証済みレイアウト(SC-02の骨格・設計04章4.2)
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
 
 export function AppShell() {
   const { data: user } = useMe();
@@ -24,6 +30,9 @@ export function AppShell() {
   const setSidebarWidth = useUIStore((s) => s.setSidebarWidth);
   const toggleSidebarCollapsed = useUIStore((s) => s.toggleSidebarCollapsed);
   const setSidebarTab = useUIStore((s) => s.setSidebarTab);
+  const editDirty = useEditStore((s) => s.dirty);
+  const lockedPath = useEditStore((s) => s.lockedPath);
+  const lastDraftSavedAt = useEditStore((s) => s.lastDraftSavedAt);
 
   const draggingRef = useRef(false);
 
@@ -150,7 +159,19 @@ export function AppShell() {
         </main>
       </div>
 
-      <footer className="h-6 flex-shrink-0 border-t border-gray-200 px-4 text-xs text-gray-400" />
+      <footer className="flex h-6 flex-shrink-0 items-center border-t border-gray-200 px-4 text-xs text-gray-400">
+        {lockedPath && (
+          <span data-testid="status-bar">
+            編集中: {lockedPath}
+            {' ・ '}
+            {lastDraftSavedAt
+              ? `自動保存 ${formatTime(lastDraftSavedAt)}`
+              : editDirty
+                ? '未保存の変更があります'
+                : '保存済み'}
+          </span>
+        )}
+      </footer>
 
       <Toast />
     </div>

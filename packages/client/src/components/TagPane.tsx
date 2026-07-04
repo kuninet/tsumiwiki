@@ -1,8 +1,12 @@
 import { useNavigate } from 'react-router-dom';
 import { useDocsByTags, useTags } from '../api/tags';
+import { docUrl } from '../lib/doc-path';
+import { useEditStore } from '../stores/edit';
 import { useUIStore } from '../stores/ui';
 
 // タグペイン(設計04章4.2)。複数選択でAND絞り込みし、該当文書一覧を下に表示する
+
+const UNSAVED_NAVIGATION_WARNING = '未保存の変更があります。移動しますか?';
 
 export function TagPane() {
   const { data: tags } = useTags();
@@ -11,6 +15,13 @@ export function TagPane() {
   const clearTags = useUIStore((s) => s.clearTags);
   const { data: docs } = useDocsByTags(selectedTags);
   const navigate = useNavigate();
+
+  function handleNavigateToDoc(path: string) {
+    if (useEditStore.getState().dirty && !window.confirm(UNSAVED_NAVIGATION_WARNING)) {
+      return;
+    }
+    navigate(docUrl(path));
+  }
 
   return (
     <div className="p-2">
@@ -48,7 +59,7 @@ export function TagPane() {
               <li key={doc.path}>
                 <button
                   type="button"
-                  onClick={() => navigate(`/doc/${doc.path}`)}
+                  onClick={() => handleNavigateToDoc(doc.path)}
                   className="block w-full truncate rounded px-2 py-1 text-left text-sm text-gray-700 hover:bg-gray-100"
                 >
                   {doc.title}

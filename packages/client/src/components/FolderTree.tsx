@@ -1,6 +1,8 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { type MouseEvent, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  docQueryKey,
   useCreateDoc,
   useCreateFolder,
   useDeleteDoc,
@@ -10,10 +12,14 @@ import {
   useTree,
 } from '../api/docs';
 import { buildTree, parentOf, type TreeNode } from '../lib/build-tree';
+import { docUrl } from '../lib/doc-path';
+import { useEditStore } from '../stores/edit';
 import { useUIStore } from '../stores/ui';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { PromptDialog } from './PromptDialog';
+
+const UNSAVED_NAVIGATION_WARNING = '未保存の変更があります。移動しますか?';
 
 // フォルダツリー(設計04章4.2)。ルート・フォルダ・文書の右クリックメニューから
 // 新規作成・リネーム・削除を行う
@@ -38,6 +44,7 @@ type ConfirmState =
 export function FolderTree() {
   const { data: tree } = useTree();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const params = useParams();
   const currentPath = params['*'];
 
@@ -125,11 +132,27 @@ export function FolderTree() {
   function handleConfirmDelete() {
     if (!confirm) return;
     if (confirm.kind === 'deleteDoc') {
-      deleteDoc.mutate(confirm.path);
+      const deletedPath = confirm.path;
+      deleteDoc.mutate(deletedPath, {
+        onSuccess: () => {
+          // 表示中の文書を削除した場合は追従して閲覧不能な画面に留まらないようにする
+          if (currentPath === deletedPath) {
+            queryClient.removeQueries({ queryKey: docQueryKey(deletedPath) });
+            navigate('/');
+          }
+        },
+      });
     } else {
       deleteFolder.mutate(confirm.path);
     }
     setConfirm(null);
+  }
+
+  function handleNavigateToDoc(path: string) {
+    if (useEditStore.getState().dirty && !window.confirm(UNSAVED_NAVIGATION_WARNING)) {
+      return;
+    }
+    navigate(docUrl(path));
   }
 
   return (
@@ -163,7 +186,7 @@ export function FolderTree() {
             currentPath={currentPath}
             expandedFolders={expandedFolders}
             onToggle={toggleFolderExpanded}
-            onNavigate={(path) => navigate(`/doc/${path}`)}
+            onNavigate={handleNavigateToDoc}
             onContextMenu={openMenu}
           />
         ))}

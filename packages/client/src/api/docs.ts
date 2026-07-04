@@ -5,6 +5,7 @@ import type {
   DocResponse,
   MoveDocRequest,
   MoveFolderRequest,
+  SaveDocRequest,
   TreeResponse,
 } from '@tsumiwiki/shared';
 import { useToastStore } from '../stores/toast';
@@ -20,12 +21,33 @@ export function useTree() {
   });
 }
 
-export function useDoc(path: string | undefined) {
+export function docQueryKey(path: string | undefined) {
+  return ['doc', path] as const;
+}
+
+export interface UseDocOptions {
+  // 閲覧中はロック状態の追随のため定期再取得する(設計04章4.3)。編集中はfalseにして上書きを避ける
+  refetchInterval?: number | false;
+}
+
+export function useDoc(path: string | undefined, options: UseDocOptions = {}) {
   return useQuery({
-    queryKey: ['doc', path],
+    queryKey: docQueryKey(path),
     queryFn: () => api<DocResponse>('GET', `/api/docs?path=${encodeURIComponent(path!)}`),
     enabled: !!path,
+    refetchInterval: options.refetchInterval,
   });
+}
+
+// 文書保存(設計04章4.4)。tree/tags等の一斉invalidateは行わず、
+// use-editing-session側で保存文書固有のクエリのみ更新する
+export function saveDoc(body: SaveDocRequest): Promise<{ updatedAt: string }> {
+  return api('PUT', '/api/docs', body);
+}
+
+// 保存競合時、最新のupdatedAtだけを取得し直すための素の関数(設計04章4.4)
+export function fetchDoc(path: string): Promise<DocResponse> {
+  return api('GET', `/api/docs?path=${encodeURIComponent(path)}`);
 }
 
 // 文書・フォルダの変更系mutation共通処理: 成功時にtree/tagsを更新し結果をトースト表示する
