@@ -1,5 +1,11 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// エディタ本体の検証はroundtrip.test.tsで行うため、Appのテストではモックする
+vi.mock('./editor/EditorDemo', () => ({
+  EditorDemo: () => <div data-testid="editor-demo-mock" />,
+}));
+
 import { App } from './App';
 
 describe('App', () => {
