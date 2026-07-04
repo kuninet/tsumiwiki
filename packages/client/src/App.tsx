@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { healthResponseSchema, type HealthResponse } from '@tsumiwiki/shared';
+import { EditorDemo } from './editor/EditorDemo';
 
 export function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -22,6 +23,7 @@ export function App() {
         </p>
       )}
       {error && <p data-testid="health-error">{error}</p>}
+      <EditorDemo />
     </main>
   );
 }
