@@ -109,7 +109,7 @@ export function buildApp(options: BuildAppOptions) {
       name: 'tsumiwiki',
       version: '0.1.0',
       time: new Date().toISOString(),
-      backup: app.backupService.status(),
+      backup: app.backupService.publicStatus(),
     };
   });
 

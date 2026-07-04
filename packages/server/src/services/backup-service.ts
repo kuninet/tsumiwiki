@@ -11,6 +11,13 @@ export interface BackupStatus {
   lastError: string | null;
 }
 
+// 未認証のヘルスチェックへ出す情報(生のgitエラー=内部パスは含めない)
+export interface PublicBackupStatus {
+  configured: boolean;
+  healthy: boolean;
+  lastSuccessAt: string | null;
+}
+
 export class BackupService {
   private lastSuccessAt: string | null = null;
   private lastError: string | null = null;
@@ -19,6 +26,7 @@ export class BackupService {
     private readonly git: GitService,
     private readonly remoteUrl: string | null,
     private readonly logger?: Logger,
+    private readonly timeoutMs = 90_000,
   ) {}
 
   get configured(): boolean {
@@ -29,7 +37,13 @@ export class BackupService {
   async pushNow(): Promise<boolean> {
     if (!this.remoteUrl) return false;
     try {
-      await this.git.pushBackup(this.remoteUrl);
+      // 応答しないリモートで待ち続けない(git側のblockタイムアウトの保険)
+      await Promise.race([
+        this.git.pushBackup(this.remoteUrl),
+        new Promise((_, rej) =>
+          setTimeout(() => rej(new Error('バックアップpushがタイムアウトしました')), this.timeoutMs).unref?.(),
+        ),
+      ]);
       this.lastSuccessAt = new Date().toISOString();
       this.lastError = null;
       this.logger?.info({ remote: this.remoteUrl }, 'バックアップpush完了');
@@ -39,6 +53,14 @@ export class BackupService {
       this.logger?.error({ err: e, remote: this.remoteUrl }, 'バックアップpushに失敗しました');
       return false;
     }
+  }
+
+  publicStatus(): PublicBackupStatus {
+    return {
+      configured: this.configured,
+      healthy: this.lastError === null,
+      lastSuccessAt: this.lastSuccessAt,
+    };
   }
 
   status(): BackupStatus {

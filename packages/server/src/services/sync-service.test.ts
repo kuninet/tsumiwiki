@@ -54,7 +54,8 @@ describe('SyncService', () => {
     expect(second.indexed).toBe(0);
 
     const log = await simpleGit({ baseDir: lib }).log();
-    expect(log.total).toBe(1);
+    // init時の.gitignoreコミット+syncコミット1件
+    expect(log.total).toBe(2);
   }, 30_000);
 
   it('外部での削除も取り込まれ、索引から消える', async () => {
@@ -130,4 +131,70 @@ describe('BackupService', () => {
     expect(await backup.pushNow()).toBe(false);
     expect(backup.status().configured).toBe(false);
   }, 20_000);
+});
+
+describe('レビュー指摘の回帰テスト', () => {
+  it('アトミック書き込みの一時ファイルはsyncコミットに巻き込まれない(.gitignore)', async () => {
+    await writeFile(join(lib, '.tsumiwiki-tmp-abc123'), '書き込み途中\n', 'utf8');
+    const result = await sync.run();
+    expect(result.committed).toBe(false);
+
+    const status = await simpleGit({ baseDir: lib }).status();
+    expect(status.isClean()).toBe(true); // ignoredなので未追跡にも出ない
+    await rm(join(lib, '.tsumiwiki-tmp-abc123'), { force: true });
+  }, 30_000);
+
+  it('syncの並行呼び出しは直列化され、コミットは1件だけ積まれる', async () => {
+    await writeFile(join(lib, '並行対象.md'), 'x\n', 'utf8');
+    await Promise.all([sync.run(), sync.run(), sync.run(), sync.run(), sync.run()]);
+
+    const log = await simpleGit({ baseDir: lib }).log();
+    // .gitignore + sync 1件のみ(多重syncコミットなし)
+    expect(log.total).toBe(2);
+  }, 30_000);
+
+  it('watcherは.obsidianを無視し.trashは通知する', async () => {
+    const { mkdir } = await import('node:fs/promises');
+    const onChange = vi.fn();
+    const watcher = new LibraryWatcher(lib, onChange, 200);
+    watcher.start();
+    await new Promise((r) => setTimeout(r, 500));
+
+    await mkdir(join(lib, '.obsidian'), { recursive: true });
+    await writeFile(join(lib, '.obsidian', 'app.json'), '{}', 'utf8');
+    await new Promise((r) => setTimeout(r, 800));
+    expect(onChange).not.toHaveBeenCalled();
+
+    await mkdir(join(lib, '.trash'), { recursive: true });
+    await writeFile(join(lib, '.trash', '外部削除.md'), 'x\n', 'utf8');
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(onChange).toHaveBeenCalled();
+    await watcher.stop();
+  }, 30_000);
+
+  it('pushのタイムアウトが失敗として記録される(本体は継続)', async () => {
+    const hangingGit = {
+      pushBackup: () => new Promise<void>(() => {}),
+    } as unknown as GitService;
+    const backup = new BackupService(hangingGit, '/dummy/remote.git', undefined, 300);
+    expect(await backup.pushNow()).toBe(false);
+    expect(backup.status().lastError).toContain('タイムアウト');
+  }, 20_000);
+
+  it('未認証のhealthにはバックアップ詳細(lastError)が含まれない', async () => {
+    const { buildApp } = await import('../app.js');
+    const { loadConfig } = await import('../config.js');
+    const config = loadConfig({ LIBRARY_PATH: lib, BACKUP_REMOTE: '/存在しない/remote.git' });
+    const db = openDatabase(':memory:');
+    const app = buildApp({ config, db, logger: false });
+    await app.ready();
+    await app.backupService.pushNow(); // 失敗してlastErrorが記録される
+
+    const health = await app.inject({ method: 'GET', url: '/api/health' });
+    expect(health.statusCode).toBe(200);
+    expect(health.json().backup.configured).toBe(true);
+    expect(health.json().backup.healthy).toBe(false);
+    expect(JSON.stringify(health.json())).not.toContain('存在しない');
+    await app.close();
+  }, 30_000);
 });

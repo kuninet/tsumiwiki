@@ -62,8 +62,11 @@ async function shutdown(signal: string): Promise<void> {
   clearInterval(syncPoll);
   if (backupTimer) clearInterval(backupTimer);
   await watcher.stop();
-  // 正常終了時に最後のバックアップpushを試みる(設計06章6.5)
-  await app.backupService.pushNow();
+  // 停止直前の外部変更を取り込んでから最終push(いずれも時間上限つき)
+  const withTimeout = (p: Promise<unknown>, ms: number) =>
+    Promise.race([p.catch(() => undefined), new Promise((r) => setTimeout(r, ms).unref?.())]);
+  await withTimeout(app.syncService.run(), 15_000);
+  await withTimeout(app.backupService.pushNow(), 15_000);
   await app.close();
   db.close();
   process.exit(0);

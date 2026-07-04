@@ -7,16 +7,19 @@ import chokidar, { type FSWatcher } from 'chokidar';
 
 // .git / .obsidian 等の設定系ドットフォルダは監視対象外
 // (.trashはWiki操作でも変わるため対象に含め、syncのhasExternalChangesで吸収する)
-const IGNORED_RE = /(^|[/\\])\.(git|obsidian)([/\\]|$)/;
+const IGNORED_RE = /(^|[/\\])(\.(git|obsidian)([/\\]|$)|\.tsumiwiki-tmp-)/;
 
 export class LibraryWatcher {
   private watcher: FSWatcher | null = null;
   private timer: NodeJS.Timeout | null = null;
+  private firstEventAt: number | null = null;
 
   constructor(
     private readonly libraryPath: string,
     private readonly onChange: () => void,
     private readonly debounceMs = 3000,
+    // イベントが途切れない大量一括変更でも、この時間で必ず一度発火する
+    private readonly maxWaitMs = 15_000,
   ) {}
 
   start(): void {
@@ -30,13 +33,27 @@ export class LibraryWatcher {
   }
 
   private schedule(): void {
+    const now = Date.now();
+    this.firstEventAt ??= now;
     if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      this.onChange();
-    }, this.debounceMs);
+    const elapsed = now - this.firstEventAt;
+    if (elapsed >= this.maxWaitMs) {
+      this.fire();
+      return;
+    }
+    this.timer = setTimeout(
+      () => this.fire(),
+      Math.min(this.debounceMs, this.maxWaitMs - elapsed),
+    );
     // プロセス終了を妨げない
     this.timer.unref?.();
+  }
+
+  private fire(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.firstEventAt = null;
+    this.onChange();
   }
 
   async stop(): Promise<void> {

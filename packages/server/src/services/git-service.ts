@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { SerialQueue } from './serial-queue';
@@ -40,6 +40,17 @@ export class GitService {
     return this.gitInstance;
   }
 
+  // push専用インスタンス: 無応答リモート(ネットワーク障害等)で保存系の
+  // キューを塞がないよう、出力停止60秒でプロセスを打ち切る
+  private pushGitInstance: SimpleGit | null = null;
+  private get pushGit(): SimpleGit {
+    this.pushGitInstance ??= simpleGit({
+      baseDir: this.libraryPath,
+      timeout: { block: 60_000 },
+    });
+    return this.pushGitInstance;
+  }
+
   // ライブラリをGitリポジトリとして初期化する(設計06章6.1)。
   // 既存リポジトリ(Obsidianヴォルトを既にGit管理している場合等)はそのまま使う。
   async init(): Promise<void> {
@@ -53,6 +64,14 @@ export class GitService {
       await this.git.addConfig('core.precomposeunicode', 'true');
       await this.git.addConfig('user.name', SYSTEM_NAME);
       await this.git.addConfig('user.email', SYSTEM_EMAIL);
+      // .gitignoreの自動生成(設計06章6.7。既存があれば触らない)。
+      // アトミック書き込みの一時ファイルがsyncコミットに巻き込まれるのも防ぐ
+      const gitignorePath = join(this.libraryPath, '.gitignore');
+      if (!existsSync(gitignorePath)) {
+        writeFileSync(gitignorePath, '.obsidian/\n.DS_Store\nThumbs.db\n.tsumiwiki-tmp-*\n', 'utf8');
+        await this.git.add(['.gitignore']);
+        await this.commitStaged('add: .gitignore', SYSTEM_AUTHOR);
+      }
     });
   }
 
@@ -131,17 +150,17 @@ export class GitService {
     return !status.isClean();
   }
 
-  // バックアップ先bareリポジトリへpushする(NFR-AVL-02 / 設計06章6.5)
+  // バックアップ先bareリポジトリへpushする(NFR-AVL-02 / 設計06章6.5)。
+  // pushは索引・作業ツリーを変更しないため保存系キューとは分離し、
+  // リモート無応答時も保存・シャットダウンをブロックしない
   async pushBackup(remoteUrl: string): Promise<void> {
-    await this.queue.run(async () => {
-      const remotes = await this.git.getRemotes(true);
-      const backup = remotes.find((r) => r.name === 'backup');
-      if (!backup) {
-        await this.git.addRemote('backup', remoteUrl);
-      } else if (backup.refs.push !== remoteUrl) {
-        await this.git.remote(['set-url', 'backup', remoteUrl]);
-      }
-      await this.git.push('backup', 'main', { '--force-with-lease': null });
-    });
+    const remotes = await this.pushGit.getRemotes(true);
+    const backup = remotes.find((r) => r.name === 'backup');
+    if (!backup) {
+      await this.pushGit.addRemote('backup', remoteUrl);
+    } else if (backup.refs.push !== remoteUrl) {
+      await this.pushGit.remote(['set-url', 'backup', remoteUrl]);
+    }
+    await this.pushGit.push('backup', 'main', { '--force-with-lease': null });
   }
 }
