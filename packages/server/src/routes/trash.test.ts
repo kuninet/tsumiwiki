@@ -151,3 +151,49 @@ describe('ごみ箱API', () => {
     }
   }, 20_000);
 });
+
+describe('レビュー指摘の回帰テスト', () => {
+  it('完全削除の不正パスは400', async () => {
+    for (const bad of ['文書.md', '.trash/a/b.md', '.trash/../外.md']) {
+      const res = await apiAs(admin, 'DELETE', `/api/trash?path=${encodeURIComponent(bad)}`);
+      expect(res.statusCode).toBe(400);
+    }
+  }, 20_000);
+
+  it('手動で置かれた由来不明ファイルも一覧・復元できる(basenameフォールバック)', async () => {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    await mkdir(join(lib, '.trash'), { recursive: true });
+    await writeFile(join(lib, '.trash', '手動配置.md'), '中身\n', 'utf8');
+
+    const list = await apiAs(yamada, 'GET', '/api/trash');
+    const entry = list.json().entries.find((e: { name: string }) => e.name === '手動配置.md');
+    expect(entry).toBeTruthy();
+    expect(entry.originalPath).toBeNull();
+
+    const restored = await apiAs(yamada, 'POST', '/api/trash/restore', {
+      trashPath: '.trash/手動配置.md',
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json().path).toBe('手動配置.md'); // ルート直下へ
+  }, 30_000);
+
+  it('フォルダの完全削除(再帰rm)ができる', async () => {
+    await apiAs(yamada, 'POST', '/api/docs', { folder: '消すフォルダ', title: '中身' });
+    await apiAs(yamada, 'DELETE', `/api/folders?path=${encodeURIComponent('消すフォルダ')}`);
+
+    const purged = await apiAs(
+      admin,
+      'DELETE',
+      `/api/trash?path=${encodeURIComponent('.trash/消すフォルダ')}`,
+    );
+    expect(purged.statusCode).toBe(200);
+    const list = await apiAs(yamada, 'GET', '/api/trash');
+    expect(list.json().entries).toHaveLength(0);
+  }, 30_000);
+
+  it('.trash未作成なら一覧は空配列', async () => {
+    const list = await apiAs(yamada, 'GET', '/api/trash');
+    expect(list.statusCode).toBe(200);
+    expect(list.json().entries).toEqual([]);
+  }, 20_000);
+});

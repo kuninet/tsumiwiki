@@ -395,24 +395,29 @@ export class DocService {
     } catch {
       return []; // .trash未作成
     }
-    const result: TrashEntry[] = [];
-    for (const entry of entries) {
-      const name = entry.name.normalize('NFC');
-      const trashPath = `.trash/${name}`;
-      // 削除者・削除日時・元パスは trash: コミットから復元する(要件05章5.1)
-      const commit = await this.git.lastCommitFor(trashPath);
-      let originalPath: string | null = null;
-      const m = commit?.message.match(/^trash: (.+?)\/?$/);
-      if (m) originalPath = m[1];
-      result.push({
-        trashPath,
-        name,
-        isFolder: entry.isDirectory(),
-        originalPath,
-        deletedAt: commit?.date ?? null,
-        deletedBy: commit?.authorName ?? null,
-      });
-    }
+    // 削除者・削除日時・元パスは trash: コミットから復元する(要件05章5.1)。
+    // 項目単位で並列取得し、1項目のGitエラーで一覧全体を落とさない
+    const result: TrashEntry[] = await Promise.all(
+      entries.map(async (entry) => {
+        const name = entry.name.normalize('NFC');
+        const trashPath = `.trash/${name}`;
+        let commit = null;
+        try {
+          commit = await this.git.lastCommitFor(trashPath);
+        } catch (e) {
+          this.logger?.warn({ err: e, trashPath }, 'ごみ箱項目の由来取得に失敗しました');
+        }
+        const m = commit?.message.match(/^trash: (.+?)\/?$/);
+        return {
+          trashPath,
+          name,
+          isFolder: entry.isDirectory(),
+          originalPath: m ? m[1] : null,
+          deletedAt: commit?.date ?? null,
+          deletedBy: commit?.authorName ?? null,
+        };
+      }),
+    );
     // 削除日時の新しい順
     return result.sort((a, b) => (b.deletedAt ?? '').localeCompare(a.deletedAt ?? ''));
   }
@@ -428,16 +433,30 @@ export class DocService {
       throw new DocNotFoundError(normalized);
     }
 
-    const commit = await this.git.lastCommitFor(normalized);
+    // コミット未存在(手動配置・空リポジトリ)でも復元は続行する
+    let commit = null;
+    try {
+      commit = await this.git.lastCommitFor(normalized);
+    } catch (e) {
+      this.logger?.warn({ err: e, trashPath: normalized }, 'ごみ箱項目の由来取得に失敗しました');
+    }
     const m = commit?.message.match(/^trash: (.+?)\/?$/);
     // 元パス不明(手動で.trashに置かれた等)ならルート直下へ戻す
     const original = m ? m[1] : path.posix.basename(normalized);
 
-    // 復元先の衝突は連番で回避
-    let dest = normalizeRelPath(original);
-    if (isProtectedPath(dest) || dest.split('/').includes('.trash')) {
+    // 元パスが不正(..等の細工コミット)な場合もbasenameへフォールバックする
+    // (先にnormalizeで例外を出すと復元不能になるため、正規化はtryで包む)
+    let dest: string;
+    try {
+      dest = normalizeRelPath(original);
+    } catch {
       dest = path.posix.basename(normalized);
     }
+    if (!dest || isProtectedPath(dest) || dest.split('/').includes('.trash')) {
+      dest = path.posix.basename(normalized);
+    }
+    // 復元先の衝突は連番で回避(existsチェック→renameの間の競合は
+    // 実運用頻度が低く許容。Gitコミット自体は直列キューで保護される)
     const ext = isFolder ? '' : path.posix.extname(dest);
     const stem = ext ? dest.slice(0, dest.length - ext.length) : dest;
     for (let i = 2; await this.exists(resolveInLibrary(this.libraryPath, dest)); i++) {
