@@ -8,6 +8,7 @@ import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
 import { FolderTree } from './FolderTree';
+import { SearchBox } from './SearchBox';
 import { TagPane } from './TagPane';
 import { Toast } from './Toast';
 
@@ -78,12 +79,7 @@ export function AppShell() {
         <Link to="/" className="text-lg font-bold text-gray-800">
           TsumiWiki
         </Link>
-        <input
-          type="text"
-          placeholder="検索"
-          disabled
-          className="w-64 rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-400"
-        />
+        <SearchBox />
         <button
           type="button"
           onClick={handleRescan}
