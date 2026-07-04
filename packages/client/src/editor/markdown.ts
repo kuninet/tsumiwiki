@@ -9,28 +9,35 @@ import TableRow from '@tiptap/extension-table-row';
 import TaskItem from '@tiptap/extension-task-item';
 import TaskList from '@tiptap/extension-task-list';
 import StarterKit from '@tiptap/starter-kit';
+import type { DocSummary } from '@tsumiwiki/shared';
 import { Markdown } from 'tiptap-markdown';
 import { CodeBlockWithPreview } from './extensions/code-block-view';
 import { ObsidianEmbed } from './extensions/embed';
+import { ObsidianEmbedWithPreview } from './extensions/embed-view';
+import { ImageWithResolvedSrc } from './extensions/image-view';
 import { ListKeymap } from './extensions/list-keymap';
 import { RawBlock } from './extensions/raw-block';
 import { Wikilink } from './extensions/wikilink';
+import { WikilinkSuggestion } from './extensions/wikilink-suggestion';
 
 export interface EditorExtensionOptions {
-  // ReactのNodeView(mermaidプレビュー等)を使うか。
+  // ReactのNodeView(mermaidプレビュー・画像表示解決等)を使うか。
   // ヘッドレス変換(往復テスト・サーバーサイド利用)ではfalseにする。
   nodeViews?: boolean;
+  // [[入力補完の候補文書。DocViewがuseTreeの結果を渡す(省略時は補完なし)
+  getWikilinkDocs?: () => DocSummary[];
 }
 
 // エディタ拡張の構成(設計05章)。
 // 閲覧・編集・往復変換テストの全てでこの1つの構成を共有する。
 export function createEditorExtensions(options: EditorExtensionOptions = {}): Extensions {
-  const { nodeViews = true } = options;
+  const { nodeViews = true, getWikilinkDocs } = options;
   return [
     StarterKit.configure({ codeBlock: false }),
     nodeViews ? CodeBlockWithPreview : CodeBlock,
     Link.configure({ openOnClick: false, autolink: false }),
-    Image.configure({ inline: true }), // 段落内画像(![alt](path))を分断しない
+    // 段落内画像(![alt](path))を分断しない。NodeViewは表示解決のみでシリアライズには無関係
+    (nodeViews ? ImageWithResolvedSrc : Image).configure({ inline: true }),
     Table, // GFMパイプ表としてシリアライズされる
     TableRow,
     TableHeader,
@@ -47,9 +54,10 @@ export function createEditorExtensions(options: EditorExtensionOptions = {}): Ex
     }),
     TaskItem.configure({ nested: true }),
     Wikilink,
-    ObsidianEmbed,
+    nodeViews ? ObsidianEmbedWithPreview : ObsidianEmbed,
     RawBlock,
     ListKeymap,
+    WikilinkSuggestion.configure({ getDocs: getWikilinkDocs ?? (() => []) }),
     Markdown.configure({
       html: true, // HTMLブロックをrawBlockとして保全するため有効化(raw-block.ts参照)
       tightLists: true,

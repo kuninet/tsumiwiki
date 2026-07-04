@@ -131,3 +131,47 @@
   display: flex;
   gap: 0.4em;
 }
+
+.ProseMirror .obsidian-embed-image img,
+.ProseMirror .tiptap-image img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+/* wikilink入力補完のポップアップ(document.bodyへ直接追加される自作コンポーネント) */
+.wikilink-suggestion-popup {
+  position: absolute;
+  z-index: 50;
+  min-width: 180px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #dde4ee;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  padding: 0.25em 0;
+}
+
+.wikilink-suggestion-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.35em 0.75em;
+  font-size: 0.9em;
+  color: #333;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.wikilink-suggestion-item.is-selected,
+.wikilink-suggestion-item:hover {
+  background: #f0f4fa;
+}
+
+.wikilink-suggestion-empty {
+  padding: 0.35em 0.75em;
+  font-size: 0.85em;
+  color: #999;
+}

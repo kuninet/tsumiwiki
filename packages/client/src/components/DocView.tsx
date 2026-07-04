@@ -1,12 +1,20 @@
 import { EditorContent, useEditor } from '@tiptap/react';
-import type { DocResponse, User } from '@tsumiwiki/shared';
-import { useEffect, useRef, useState } from 'react';
+import type { DocResponse, DocSummary, User } from '@tsumiwiki/shared';
+import { type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { uploadAttachment } from '../api/attachments';
+import { useTree } from '../api/docs';
 import { createEditorExtensions } from '../editor/markdown';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
+import { docUrl } from '../lib/doc-path';
+import { resolveWikilink } from '../lib/resolve-wikilink';
+import { useToastStore } from '../stores/toast';
 import { ConfirmDialog } from './ConfirmDialog';
+import { EditorToolbar } from './EditorToolbar';
+import { PromptDialog } from './PromptDialog';
 
-// 文書閲覧・編集画面(SC-02のMainPane。設計04章4.2/4.4)
+// 文書閲覧・編集画面(SC-02のMainPane。設計04章4.2/4.4・05章5.3〜5.5)
 // 閲覧・編集は同じTiptapインスタンスのeditable切り替えで実現し、表示を完全一致させる
 
 interface DocViewProps {
@@ -19,13 +27,30 @@ function titleFromPath(path: string): string {
   return base.replace(/\.md$/i, '');
 }
 
+function folderOfPath(path: string): string {
+  const idx = path.lastIndexOf('/');
+  return idx === -1 ? '' : path.slice(0, idx);
+}
+
 function parseTagsInput(input: string): string[] {
   return [...new Set(input.split(',').map((t) => t.trim()).filter(Boolean))];
 }
 
+const IMAGE_MIME_PREFIX = 'image/';
+
 export function DocView({ doc, currentUser }: DocViewProps) {
   const [tagsInput, setTagsInput] = useState(doc.tags.join(', '));
   const [cancelConfirmVisible, setCancelConfirmVisible] = useState(false);
+  const [linkDialogVisible, setLinkDialogVisible] = useState(false);
+
+  const navigate = useNavigate();
+  const showToast = useToastStore((s) => s.show);
+  const { data: tree } = useTree();
+
+  const wikilinkDocsRef = useRef<DocSummary[]>([]);
+  useEffect(() => {
+    wikilinkDocsRef.current = tree?.docs ?? [];
+  }, [tree]);
 
   const session = useEditingSession({
     path: doc.path,
@@ -33,13 +58,39 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   });
 
   const editor = useEditor({
-    extensions: createEditorExtensions(),
+    extensions: createEditorExtensions({ getWikilinkDocs: () => wikilinkDocsRef.current }),
     content: doc.body,
     editable: false,
     onUpdate: ({ editor: e }) => {
       session.updateBody(e.storage.markdown.getMarkdown() as string);
     },
+    editorProps: {
+      handleDrop: (_view, event) => {
+        const files = Array.from(event.dataTransfer?.files ?? []).filter((f) =>
+          f.type.startsWith(IMAGE_MIME_PREFIX),
+        );
+        if (files.length === 0) return false;
+        event.preventDefault();
+        files.forEach((file) => void handleUploadImage(file));
+        return true;
+      },
+      handlePaste: (_view, event) => {
+        const files = Array.from(event.clipboardData?.files ?? []).filter((f) =>
+          f.type.startsWith(IMAGE_MIME_PREFIX),
+        );
+        if (files.length === 0) return false;
+        event.preventDefault();
+        files.forEach((file) => void handleUploadImage(file));
+        return true;
+      },
+    },
   });
+
+  // NodeView(embed-view/image-view)が相対パス解決に使う現在文書のフォルダを共有する
+  useEffect(() => {
+    if (!editor) return;
+    editor.storage.tsumiwikiDoc = { folder: folderOfPath(doc.path) };
+  }, [editor, doc.path]);
 
   useEffect(() => {
     editor?.setEditable(session.mode === 'edit');
@@ -62,10 +113,16 @@ export function DocView({ doc, currentUser }: DocViewProps) {
     function handleKeyDown(e: KeyboardEvent) {
       const current = sessionRef.current;
       if (current.mode !== 'edit' || e.isComposing) return;
-      const isSaveShortcut = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's';
-      if (!isSaveShortcut) return;
-      e.preventDefault();
-      void current.save();
+      const isMod = e.ctrlKey || e.metaKey;
+      if (isMod && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        void current.save();
+        return;
+      }
+      if (isMod && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setLinkDialogVisible(true);
+      }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -104,6 +161,60 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   function handleRestoreDraft() {
     const content = session.restoreDraft();
     editor?.commands.setContent(content);
+  }
+
+  function handleConfirmLink(url: string) {
+    setLinkDialogVisible(false);
+    if (!editor) return;
+    if (editor.state.selection.empty) {
+      editor
+        .chain()
+        .focus()
+        .insertContent([{ type: 'text', marks: [{ type: 'link', attrs: { href: url } }], text: url }])
+        .run();
+    } else {
+      editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
+    }
+  }
+
+  async function handleUploadImage(file: File) {
+    showToast('success', '画像をアップロード中...');
+    try {
+      const result = await uploadAttachment(doc.path, file);
+      editor?.chain().focus().insertContent({ type: 'obsidianEmbed', attrs: { target: result.fileName } }).run();
+      showToast('success', '画像をアップロードしました');
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : '画像のアップロードに失敗しました');
+    }
+  }
+
+  // wikilinkクリックでの遷移(FR-OBS-02)とfile://・UNCリンクの「パスをコピー」(FR-LINK-02)
+  function handleContainerClick(e: ReactMouseEvent<HTMLDivElement>) {
+    const target = e.target as HTMLElement;
+
+    const wikilinkEl = target.closest('span[data-type="wikilink"]');
+    if (wikilinkEl) {
+      const wikilinkTarget = wikilinkEl.getAttribute('data-target') ?? '';
+      const resolved = resolveWikilink(wikilinkTarget, wikilinkDocsRef.current);
+      if (resolved) {
+        navigate(docUrl(resolved));
+      } else {
+        showToast('error', 'リンク先が見つかりません');
+      }
+      return;
+    }
+
+    const anchorEl = target.closest('a');
+    if (anchorEl) {
+      const href = anchorEl.getAttribute('href') ?? '';
+      if (href.startsWith('file:') || href.startsWith('\\\\')) {
+        e.preventDefault();
+        navigator.clipboard
+          .writeText(href)
+          .then(() => showToast('success', 'パスをコピーしました'))
+          .catch(() => showToast('error', 'コピーに失敗しました'));
+      }
+    }
   }
 
   return (
@@ -149,6 +260,14 @@ export function DocView({ doc, currentUser }: DocViewProps) {
         </div>
       </div>
 
+      {session.mode === 'edit' && editor && (
+        <EditorToolbar
+          editor={editor}
+          onOpenLinkDialog={() => setLinkDialogVisible(true)}
+          onPickImage={(file) => void handleUploadImage(file)}
+        />
+      )}
+
       {session.mode === 'edit' && (
         <div className="border-b border-gray-200 px-6 py-2">
           <label className="block text-xs text-gray-500">
@@ -162,7 +281,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
         </div>
       )}
 
-      <div className="flex-1 overflow-auto px-6 py-4">
+      <div className="flex-1 overflow-auto px-6 py-4" onClick={handleContainerClick}>
         <EditorContent editor={editor} />
       </div>
 
@@ -196,6 +315,17 @@ export function DocView({ doc, currentUser }: DocViewProps) {
           cancelLabel="破棄して最新を読み込む"
           onConfirm={() => void session.resolveConflictOverwrite()}
           onCancel={() => void session.resolveConflictDiscard()}
+        />
+      )}
+
+      {linkDialogVisible && (
+        <PromptDialog
+          title="リンク"
+          label="URL"
+          defaultValue={(editor?.getAttributes('link').href as string | undefined) ?? ''}
+          confirmLabel="設定"
+          onConfirm={handleConfirmLink}
+          onCancel={() => setLinkDialogVisible(false)}
         />
       )}
     </div>
