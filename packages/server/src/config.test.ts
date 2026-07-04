@@ -31,4 +31,36 @@ describe('loadConfig', () => {
   it('数値でない設定はエラーになる', () => {
     expect(() => loadConfig({ LIBRARY_PATH: '/tmp/lib', PORT: 'abc' })).toThrow(/PORT/);
   });
+
+  it('PORTの上限(65535)を超えるとエラーになる', () => {
+    expect(() => loadConfig({ LIBRARY_PATH: '/tmp/lib', PORT: '70000' })).toThrow(/PORT/);
+  });
+
+  it('既定のDB_PATHはcwd非依存でライブラリの隣に置かれる', () => {
+    const config = loadConfig({ LIBRARY_PATH: '/tmp/wiki/library' });
+    expect(config.dbPath).toBe('/tmp/wiki/tsumiwiki-data/app.db');
+  });
+
+  it('DB_PATHがライブラリ配下だとエラーになる', () => {
+    expect(() =>
+      loadConfig({ LIBRARY_PATH: '/tmp/lib', DB_PATH: '/tmp/lib/data/app.db' }),
+    ).toThrow(/DB_PATH/);
+  });
+
+  it('ATTACHMENT_DIR_MODEに不正なフォルダ名を指定するとエラーになる', () => {
+    for (const bad of ['../attach', 'a/b', '.hidden', 'a\\b']) {
+      expect(() => loadConfig({ LIBRARY_PATH: '/tmp/lib', ATTACHMENT_DIR_MODE: bad })).toThrow(
+        /ATTACHMENT_DIR_MODE/,
+      );
+    }
+    expect(loadConfig({ LIBRARY_PATH: '/tmp/lib', ATTACHMENT_DIR_MODE: 'attachments' }).attachmentDirMode).toBe(
+      'attachments',
+    );
+  });
+
+  it('不正なLOG_LEVELはエラーになる', () => {
+    expect(() => loadConfig({ LIBRARY_PATH: '/tmp/lib', LOG_LEVEL: 'verbose' })).toThrow(
+      /LOG_LEVEL/,
+    );
+  });
 });
