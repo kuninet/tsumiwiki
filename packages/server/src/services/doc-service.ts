@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import matter from 'gray-matter';
@@ -131,6 +131,22 @@ export class DocService {
       throw new InvalidPathError(relPath);
     }
     return normalized;
+  }
+
+  // 排他的な新規作成: 既存ファイルがあればfalse(上書きしない)。
+  // linkはrenameと違い既存パスでEEXISTになるため、連番決定のTOCTOUを防げる
+  private async writeExclusive(abs: string, content: Buffer): Promise<boolean> {
+    const tmp = path.join(path.dirname(abs), `.tsumiwiki-tmp-${randomBytes(6).toString('hex')}`);
+    await writeFile(tmp, content);
+    try {
+      await link(tmp, abs);
+      return true;
+    } catch (e) {
+      if ((e as { code?: string }).code === 'EEXIST') return false;
+      throw e;
+    } finally {
+      await rm(tmp, { force: true });
+    }
   }
 
   // アトミック書き込み: 同一ディレクトリの一時ファイルに書いてからrename
@@ -416,11 +432,10 @@ export class DocService {
     const p2 = (n: number) => String(n).padStart(2, '0');
     const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
     let fileName = `image-${stamp}${ext}`;
-    for (let i = 2; await this.exists(path.join(absDir, fileName)); i++) {
+    for (let i = 2; !(await this.writeExclusive(path.join(absDir, fileName), data)); i++) {
       fileName = `image-${stamp}-${i}${ext}`;
     }
     const relPath = dirNorm ? `${dirNorm}/${fileName}` : fileName;
-    await this.writeAtomic(path.join(absDir, fileName), data);
     await this.tryCommit([relPath], `attach: ${relPath}`, author);
     return { fileName, path: relPath };
   }
