@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CreateUserRequest, UpdateUserRequest, User } from '@tsumiwiki/shared';
+import { ME_QUERY_KEY } from './auth';
 import { ApiRequestError, api } from './client';
 import { useToastStore } from '../stores/toast';
 
@@ -27,6 +28,8 @@ function useUsersMutation<TVariables>(
     mutationFn,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY });
+      // 自分自身の表示名変更等がヘッダー・個人設定へ即時反映されるようmeも更新
+      queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
       showToast('success', successMessage);
     },
     onError: (err) => {
