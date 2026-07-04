@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useUIStore } from '../stores/ui';
 import { SearchBox } from './SearchBox';
 
 interface Call {
@@ -18,6 +19,12 @@ function stubFetch(overrides: Record<string, unknown> = {}) {
     const key = `${method} ${path}`;
     if (key in overrides) {
       return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(overrides[key]) });
+    }
+    if (path === '/api/docs/recent') {
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ docs: [] }) });
+    }
+    if (path === '/api/tags') {
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ tags: [] }) });
     }
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ results: [] }) });
   });
@@ -49,6 +56,21 @@ describe('SearchBox', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     cleanup();
+    useUIStore.setState({ sidebarTab: 'folder', selectedTags: [] });
+  });
+
+  it('フォーカス時、クエリが空なら「最近開いた文書」を表示する', async () => {
+    stubFetch({
+      'GET /api/docs/recent': {
+        docs: [{ path: '議事録.md', title: '議事録', folder: '', updatedAt: '2026-07-01T00:00:00+09:00' }],
+      },
+    });
+    renderSearchBox();
+
+    fireEvent.focus(screen.getByPlaceholderText('検索'));
+
+    expect(await screen.findByText('最近開いた文書')).toBeTruthy();
+    expect(await screen.findByText('議事録')).toBeTruthy();
   });
 
   it('入力後300ms経過するまでは検索APIを呼ばず、経過後に呼び出す', async () => {
@@ -64,7 +86,7 @@ describe('SearchBox', () => {
     expect(calls.some((c) => c.path === '/api/search')).toBe(true);
   });
 
-  it('検索結果を表示する', async () => {
+  it('検索結果を「検索結果」セクションに表示する', async () => {
     stubFetch({
       'GET /api/search': {
         results: [{ path: '議事録.md', title: '議事録', snippet: '本日の<mark>議事録</mark>です' }],
@@ -74,7 +96,39 @@ describe('SearchBox', () => {
 
     fireEvent.change(screen.getByPlaceholderText('検索'), { target: { value: '議事録' } });
 
+    expect(await screen.findByText('検索結果')).toBeTruthy();
     expect(await screen.findByText('議事録', { selector: 'div' })).toBeTruthy();
+  });
+
+  it('クエリに前方一致するタグを「タグ」セクションに表示する', async () => {
+    stubFetch({
+      'GET /api/tags': {
+        tags: [
+          { tag: '設計', count: 5 },
+          { tag: '議事録', count: 2 },
+        ],
+      },
+    });
+    renderSearchBox();
+
+    fireEvent.change(screen.getByPlaceholderText('検索'), { target: { value: '設' } });
+
+    expect(await screen.findByText('タグ')).toBeTruthy();
+    expect(await screen.findByText('#設計')).toBeTruthy();
+    expect(screen.queryByText('#議事録')).toBeNull();
+  });
+
+  it('タグをクリックするとタグタブへ切り替えて選択する', async () => {
+    stubFetch({
+      'GET /api/tags': { tags: [{ tag: '設計', count: 5 }] },
+    });
+    renderSearchBox();
+
+    fireEvent.change(screen.getByPlaceholderText('検索'), { target: { value: '設計' } });
+    fireEvent.click(await screen.findByText('#設計'));
+
+    expect(useUIStore.getState().sidebarTab).toBe('tag');
+    expect(useUIStore.getState().selectedTags).toContain('設計');
   });
 
   it('snippetの<mark>タグをHTMLとして描画する', async () => {
@@ -136,7 +190,7 @@ describe('SearchBox', () => {
     expect(await screen.findByText('3文字以上を推奨します')).toBeTruthy();
   });
 
-  it('3文字以上で結果が0件のとき「見つかりませんでした」を表示する', async () => {
+  it('3文字以上で結果・タグとも0件のとき「見つかりませんでした」を表示する', async () => {
     stubFetch({ 'GET /api/search': { results: [] } });
     renderSearchBox();
 

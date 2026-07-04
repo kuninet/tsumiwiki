@@ -85,6 +85,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
   const setStoreDirty = useEditStore((s) => s.setDirty);
   const setStoreLockedPath = useEditStore((s) => s.setLockedPath);
   const setStoreLastDraftSavedAt = useEditStore((s) => s.setLastDraftSavedAt);
+  const setStoreSaveError = useEditStore((s) => s.setSaveError);
 
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [dirty, setDirty] = useState(false);
@@ -112,7 +113,8 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     setLastDraftSavedAt(null);
     setConflict(false);
     setStoreLockedPath(null);
-  }, [setStoreLockedPath]);
+    setStoreSaveError(false);
+  }, [setStoreLockedPath, setStoreSaveError]);
 
   const startEditing = useCallback(
     async (initialBody: string, initialTags: string[]) => {
@@ -186,6 +188,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     if (!path || !baseUpdatedAt) return;
 
     savingRef.current = true;
+    setStoreSaveError(false); // 新しい保存試行時は前回のエラー表示をクリアする
     try {
       const { updatedAt } = await saveDoc({
         path,
@@ -210,11 +213,12 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
         setConflict(true);
         return;
       }
+      setStoreSaveError(true);
       showToast('error', err instanceof ApiRequestError ? err.message : '保存に失敗しました');
     } finally {
       savingRef.current = false;
     }
-  }, [invalidateAfterSave, showToast, stopEditingLocally]);
+  }, [invalidateAfterSave, showToast, stopEditingLocally, setStoreSaveError]);
 
   // 競合解消: 自分の編集内容を保持したまま、最新のupdatedAtを取得し直して再保存する
   const resolveConflictOverwrite = useCallback(async () => {

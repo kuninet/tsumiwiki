@@ -1,14 +1,21 @@
 import { forwardRef, type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useSearch } from '../api/search';
+import { useRecentDocs, useSearch } from '../api/search';
+import { useTags } from '../api/tags';
 import { docUrl } from '../lib/doc-path';
 import { useEditStore } from '../stores/edit';
+import { useUIStore } from '../stores/ui';
 
-// ヘッダー検索(SC-04・設計04章)。入力は300msデバウンスしてから検索する
+// ヘッダー検索・SearchDropdown(SC-04・デザインhandoff components.md)。
+// クエリが空のときは「最近開いた文書」、入力中は「検索結果」→「タグ」の3セクション構成。
+// 入力は300msデバウンスしてからuseSearchを呼ぶ
 
 const DEBOUNCE_MS = 300;
 const MIN_RECOMMENDED_LENGTH = 3; // trigramトークナイザの特性上、これ未満はヒットしないことがある
+const MAX_TAG_SUGGESTIONS = 8;
 const UNSAVED_NAVIGATION_WARNING = '未保存の変更があります。移動しますか?';
+
+type NavItem = { kind: 'doc'; path: string } | { kind: 'tag'; tag: string };
 
 export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props, forwardedRef) {
   const [input, setInput] = useState('');
@@ -17,6 +24,8 @@ export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props,
   const [activeIndex, setActiveIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const setSidebarTab = useUIStore((s) => s.setSidebarTab);
+  const toggleTag = useUIStore((s) => s.toggleTag);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(input), DEBOUNCE_MS);
@@ -24,11 +33,28 @@ export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props,
   }, [input]);
 
   const trimmed = debounced.trim();
+  const isEmptyQuery = trimmed.length === 0;
+
+  const { data: recentDocs } = useRecentDocs();
   const { data: results } = useSearch(trimmed);
+  const { data: tags } = useTags();
+
+  const matchingTags = isEmptyQuery
+    ? []
+    : (tags ?? [])
+        .filter((t) => t.tag.toLowerCase().startsWith(trimmed.toLowerCase()))
+        .slice(0, MAX_TAG_SUGGESTIONS);
+
+  const navItems: NavItem[] = isEmptyQuery
+    ? (recentDocs ?? []).map((d): NavItem => ({ kind: 'doc', path: d.path }))
+    : [
+        ...(results ?? []).map((r): NavItem => ({ kind: 'doc', path: r.path })),
+        ...matchingTags.map((t): NavItem => ({ kind: 'tag', tag: t.tag })),
+      ];
 
   useEffect(() => {
     setActiveIndex(-1);
-  }, [results]);
+  }, [isEmptyQuery, results, recentDocs, tags]);
 
   useEffect(() => {
     function handleOutsideClick(e: MouseEvent) {
@@ -40,14 +66,32 @@ export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props,
     return () => window.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  function handleSelect(path: string) {
+  function closeAndReset() {
+    setOpen(false);
+    setInput('');
+    setDebounced('');
+  }
+
+  function handleSelectDoc(path: string) {
     if (useEditStore.getState().dirty && !window.confirm(UNSAVED_NAVIGATION_WARNING)) {
       return;
     }
     navigate(docUrl(path));
-    setOpen(false);
-    setInput('');
-    setDebounced('');
+    closeAndReset();
+  }
+
+  function handleSelectTag(tag: string) {
+    setSidebarTab('tag');
+    toggleTag(tag);
+    closeAndReset();
+  }
+
+  function handleSelectItem(item: NavItem) {
+    if (item.kind === 'doc') {
+      handleSelectDoc(item.path);
+    } else {
+      handleSelectTag(item.tag);
+    }
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
@@ -55,22 +99,27 @@ export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props,
       setOpen(false);
       return;
     }
-    if (!results || results.length === 0) return;
+    if (navItems.length === 0) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setActiveIndex((i) => (i + 1) % results.length);
+      setActiveIndex((i) => (i + 1) % navItems.length);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setActiveIndex((i) => (i - 1 + results.length) % results.length);
+      setActiveIndex((i) => (i - 1 + navItems.length) % navItems.length);
     } else if (e.key === 'Enter') {
-      if (activeIndex >= 0 && activeIndex < results.length) {
-        handleSelect(results[activeIndex].path);
+      if (activeIndex >= 0 && activeIndex < navItems.length) {
+        handleSelectItem(navItems[activeIndex]);
       }
     }
   }
 
-  const showHint = trimmed.length > 0 && trimmed.length < MIN_RECOMMENDED_LENGTH;
-  const showNoResults = trimmed.length >= MIN_RECOMMENDED_LENGTH && results && results.length === 0;
+  const showHint = !isEmptyQuery && trimmed.length < MIN_RECOMMENDED_LENGTH;
+  const showNoResults =
+    !isEmptyQuery &&
+    trimmed.length >= MIN_RECOMMENDED_LENGTH &&
+    results &&
+    results.length === 0 &&
+    matchingTags.length === 0;
 
   return (
     <div ref={containerRef} className="relative w-full max-w-[420px]">
@@ -96,35 +145,95 @@ export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props,
         </span>
       </div>
 
-      {open && trimmed.length > 0 && (
-        <div className="absolute left-0 top-full z-[40] mt-1 w-96 rounded-lg border border-line bg-panel shadow-lg">
-          {showHint && <p className="px-3 py-2 text-xs text-ink-faint">3文字以上を推奨します</p>}
-          {showNoResults && <p className="px-3 py-2 text-sm text-ink-faint">見つかりませんでした</p>}
-          {results && results.length > 0 && (
-            <ul>
-              {results.map((r, i) => (
-                <li key={r.path}>
-                  <button
-                    type="button"
-                    onClick={() => handleSelect(r.path)}
-                    className={`block w-full px-3 py-2 text-left ${
-                      i === activeIndex ? 'bg-active' : 'hover:bg-hoverbg'
-                    }`}
-                  >
-                    <div className="text-sm text-ink">{r.title}</div>
-                    {/*
-                      snippetはサーバー側でHTMLエスケープ済み+<mark>ハイライトのみを許可した契約
-                      (packages/shared/src/index.ts の searchResultSchema コメント参照)のため
-                      dangerouslySetInnerHTMLで描画してよい
-                    */}
-                    <div
-                      className="mt-0.5 truncate text-xs text-ink-faint"
-                      dangerouslySetInnerHTML={{ __html: r.snippet }}
-                    />
-                  </button>
-                </li>
-              ))}
-            </ul>
+      {open && (
+        <div className="absolute left-0 top-full z-[40] mt-1 w-[520px] rounded-lg border border-line bg-panel shadow-lg">
+          {isEmptyQuery && (
+            <div className="py-1">
+              <p className="px-3 pb-1 pt-2 text-xs font-medium text-ink-faint">最近開いた文書</p>
+              {(recentDocs ?? []).length === 0 && (
+                <p className="px-3 py-2 text-sm text-ink-faint">文書がありません</p>
+              )}
+              <ul>
+                {(recentDocs ?? []).map((doc, i) => (
+                  <li key={doc.path}>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectDoc(doc.path)}
+                      className={`block w-full px-3 py-2 text-left ${
+                        i === activeIndex ? 'bg-active' : 'hover:bg-hoverbg'
+                      }`}
+                    >
+                      <div className="text-sm text-ink">{doc.title}</div>
+                      <div className="text-xs text-ink-faint">{doc.folder || '(ルート)'}</div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {!isEmptyQuery && (
+            <>
+              {showHint && <p className="px-3 py-2 text-xs text-ink-faint">3文字以上を推奨します</p>}
+              {showNoResults && <p className="px-3 py-2 text-sm text-ink-faint">見つかりませんでした</p>}
+
+              {results && results.length > 0 && (
+                <div className="py-1">
+                  <p className="px-3 pb-1 pt-2 text-xs font-medium text-ink-faint">検索結果</p>
+                  <ul>
+                    {results.map((r, i) => (
+                      <li key={r.path}>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectDoc(r.path)}
+                          className={`block w-full px-3 py-2 text-left ${
+                            i === activeIndex ? 'bg-active' : 'hover:bg-hoverbg'
+                          }`}
+                        >
+                          <div className="text-sm text-ink">{r.title}</div>
+                          {/*
+                            snippetはサーバー側でHTMLエスケープ済み+<mark>ハイライトのみを許可した契約
+                            (packages/shared/src/index.ts の searchResultSchema コメント参照)のため
+                            dangerouslySetInnerHTMLで描画してよい
+                          */}
+                          <div
+                            className="mt-0.5 truncate text-xs text-ink-faint"
+                            dangerouslySetInnerHTML={{ __html: r.snippet }}
+                          />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {matchingTags.length > 0 && (
+                <div className="border-t border-line py-1">
+                  <p className="px-3 pb-1 pt-2 text-xs font-medium text-ink-faint">タグ</p>
+                  <ul className="flex flex-wrap gap-1.5 px-3 pb-2">
+                    {matchingTags.map((t, i) => {
+                      const idx = (results ?? []).length + i;
+                      const isActive = idx === activeIndex;
+                      return (
+                        <li key={t.tag}>
+                          <button
+                            type="button"
+                            onClick={() => handleSelectTag(t.tag)}
+                            className={`rounded-full border px-2.5 py-1 text-sm ${
+                              isActive
+                                ? 'border-accent-border bg-accent-soft text-accent'
+                                : 'border-line bg-panel-2 text-ink-soft hover:bg-hoverbg'
+                            }`}
+                          >
+                            <span>{`#${t.tag}`}</span> <span className="text-ink-faint">{t.count}</span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

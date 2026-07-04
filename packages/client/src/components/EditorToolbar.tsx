@@ -27,8 +27,8 @@ function ToolbarButton({ label, title, active, onClick }: ToolbarButtonProps) {
       // mousedownでpreventDefaultし、クリックしてもエディタの選択状態を失わないようにする
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      className={`rounded px-2 py-1 text-sm ${
-        active ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'
+      className={`h-7 min-w-7 whitespace-nowrap rounded px-1.5 text-sm ${
+        active ? 'bg-active text-accent' : 'text-ink-soft hover:bg-hoverbg'
       }`}
     >
       {label}
@@ -37,7 +37,7 @@ function ToolbarButton({ label, title, active, onClick }: ToolbarButtonProps) {
 }
 
 function Separator() {
-  return <span className="mx-1 h-4 w-px bg-gray-200" aria-hidden="true" />;
+  return <span className="mx-1 h-4 w-px bg-line" aria-hidden="true" />;
 }
 
 export function EditorToolbar({ editor, onOpenLinkDialog, onPickImage }: EditorToolbarProps) {
@@ -71,7 +71,7 @@ export function EditorToolbar({ editor, onOpenLinkDialog, onPickImage }: EditorT
   return (
     <div
       data-testid="editor-toolbar"
-      className="flex flex-wrap items-center gap-1 border-b border-gray-200 px-4 py-1.5"
+      className="flex h-10 flex-wrap items-center gap-1 border-y border-line bg-panel px-8"
     >
       <ToolbarButton
         label="H1"
