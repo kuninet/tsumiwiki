@@ -68,6 +68,7 @@ export function SettingsPage() {
           現在のパスワード
           <input
             type="password"
+            autoComplete="current-password"
             value={currentPassword}
             onChange={(e) => setCurrentPassword(e.target.value)}
             className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm"
@@ -77,6 +78,7 @@ export function SettingsPage() {
           新しいパスワード
           <input
             type="password"
+            autoComplete="new-password"
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
             className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm"
@@ -86,6 +88,7 @@ export function SettingsPage() {
           新しいパスワード(確認)
           <input
             type="password"
+            autoComplete="new-password"
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm"

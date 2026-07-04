@@ -58,6 +58,7 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
           パスワード
           <input
             type="password"
+            autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm"
@@ -216,7 +217,13 @@ export function AdminUsersPage() {
                       <button
                         type="button"
                         onClick={() => setPromptTarget({ kind: 'password', id: user.id })}
-                        className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100"
+                        disabled={user.id === currentUser?.id}
+                        title={
+                          user.id === currentUser?.id
+                            ? '自分のパスワードは個人設定から変更してください(ここで変更すると全セッションが失効します)'
+                            : undefined
+                        }
+                        className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         パスワードリセット
                       </button>
@@ -246,6 +253,8 @@ export function AdminUsersPage() {
           title="パスワードリセット"
           label="新しいパスワード"
           confirmLabel="リセット"
+          inputType="password"
+          autoComplete="new-password"
           onConfirm={handlePromptConfirm}
           onCancel={() => setPromptTarget(null)}
         />

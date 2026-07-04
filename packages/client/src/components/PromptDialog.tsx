@@ -9,6 +9,9 @@ interface PromptDialogProps {
   confirmLabel?: string;
   onConfirm: (value: string) => void;
   onCancel: () => void;
+  // パスワード入力等に使う。既定はtext
+  inputType?: 'text' | 'password';
+  autoComplete?: string;
 }
 
 export function PromptDialog({
@@ -18,6 +21,8 @@ export function PromptDialog({
   confirmLabel = 'OK',
   onConfirm,
   onCancel,
+  inputType = 'text',
+  autoComplete,
 }: PromptDialogProps) {
   const inputId = useId();
   const [value, setValue] = useState(defaultValue);
@@ -41,6 +46,8 @@ export function PromptDialog({
           {label}
         </label>
         <input
+          type={inputType}
+          autoComplete={autoComplete}
           id={inputId}
           autoFocus
           value={value}
