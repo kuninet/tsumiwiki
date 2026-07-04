@@ -1,9 +1,13 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { Link, Outlet, useNavigate } from 'react-router-dom';
 import { useLogout, useMe } from '../api/auth';
 import { api } from '../api/client';
-import { useUIStore } from '../stores/ui';
+import { TAGS_QUERY_KEY, TREE_QUERY_KEY } from '../api/docs';
 import { useToastStore } from '../stores/toast';
+import { useUIStore } from '../stores/ui';
+import { FolderTree } from './FolderTree';
+import { TagPane } from './TagPane';
 import { Toast } from './Toast';
 
 // 認証済みレイアウト(SC-02の骨格・設計04章4.2)
@@ -12,6 +16,7 @@ export function AppShell() {
   const { data: user } = useMe();
   const logout = useLogout();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const sidebarWidth = useUIStore((s) => s.sidebarWidth);
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
@@ -41,6 +46,8 @@ export function AppShell() {
   async function handleRescan() {
     try {
       await api('POST', '/api/library/rescan');
+      queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
       showToast('success', '更新を確認しました');
     } catch {
       showToast('error', '更新確認に失敗しました');
@@ -115,7 +122,7 @@ export function AppShell() {
                 タグ
               </button>
             </div>
-            <div className="p-3 text-sm text-gray-400">実装予定</div>
+            {sidebarTab === 'folder' ? <FolderTree /> : <TagPane />}
             <div
               onMouseDown={() => {
                 draggingRef.current = true;
