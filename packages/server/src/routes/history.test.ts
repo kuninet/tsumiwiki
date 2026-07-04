@@ -137,3 +137,62 @@ describe('履歴API', () => {
     expect(res.statusCode).toBe(400);
   }, 30_000);
 });
+
+describe('レビュー指摘の回帰テスト', () => {
+  it('against指定で2版間の差分が取れる', async () => {
+    const history = (await api('GET', `/api/history?path=${encodeURIComponent(docPath)}`)).json()
+      .history;
+    const oldest = history[2].rev; // add:(空)
+    const first = history[1].rev; // 第1版
+
+    const diff = await api(
+      'GET',
+      `/api/history/diff?path=${encodeURIComponent(docPath)}&rev=${oldest}&against=${first}`,
+    );
+    expect(diff.statusCode).toBe(200);
+    expect(diff.json().diff).toContain('+第1版の内容');
+  }, 30_000);
+
+  it('他ユーザーがロック保持中の復元はDOC_LOCKED', async () => {
+    app.userService.create({ username: 'suzuki', displayName: '鈴木', password: 'p', role: 'user' });
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: CSRF,
+      payload: { username: 'suzuki', password: 'p' },
+    });
+    const suzuki = (login.headers['set-cookie'] as string).split(';')[0];
+    // セットアップでyamadaが保持しているロックを解放してから鈴木が取得する
+    await api('DELETE', `/api/locks?path=${encodeURIComponent(docPath)}`);
+    const acquired = await app.inject({
+      method: 'POST',
+      url: '/api/locks',
+      headers: { ...CSRF, cookie: suzuki },
+      payload: { path: docPath },
+    });
+    expect(acquired.statusCode).toBe(200);
+
+    const history = (await api('GET', `/api/history?path=${encodeURIComponent(docPath)}`)).json()
+      .history;
+    const res = await api('POST', '/api/history/restore', { path: docPath, rev: history[1].rev });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('DOC_LOCKED');
+  }, 30_000);
+
+  it('保護パスの履歴取得は400', async () => {
+    const res = await api('GET', `/api/history?path=${encodeURIComponent('.obsidian/app.md')}`);
+    expect(res.statusCode).toBe(400);
+  }, 20_000);
+
+  it('有効なrevでも当該版にパスが存在しなければ404', async () => {
+    const history = (await api('GET', `/api/history?path=${encodeURIComponent(docPath)}`)).json()
+      .history;
+    // 最古の版よりさらに前には別文書は存在しない → 別文書を作って旧revで引く
+    const other = await api('POST', '/api/docs', { folder: '', title: '後から作った文書' });
+    const res = await api(
+      'GET',
+      `/api/history/content?path=${encodeURIComponent(other.json().path)}&rev=${history[2].rev}`,
+    );
+    expect(res.statusCode).toBe(404);
+  }, 30_000);
+});

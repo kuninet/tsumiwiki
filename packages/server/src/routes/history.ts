@@ -1,11 +1,9 @@
 import type { FastifyInstance } from 'fastify';
-import { restoreRequestSchema } from '@tsumiwiki/shared';
+import { REV_PATTERN, restoreRequestSchema } from '@tsumiwiki/shared';
 import { sendError } from '../plugins/auth.js';
 import { authorOf, handling } from './docs.js';
 
 // 履歴API(FR-HIST / 設計03章)
-
-const REV_RE = /^[0-9a-f]{4,40}$/i;
 
 export function registerHistoryRoutes(app: FastifyInstance): void {
   app.get('/api/history', async (req, reply) => {
@@ -20,7 +18,7 @@ export function registerHistoryRoutes(app: FastifyInstance): void {
 
   app.get('/api/history/content', async (req, reply) => {
     const { path: docPath, rev } = req.query as { path?: string; rev?: string };
-    if (!docPath || !rev || !REV_RE.test(rev)) {
+    if (!docPath || !rev || !REV_PATTERN.test(rev)) {
       return sendError(reply, 400, 'VALIDATION_ERROR', 'pathとrevを指定してください');
     }
     return handling(reply, async () => {
@@ -34,7 +32,7 @@ export function registerHistoryRoutes(app: FastifyInstance): void {
       rev,
       against,
     } = req.query as { path?: string; rev?: string; against?: string };
-    if (!docPath || !rev || !REV_RE.test(rev) || (against && !REV_RE.test(against))) {
+    if (!docPath || !rev || !REV_PATTERN.test(rev) || (against && !REV_PATTERN.test(against))) {
       return sendError(reply, 400, 'VALIDATION_ERROR', 'pathとrevを指定してください');
     }
     return handling(reply, async () => {
