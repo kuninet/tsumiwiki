@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
+    "@fastify/multipart": "^10.0.0",
     "@tsumiwiki/shared": "workspace:*",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.11.1",

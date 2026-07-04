@@ -1,9 +1,11 @@
+import fastifyMultipart from '@fastify/multipart';
 import Fastify from 'fastify';
 import type { Logger } from 'pino';
 import type { HealthResponse } from '@tsumiwiki/shared';
 import type { AppConfig } from './config';
 import type { AppDatabase } from './db';
 import { authPlugin } from './plugins/auth.js';
+import { registerAttachmentRoutes } from './routes/attachments.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerDocRoutes } from './routes/docs.js';
 import { registerDraftRoutes } from './routes/drafts.js';
@@ -71,6 +73,9 @@ export function buildApp(options: BuildAppOptions) {
     await gitService.init();
   });
 
+  app.register(fastifyMultipart, {
+    limits: { fileSize: config.maxUploadMb * 1024 * 1024, files: 1 },
+  });
   app.register(authPlugin);
   app.register(async (instance) => {
     registerAuthRoutes(instance);
@@ -81,6 +86,7 @@ export function buildApp(options: BuildAppOptions) {
     registerHistoryRoutes(instance);
     registerTrashRoutes(instance);
     registerQueryRoutes(instance);
+    registerAttachmentRoutes(instance);
   });
 
   app.get('/api/health', async (): Promise<HealthResponse> => {

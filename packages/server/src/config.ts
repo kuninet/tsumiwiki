@@ -12,6 +12,7 @@ export interface AppConfig {
   attachmentDirMode: string; // 'same-folder' | フォルダ名
   backupRemote: string | null;
   backupPushIntervalMinutes: number;
+  maxUploadMb: number;
   logLevel: string;
   logFile: string | null;
 }
@@ -80,6 +81,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       10,
       'BACKUP_PUSH_INTERVAL_MINUTES',
     ),
+    maxUploadMb: intOf(env.MAX_UPLOAD_MB, 20, 'MAX_UPLOAD_MB', 1024),
     logLevel,
     logFile: env.LOG_FILE ?? null,
   };
