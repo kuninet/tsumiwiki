@@ -7,6 +7,7 @@ import { authPlugin } from './plugins/auth.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerDocRoutes } from './routes/docs.js';
 import { registerDraftRoutes } from './routes/drafts.js';
+import { registerHistoryRoutes } from './routes/history.js';
 import { registerLockRoutes } from './routes/locks.js';
 import { registerUserRoutes } from './routes/users.js';
 import { DocService } from './services/doc-service.js';
@@ -72,6 +73,7 @@ export function buildApp(options: BuildAppOptions) {
     registerDocRoutes(instance);
     registerLockRoutes(instance);
     registerDraftRoutes(instance);
+    registerHistoryRoutes(instance);
   });
 
   app.get('/api/health', async (): Promise<HealthResponse> => {

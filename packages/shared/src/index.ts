@@ -137,6 +137,25 @@ export const saveDraftRequestSchema = z.object({
 });
 export type SaveDraftRequest = z.infer<typeof saveDraftRequestSchema>;
 
+// ---- 履歴(FR-HIST) ----
+
+// Gitリビジョン指定として許可する形式(hex 4〜40桁のみ。オプション偽装防止)
+export const REV_PATTERN = /^[0-9a-f]{4,40}$/i;
+
+export const historyEntrySchema = z.object({
+  rev: z.string(),
+  authorName: z.string(),
+  date: z.string(),
+  message: z.string(),
+});
+export type HistoryEntry = z.infer<typeof historyEntrySchema>;
+
+export const restoreRequestSchema = z.object({
+  path: z.string().min(1),
+  rev: z.string().regex(REV_PATTERN, 'リビジョン指定が不正です'),
+});
+export type RestoreRequest = z.infer<typeof restoreRequestSchema>;
+
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({
   error: z.object({

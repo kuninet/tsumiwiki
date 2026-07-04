@@ -4,6 +4,7 @@ import path from 'node:path';
 import matter from 'gray-matter';
 import type { Logger } from 'pino';
 import { parseDocument as parseYamlDocument, stringify as yamlStringify } from 'yaml';
+import { REV_PATTERN } from '@tsumiwiki/shared';
 import type { DocResponse, DocSummary, TreeResponse } from '@tsumiwiki/shared';
 import type { AppConfig } from '../config.js';
 import type { AppDatabase } from '../db/index.js';
@@ -266,8 +267,8 @@ export class DocService {
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `edit: ${normalized}`, author);
     await this.indexer.indexFile(normalized);
-    // 明示保存に成功したら自動保存の下書きは不要になる(FR-EDIT-08)
-    this.drafts.remove(normalized);
+    // 明示保存に成功したら本人の下書きは不要になる(FR-EDIT-08)
+    this.drafts.removeOwn(normalized, userId);
     const after = await stat(abs);
     return { updatedAt: after.mtime.toISOString() };
   }
@@ -335,7 +336,7 @@ export class DocService {
     await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}`, author);
     this.indexer.removeFile(normalized);
     this.locks.forceRelease(normalized);
-    this.drafts.remove(normalized);
+    this.drafts.removeAll(normalized);
   }
 
   async moveDoc(
@@ -372,6 +373,84 @@ export class DocService {
     this.locks.repath(oldNorm, newNorm);
     this.drafts.repath(oldNorm, newNorm);
     return { path: newNorm };
+  }
+
+  // ---- 履歴(FR-HIST) ----
+
+  async history(relPath: string) {
+    const normalized = this.validateDocPath(relPath);
+    return this.git.history(normalized);
+  }
+
+  // rev形式の防御的検証(呼び出し元のスキーマ検証に依存しない)
+  private assertRev(rev: string): void {
+    if (!REV_PATTERN.test(rev)) {
+      throw new InvalidPathError(rev);
+    }
+  }
+
+  // 「版・パスの不在」を示すGitエラーか(それ以外はインフラ障害として扱う)
+  private isRevNotFound(e: unknown): boolean {
+    const msg = e instanceof Error ? e.message : String(e);
+    return /unknown revision|does not exist|bad revision|invalid object name|bad object|fatal: path/i.test(
+      msg,
+    );
+  }
+
+  // 過去版の内容。存在しない版・パスはDocNotFoundError、それ以外の障害は再throw
+  async contentAt(relPath: string, rev: string): Promise<string> {
+    const normalized = this.validateDocPath(relPath);
+    this.assertRev(rev);
+    try {
+      return await this.git.contentAt(rev, normalized);
+    } catch (e) {
+      if (this.isRevNotFound(e)) {
+        throw new DocNotFoundError(`${normalized} @${rev.slice(0, 7)}`);
+      }
+      this.logger?.error({ err: e, rev, path: normalized }, '過去版の取得に失敗しました');
+      throw e;
+    }
+  }
+
+  // 2版間の差分。against省略時は現行版(HEAD)と比較(FR-HIST-03)
+  async diffVersions(relPath: string, rev: string, against?: string): Promise<string> {
+    const normalized = this.validateDocPath(relPath);
+    this.assertRev(rev);
+    if (against !== undefined) this.assertRev(against);
+    try {
+      return await this.git.diff(rev, against ?? 'HEAD', normalized);
+    } catch (e) {
+      if (this.isRevNotFound(e)) {
+        throw new DocNotFoundError(
+          `${normalized} @${rev.slice(0, 7)}${against ? `..${against.slice(0, 7)}` : ''}`,
+        );
+      }
+      this.logger?.error({ err: e, rev, against, path: normalized }, '差分の取得に失敗しました');
+      throw e;
+    }
+  }
+
+  // 過去版の内容で上書き保存する。履歴は改変せず新しいコミットとして記録
+  // (FR-HIST-04)。編集ロックの保持が前提(設計03章)。
+  // 注意: 復元は「意図的な上書き」のためbaseUpdatedAt競合検知は行わない。
+  // また履歴内容をバイト厳密に書き戻すため、saveDocのLF統一・updated更新は適用しない
+  async restoreDoc(
+    relPath: string,
+    rev: string,
+    userId: number,
+    author: GitAuthor,
+  ): Promise<{ updatedAt: string }> {
+    const normalized = this.validateDocPath(relPath);
+    const abs = resolveInLibrary(this.libraryPath, normalized);
+    this.assertRev(rev);
+    this.locks.assertHeldBy(normalized, userId);
+    const content = await this.contentAt(normalized, rev);
+    await this.writeAtomic(abs, content);
+    await this.tryCommit([normalized], `restore: ${normalized} @${rev.slice(0, 7)}`, author);
+    await this.indexer.indexFile(normalized);
+    this.drafts.removeOwn(normalized, userId);
+    const after = await stat(abs);
+    return { updatedAt: after.mtime.toISOString() };
   }
 
   // ---- フォルダ ----

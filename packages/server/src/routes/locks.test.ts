@@ -205,3 +205,82 @@ describe('下書き(自動保存)', () => {
     expect(res.json().error.code).toBe('LOCK_EXPIRED');
   }, 20_000);
 });
+
+describe('レビュー指摘の回帰テスト', () => {
+  it('アンダースコア入りフォルダの削除が兄弟フォルダの下書きを巻き込まない(LIKE誤マッチ対策)', async () => {
+    // 「会議_2024」のLIKEパターンは「会議X2024」にも誤マッチしうる
+    await apiAs(yamada, 'POST', '/api/docs', { folder: '会議_2024', title: '議事録A' });
+    const b = await apiAs(suzuki, 'POST', '/api/docs', { folder: '会議X2024', title: '議事録B' });
+    const bPath = b.json().path;
+    await apiAs(suzuki, 'POST', '/api/locks', { path: bPath });
+    await apiAs(suzuki, 'PUT', '/api/drafts', { path: bPath, content: '鈴木の書きかけ' });
+
+    // yamadaが「会議_2024」を削除しても、「会議X2024」側のロック・下書きは無傷
+    const del = await apiAs(yamada, 'DELETE', `/api/folders?path=${encodeURIComponent('会議_2024')}`);
+    expect(del.statusCode).toBe(200);
+
+    const draft = await apiAs(suzuki, 'GET', `/api/drafts?path=${encodeURIComponent(bPath)}`);
+    expect(draft.json().draft.content).toBe('鈴木の書きかけ');
+    const lockDenied = await apiAs(yamada, 'POST', '/api/locks', { path: bPath });
+    expect(lockDenied.json().error.code).toBe('DOC_LOCKED');
+  }, 30_000);
+
+  it('存在しない文書へのロック取得は404(孤児ロック防止)', async () => {
+    const res = await apiAs(yamada, 'POST', '/api/locks', { path: '存在しない.md' });
+    expect(res.statusCode).toBe(404);
+  }, 20_000);
+
+  it('ロック失効後に別ユーザーが下書きを保存しても、元ユーザーの下書きは残る', async () => {
+    await apiAs(yamada, 'POST', '/api/locks', { path: docPath });
+    await apiAs(yamada, 'PUT', '/api/drafts', { path: docPath, content: '山田の未保存内容' });
+    // ロック失効を細工
+    app.db
+      .prepare('UPDATE locks SET refreshed_at = ?')
+      .run(new Date(Date.now() - 31 * 60_000).toISOString());
+
+    await apiAs(suzuki, 'POST', '/api/locks', { path: docPath });
+    await apiAs(suzuki, 'PUT', '/api/drafts', { path: docPath, content: '鈴木の内容' });
+
+    const yamadaDraft = await apiAs(yamada, 'GET', `/api/drafts?path=${encodeURIComponent(docPath)}`);
+    expect(yamadaDraft.json().draft.content).toBe('山田の未保存内容');
+    const suzukiDraft = await apiAs(suzuki, 'GET', `/api/drafts?path=${encodeURIComponent(docPath)}`);
+    expect(suzukiDraft.json().draft.content).toBe('鈴木の内容');
+  }, 30_000);
+
+  it('文書の移動で下書きも追随する', async () => {
+    await apiAs(yamada, 'POST', '/api/locks', { path: docPath });
+    await apiAs(yamada, 'PUT', '/api/drafts', { path: docPath, content: '移動前の下書き' });
+    const moved = await apiAs(yamada, 'POST', '/api/docs/move', {
+      path: docPath,
+      newFolder: '移動先',
+      newTitle: '移動後文書',
+    });
+    const draft = await apiAs(
+      yamada,
+      'GET',
+      `/api/drafts?path=${encodeURIComponent(moved.json().path)}`,
+    );
+    expect(draft.json().draft.content).toBe('移動前の下書き');
+  }, 30_000);
+
+  it('文書の削除で全ユーザーの下書きが掃除される', async () => {
+    await apiAs(yamada, 'POST', '/api/locks', { path: docPath });
+    await apiAs(yamada, 'PUT', '/api/drafts', { path: docPath, content: 'x' });
+    await apiAs(yamada, 'DELETE', `/api/locks?path=${encodeURIComponent(docPath)}`);
+    await apiAs(yamada, 'DELETE', `/api/docs?path=${encodeURIComponent(docPath)}`);
+
+    const rows = app.db.prepare('SELECT COUNT(*) AS n FROM drafts').get() as { n: number };
+    expect(rows.n).toBe(0);
+  }, 30_000);
+
+  it('保持期限を超えた下書きが回収される', async () => {
+    await apiAs(yamada, 'POST', '/api/locks', { path: docPath });
+    await apiAs(yamada, 'PUT', '/api/drafts', { path: docPath, content: '古い下書き' });
+    app.db
+      .prepare('UPDATE drafts SET updated_at = ?')
+      .run(new Date(Date.now() - 15 * 24 * 60 * 60_000).toISOString());
+
+    const removed = app.draftService.cleanupStale();
+    expect(removed).toBe(1);
+  }, 20_000);
+});

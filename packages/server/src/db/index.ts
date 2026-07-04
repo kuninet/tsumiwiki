@@ -67,7 +67,26 @@ const MIGRATIONS: string[] = [
     tokenize = 'trigram'
   );
   `,
+  // v2: draftsを(doc_path, user_id)の複合PKへ。
+  // ロック失効後に別ユーザーが下書きを保存しても、元ユーザーの
+  // 未保存内容(クラッシュ復帰用)を上書きしないため
+  `
+  CREATE TABLE drafts_new (
+    doc_path   TEXT NOT NULL,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content    TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (doc_path, user_id)
+  );
+  INSERT INTO drafts_new SELECT doc_path, user_id, content, updated_at FROM drafts;
+  DROP TABLE drafts;
+  ALTER TABLE drafts_new RENAME TO drafts;
+  CREATE INDEX idx_drafts_updated ON drafts(updated_at);
+  `,
 ];
+
+// 現在のスキーマバージョン(テスト・診断用)
+export const SCHEMA_VERSION = MIGRATIONS.length;
 
 export type AppDatabase = Database.Database;
 
