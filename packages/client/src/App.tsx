@@ -1,29 +1,33 @@
-import { useEffect, useState } from 'react';
-import { healthResponseSchema, type HealthResponse } from '@tsumiwiki/shared';
+import { Navigate, Route, Routes } from 'react-router-dom';
+import { AppShell } from './components/AppShell';
+import { RequireAdmin } from './components/RequireAdmin';
+import { RequireAuth } from './components/RequireAuth';
 import { EditorDemo } from './editor/EditorDemo';
+import { AdminUsersPage } from './pages/AdminUsersPage';
+import { LoginPage } from './pages/LoginPage';
+import { MainPage } from './pages/MainPage';
+import { SettingsPage } from './pages/SettingsPage';
+import { TrashPage } from './pages/TrashPage';
+
+// ルーティング定義(設計04章4.1)
 
 export function App() {
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch('/api/health')
-      .then((res) => res.json())
-      .then((json) => setHealth(healthResponseSchema.parse(json)))
-      .catch(() => setError('APIサーバーに接続できません'));
-  }, []);
-
   return (
-    <main style={{ fontFamily: 'sans-serif', padding: '2rem' }}>
-      <h1>TsumiWiki</h1>
-      <p>知識を積む、チームのためのMarkdown Wiki(開発中)</p>
-      {health && (
-        <p data-testid="health">
-          APIサーバー接続OK: {health.name} v{health.version}
-        </p>
-      )}
-      {error && <p data-testid="health-error">{error}</p>}
-      <EditorDemo />
-    </main>
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<RequireAuth />}>
+        <Route element={<AppShell />}>
+          <Route index element={<MainPage />} />
+          <Route path="doc/*" element={<MainPage />} />
+          <Route path="trash" element={<TrashPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+          <Route path="demo" element={<EditorDemo />} />
+          <Route element={<RequireAdmin />}>
+            <Route path="admin/users" element={<AdminUsersPage />} />
+          </Route>
+        </Route>
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }

@@ -1,33 +1,32 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { RequireAuth } from './RequireAuth';
 
-// エディタ本体の検証はroundtrip.test.tsで行うため、Appのテストではモックする
-vi.mock('./editor/EditorDemo', () => ({
-  EditorDemo: () => <div data-testid="editor-demo-mock" />,
-}));
-
-import { App } from './App';
-
-function renderApp(initialPath: string) {
+function renderWithAuth() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialPath]}>
-        <App />
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/login" element={<div>ログイン画面</div>} />
+          <Route element={<RequireAuth />}>
+            <Route path="/" element={<div>保護されたコンテンツ</div>} />
+          </Route>
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
-describe('App', () => {
+describe('RequireAuth', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     cleanup();
   });
 
-  it('未認証状態で保護ルートへアクセスするとログイン画面へリダイレクトする', async () => {
+  it('未認証(me=null)の場合はログイン画面へリダイレクトする', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -38,11 +37,11 @@ describe('App', () => {
       }),
     );
 
-    renderApp('/');
-    expect(await screen.findByLabelText('ユーザーID')).toBeTruthy();
+    renderWithAuth();
+    expect(await screen.findByText('ログイン画面')).toBeTruthy();
   });
 
-  it('認証済み状態で / にアクセスするとメイン画面を表示する', async () => {
+  it('認証済みの場合は子要素を表示する', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -55,7 +54,7 @@ describe('App', () => {
       }),
     );
 
-    renderApp('/');
-    expect(await screen.findByText('文書を選択してください')).toBeTruthy();
+    renderWithAuth();
+    expect(await screen.findByText('保護されたコンテンツ')).toBeTruthy();
   });
 });
