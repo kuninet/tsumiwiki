@@ -84,6 +84,34 @@
   color: #555;
 }
 
+.code-block-view .mermaid-container {
+  border: 1px solid #dde4ee;
+  border-radius: 6px;
+  padding: 0.75em;
+  background: #fbfcff;
+  cursor: pointer;
+  text-align: center;
+}
+
+.code-block-view .mermaid-preview svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.code-block-view .mermaid-error {
+  color: #b3261e;
+  background: #fdf0ef;
+  border-radius: 4px;
+  padding: 0.5em 0.75em;
+  font-size: 0.85em;
+  text-align: left;
+}
+
+.code-block-view .mermaid-loading {
+  color: #888;
+  font-size: 0.85em;
+}
+
 .ProseMirror table {
   border-collapse: collapse;
 }

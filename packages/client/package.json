@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@tiptap/core": "^2.27.2",
+    "@tiptap/extension-code-block": "^2.27.2",
     "@tiptap/extension-image": "^2.27.2",
     "@tiptap/extension-link": "^2.27.2",
     "@tiptap/extension-table": "^2.27.2",
@@ -24,6 +25,7 @@
     "@tiptap/react": "^2.27.2",
     "@tiptap/starter-kit": "^2.27.2",
     "@tsumiwiki/shared": "workspace:*",
+    "mermaid": "^11.16.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "tiptap-markdown": "^0.8.10"
