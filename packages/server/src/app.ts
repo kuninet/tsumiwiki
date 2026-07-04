@@ -11,6 +11,7 @@ import { registerDocRoutes } from './routes/docs.js';
 import { registerDraftRoutes } from './routes/drafts.js';
 import { registerHistoryRoutes } from './routes/history.js';
 import { registerLockRoutes } from './routes/locks.js';
+import { registerLibraryRoutes } from './routes/library.js';
 import { registerQueryRoutes } from './routes/query.js';
 import { registerTrashRoutes } from './routes/trash.js';
 import { registerUserRoutes } from './routes/users.js';
@@ -20,6 +21,8 @@ import { GitService } from './services/git-service.js';
 import { IndexerService } from './services/indexer-service.js';
 import { LockService } from './services/lock-service.js';
 import { QueryService } from './services/query-service.js';
+import { SyncService } from './services/sync-service.js';
+import { BackupService } from './services/backup-service.js';
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -37,6 +40,8 @@ declare module 'fastify' {
     lockService: LockService;
     draftService: DraftService;
     queryService: QueryService;
+    syncService: SyncService;
+    backupService: BackupService;
   }
 }
 
@@ -65,6 +70,14 @@ export function buildApp(options: BuildAppOptions) {
   app.decorate('indexerService', indexerService);
   app.decorate('lockService', lockService);
   app.decorate('queryService', new QueryService(db));
+  app.decorate(
+    'syncService',
+    new SyncService(gitService, indexerService, logger === false ? undefined : logger),
+  );
+  app.decorate(
+    'backupService',
+    new BackupService(gitService, config.backupRemote, logger === false ? undefined : logger),
+  );
   app.decorate('draftService', draftService);
   app.decorate('docService', docService);
 
@@ -87,6 +100,7 @@ export function buildApp(options: BuildAppOptions) {
     registerTrashRoutes(instance);
     registerQueryRoutes(instance);
     registerAttachmentRoutes(instance);
+    registerLibraryRoutes(instance);
   });
 
   app.get('/api/health', async (): Promise<HealthResponse> => {
@@ -95,6 +109,7 @@ export function buildApp(options: BuildAppOptions) {
       name: 'tsumiwiki',
       version: '0.1.0',
       time: new Date().toISOString(),
+      backup: app.backupService.status(),
     };
   });
 

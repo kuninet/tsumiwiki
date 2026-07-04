@@ -8,6 +8,14 @@ export const healthResponseSchema = z.object({
   name: z.string(),
   version: z.string(),
   time: z.string(),
+  // バックアップpushの状態(設計06章6.5。push失敗の可視化)
+  backup: z
+    .object({
+      configured: z.boolean(),
+      lastSuccessAt: z.string().nullable(),
+      lastError: z.string().nullable(),
+    })
+    .optional(),
 });
 
 export type HealthResponse = z.infer<typeof healthResponseSchema>;

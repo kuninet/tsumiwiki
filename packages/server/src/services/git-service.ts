@@ -22,6 +22,9 @@ export interface HistoryEntry {
 const SYSTEM_NAME = 'TsumiWiki';
 const SYSTEM_EMAIL = 'system@tsumiwiki.local';
 
+// 外部変更のsync取り込み等に使うシステム名義のauthor(設計06章6.2)
+export const SYSTEM_AUTHOR: GitAuthor = { name: SYSTEM_NAME, email: SYSTEM_EMAIL };
+
 export class GitService {
   private gitInstance: SimpleGit | null = null;
   private readonly queue = new SerialQueue();
