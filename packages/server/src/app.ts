@@ -9,6 +9,7 @@ import { registerDocRoutes } from './routes/docs.js';
 import { registerDraftRoutes } from './routes/drafts.js';
 import { registerHistoryRoutes } from './routes/history.js';
 import { registerLockRoutes } from './routes/locks.js';
+import { registerQueryRoutes } from './routes/query.js';
 import { registerTrashRoutes } from './routes/trash.js';
 import { registerUserRoutes } from './routes/users.js';
 import { DocService } from './services/doc-service.js';
@@ -16,6 +17,7 @@ import { DraftService } from './services/draft-service.js';
 import { GitService } from './services/git-service.js';
 import { IndexerService } from './services/indexer-service.js';
 import { LockService } from './services/lock-service.js';
+import { QueryService } from './services/query-service.js';
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -32,6 +34,7 @@ declare module 'fastify' {
     docService: DocService;
     lockService: LockService;
     draftService: DraftService;
+    queryService: QueryService;
   }
 }
 
@@ -59,6 +62,7 @@ export function buildApp(options: BuildAppOptions) {
   app.decorate('gitService', gitService);
   app.decorate('indexerService', indexerService);
   app.decorate('lockService', lockService);
+  app.decorate('queryService', new QueryService(db));
   app.decorate('draftService', draftService);
   app.decorate('docService', docService);
 
@@ -76,6 +80,7 @@ export function buildApp(options: BuildAppOptions) {
     registerDraftRoutes(instance);
     registerHistoryRoutes(instance);
     registerTrashRoutes(instance);
+    registerQueryRoutes(instance);
   });
 
   app.get('/api/health', async (): Promise<HealthResponse> => {

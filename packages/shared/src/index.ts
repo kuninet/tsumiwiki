@@ -173,6 +173,21 @@ export const restoreTrashRequestSchema = z.object({
 });
 export type RestoreTrashRequest = z.infer<typeof restoreTrashRequestSchema>;
 
+// ---- 検索・タグ(FR-NAV) ----
+
+export const searchResultSchema = z.object({
+  path: z.string(),
+  title: z.string(),
+  snippet: z.string(), // HTMLエスケープ済み抜粋(<mark>ハイライトのみHTML)。innerHTML描画可
+});
+export type SearchResult = z.infer<typeof searchResultSchema>;
+
+export const tagCountSchema = z.object({
+  tag: z.string(),
+  count: z.number(),
+});
+export type TagCount = z.infer<typeof tagCountSchema>;
+
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({
   error: z.object({
