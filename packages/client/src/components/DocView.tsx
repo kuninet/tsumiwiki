@@ -1,8 +1,9 @@
 import { EditorContent, useEditor } from '@tiptap/react';
 import type { DocResponse, DocSummary, User } from '@tsumiwiki/shared';
-import { type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from 'react';
+import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { uploadAttachment } from '../api/attachments';
+import { isAllowedLinkUrl } from '../lib/allowed-link';
 import { useTree } from '../api/docs';
 import { createEditorExtensions } from '../editor/markdown';
 import '../editor/editor.css';
@@ -57,8 +58,14 @@ export function DocView({ doc, currentUser }: DocViewProps) {
     baseUpdatedAt: doc.updatedAt,
   });
 
+  // 拡張群はマウント時に1度だけ構築する(毎レンダーのsetOptions再設定を回避)
+  const extensions = useMemo(
+    () => createEditorExtensions({ getWikilinkDocs: () => wikilinkDocsRef.current }),
+    // wikilinkDocsRefはref経由のため再構築不要
+    [],
+  );
   const editor = useEditor({
-    extensions: createEditorExtensions({ getWikilinkDocs: () => wikilinkDocsRef.current }),
+    extensions,
     content: doc.body,
     editable: false,
     onUpdate: ({ editor: e }) => {
@@ -71,7 +78,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
         );
         if (files.length === 0) return false;
         event.preventDefault();
-        files.forEach((file) => void handleUploadImage(file));
+        void handleUploadImages(files);
         return true;
       },
       handlePaste: (_view, event) => {
@@ -80,7 +87,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
         );
         if (files.length === 0) return false;
         event.preventDefault();
-        files.forEach((file) => void handleUploadImage(file));
+        void handleUploadImages(files);
         return true;
       },
     },
@@ -166,6 +173,10 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   function handleConfirmLink(url: string) {
     setLinkDialogVisible(false);
     if (!editor) return;
+    if (!isAllowedLinkUrl(url)) {
+      showToast('error', 'このURL形式は使用できません(http/https/mailto/fileのみ)');
+      return;
+    }
     if (editor.state.selection.empty) {
       editor
         .chain()
@@ -177,19 +188,35 @@ export function DocView({ doc, currentUser }: DocViewProps) {
     }
   }
 
-  async function handleUploadImage(file: File) {
-    showToast('success', '画像をアップロード中...');
-    try {
-      const result = await uploadAttachment(doc.path, file);
-      editor?.chain().focus().insertContent({ type: 'obsidianEmbed', attrs: { target: result.fileName } }).run();
-      showToast('success', '画像をアップロードしました');
-    } catch (err) {
-      showToast('error', err instanceof Error ? err.message : '画像のアップロードに失敗しました');
+  // 複数ファイルは逐次アップロードし、成功をまとめて1トーストで通知する
+  async function handleUploadImages(files: File[]) {
+    let inserted = 0;
+    for (const file of files) {
+      try {
+        const result = await uploadAttachment(doc.path, file);
+        editor
+          ?.chain()
+          .focus()
+          .insertContent({ type: 'obsidianEmbed', attrs: { target: result.fileName } })
+          .run();
+        inserted++;
+      } catch (err) {
+        showToast('error', err instanceof Error ? err.message : '画像のアップロードに失敗しました');
+      }
     }
+    if (inserted > 0) {
+      showToast('success', inserted === 1 ? '画像を挿入しました' : `${inserted}件の画像を挿入しました`);
+    }
+  }
+
+  async function handleUploadImage(file: File) {
+    await handleUploadImages([file]);
   }
 
   // wikilinkクリックでの遷移(FR-OBS-02)とfile://・UNCリンクの「パスをコピー」(FR-LINK-02)
   function handleContainerClick(e: ReactMouseEvent<HTMLDivElement>) {
+    // 編集モード中のクリックはカーソル移動として扱い、遷移・コピーはしない
+    if (sessionRef.current.mode !== 'view') return;
     const target = e.target as HTMLElement;
 
     const wikilinkEl = target.closest('span[data-type="wikilink"]');
@@ -213,6 +240,12 @@ export function DocView({ doc, currentUser }: DocViewProps) {
           .writeText(href)
           .then(() => showToast('success', 'パスをコピーしました'))
           .catch(() => showToast('error', 'コピーに失敗しました'));
+        return;
+      }
+      if (/^https?:/i.test(href)) {
+        // 外部リンクは新規タブで開く(openOnClick:false のため自前処理)
+        e.preventDefault();
+        window.open(href, '_blank', 'noopener,noreferrer');
       }
     }
   }

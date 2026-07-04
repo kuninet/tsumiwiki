@@ -21,6 +21,12 @@ function targetFromDocPath(path: string): string {
 // ポップアップ(自作・絶対配置div)。tippy等の新規依存は追加しない
 function createRenderer() {
   let popupEl: HTMLDivElement | null = null;
+
+  // スクロールで位置がずれるため、検知したらポップアップを閉じる
+  const closeOnScroll = () => {
+    popupEl?.remove();
+    popupEl = null;
+  };
   let selectedIndex = 0;
   let currentItems: DocSummary[] = [];
   let currentCommand: ((doc: DocSummary) => void) | null = null;
@@ -65,6 +71,7 @@ function createRenderer() {
 
   return {
     onStart(props: SuggestionProps<DocSummary, DocSummary>) {
+      window.addEventListener('scroll', closeOnScroll, { capture: true });
       popupEl = document.createElement('div');
       popupEl.className = 'wikilink-suggestion-popup';
       popupEl.setAttribute('role', 'listbox');
@@ -75,6 +82,8 @@ function createRenderer() {
       sync(props);
     },
     onKeyDown(props: SuggestionKeyDownProps): boolean {
+      // IME変換中のEnter/矢印は候補操作に横取りしない(FR-EDIT-05)
+      if (props.event.isComposing) return false;
       if (!popupEl) return false;
       const count = currentItems.length;
       if (props.event.key === 'Escape') {
@@ -100,6 +109,7 @@ function createRenderer() {
       return false;
     },
     onExit() {
+      window.removeEventListener('scroll', closeOnScroll, { capture: true });
       popupEl?.remove();
       popupEl = null;
     },

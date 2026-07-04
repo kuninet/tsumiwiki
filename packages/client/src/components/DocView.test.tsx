@@ -224,3 +224,15 @@ describe('DocView', () => {
     expect(screen.getByText('本文です')).toBeTruthy();
   });
 });
+
+describe('#32レビュー指摘の回帰テスト', () => {
+  it('リンクURLのスキーム検証(javascript:等の実行系を拒否)', async () => {
+    const { isAllowedLinkUrl } = await import('../lib/allowed-link');
+    for (const u of ['https://example.com', 'http://a', 'mailto:a@b', 'file:///C:/x', 'notes/x']) {
+      expect(isAllowedLinkUrl(u)).toBe(true);
+    }
+    for (const u of ['javascript:alert(1)', 'data:text/html,x', 'vbscript:x', 'JAVASCRIPT:alert(1)']) {
+      expect(isAllowedLinkUrl(u)).toBe(false);
+    }
+  });
+});
