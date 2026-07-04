@@ -97,6 +97,21 @@ export class GitService {
       });
   }
 
+  // 指定パスに触れた直近のコミット(--followしない。ごみ箱の由来特定用)
+  async lastCommitFor(relPath: string): Promise<HistoryEntry | null> {
+    const out = await this.git.raw([
+      'log',
+      '-1',
+      '--pretty=format:%H%x09%an%x09%aI%x09%s',
+      '--',
+      relPath,
+    ]);
+    const line = out.split('\n').filter(Boolean)[0];
+    if (!line) return null;
+    const [rev, authorName, date, message] = line.split('\t');
+    return { rev, authorName, date, message };
+  }
+
   // 過去版の内容(FR-HIST-03)
   async contentAt(rev: string, relPath: string): Promise<string> {
     return this.git.show([`${rev}:${relPath}`]);
