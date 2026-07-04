@@ -156,6 +156,23 @@ export const restoreRequestSchema = z.object({
 });
 export type RestoreRequest = z.infer<typeof restoreRequestSchema>;
 
+// ---- ごみ箱(FR-DOC-07) ----
+
+export const trashEntrySchema = z.object({
+  trashPath: z.string(), // .trash/内のパス
+  name: z.string(),
+  isFolder: z.boolean(),
+  originalPath: z.string().nullable(), // trash:コミットから復元(不明ならnull)
+  deletedAt: z.string().nullable(),
+  deletedBy: z.string().nullable(),
+});
+export type TrashEntry = z.infer<typeof trashEntrySchema>;
+
+export const restoreTrashRequestSchema = z.object({
+  trashPath: z.string().min(1),
+});
+export type RestoreTrashRequest = z.infer<typeof restoreTrashRequestSchema>;
+
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({
   error: z.object({

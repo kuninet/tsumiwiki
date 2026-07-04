@@ -1,10 +1,11 @@
-import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import matter from 'gray-matter';
 import type { Logger } from 'pino';
 import { parseDocument as parseYamlDocument, stringify as yamlStringify } from 'yaml';
 import { REV_PATTERN } from '@tsumiwiki/shared';
+import type { TrashEntry } from '@tsumiwiki/shared';
 import type { DocResponse, DocSummary, TreeResponse } from '@tsumiwiki/shared';
 import type { AppConfig } from '../config.js';
 import type { AppDatabase } from '../db/index.js';
@@ -373,6 +374,116 @@ export class DocService {
     this.locks.repath(oldNorm, newNorm);
     this.drafts.repath(oldNorm, newNorm);
     return { path: newNorm };
+  }
+
+  // ---- ごみ箱(FR-DOC-07) ----
+
+  // .trash直下の項目パスとして検証する(ネスト・脱出は拒否)
+  private validateTrashLeaf(relPath: string): string {
+    const normalized = normalizeRelPath(relPath);
+    if (!/^\.trash\/[^/]+$/.test(normalized)) {
+      throw new InvalidPathError(relPath);
+    }
+    return normalized;
+  }
+
+  async listTrash(): Promise<TrashEntry[]> {
+    const trashDir = path.join(this.libraryPath, '.trash');
+    let entries;
+    try {
+      entries = await readdir(trashDir, { withFileTypes: true });
+    } catch {
+      return []; // .trash未作成
+    }
+    // 削除者・削除日時・元パスは trash: コミットから復元する(要件05章5.1)。
+    // 項目単位で並列取得し、1項目のGitエラーで一覧全体を落とさない
+    const result: TrashEntry[] = await Promise.all(
+      entries.map(async (entry) => {
+        const name = entry.name.normalize('NFC');
+        const trashPath = `.trash/${name}`;
+        let commit = null;
+        try {
+          commit = await this.git.lastCommitFor(trashPath);
+        } catch (e) {
+          this.logger?.warn({ err: e, trashPath }, 'ごみ箱項目の由来取得に失敗しました');
+        }
+        const m = commit?.message.match(/^trash: (.+?)\/?$/);
+        return {
+          trashPath,
+          name,
+          isFolder: entry.isDirectory(),
+          originalPath: m ? m[1] : null,
+          deletedAt: commit?.date ?? null,
+          deletedBy: commit?.authorName ?? null,
+        };
+      }),
+    );
+    // 削除日時の新しい順
+    return result.sort((a, b) => (b.deletedAt ?? '').localeCompare(a.deletedAt ?? ''));
+  }
+
+  // ごみ箱から元の場所へ復元する(FR-DOC-07)。元パスに同名があれば連番を付ける
+  async restoreFromTrash(trashPath: string, author: GitAuthor): Promise<{ path: string }> {
+    const normalized = this.validateTrashLeaf(trashPath);
+    const abs = resolveInLibrary(this.libraryPath, normalized);
+    let isFolder: boolean;
+    try {
+      isFolder = (await stat(abs)).isDirectory();
+    } catch {
+      throw new DocNotFoundError(normalized);
+    }
+
+    // コミット未存在(手動配置・空リポジトリ)でも復元は続行する
+    let commit = null;
+    try {
+      commit = await this.git.lastCommitFor(normalized);
+    } catch (e) {
+      this.logger?.warn({ err: e, trashPath: normalized }, 'ごみ箱項目の由来取得に失敗しました');
+    }
+    const m = commit?.message.match(/^trash: (.+?)\/?$/);
+    // 元パス不明(手動で.trashに置かれた等)ならルート直下へ戻す
+    const original = m ? m[1] : path.posix.basename(normalized);
+
+    // 元パスが不正(..等の細工コミット)な場合もbasenameへフォールバックする
+    // (先にnormalizeで例外を出すと復元不能になるため、正規化はtryで包む)
+    let dest: string;
+    try {
+      dest = normalizeRelPath(original);
+    } catch {
+      dest = path.posix.basename(normalized);
+    }
+    if (!dest || isProtectedPath(dest) || dest.split('/').includes('.trash')) {
+      dest = path.posix.basename(normalized);
+    }
+    // 復元先の衝突は連番で回避(existsチェック→renameの間の競合は
+    // 実運用頻度が低く許容。Gitコミット自体は直列キューで保護される)
+    const ext = isFolder ? '' : path.posix.extname(dest);
+    const stem = ext ? dest.slice(0, dest.length - ext.length) : dest;
+    for (let i = 2; await this.exists(resolveInLibrary(this.libraryPath, dest)); i++) {
+      dest = `${stem} (${i})${ext}`;
+    }
+
+    const destAbs = resolveInLibrary(this.libraryPath, dest);
+    await mkdir(path.dirname(destAbs), { recursive: true });
+    await rename(abs, destAbs);
+    await this.tryCommit([normalized, dest], `untrash: ${dest}${isFolder ? '/' : ''}`, author);
+    if (isFolder) {
+      await this.indexer.scanAll();
+    } else if (dest.toLowerCase().endsWith('.md')) {
+      await this.indexer.indexFile(dest);
+    }
+    return { path: dest };
+  }
+
+  // ごみ箱からの完全削除(admin専用。ファイルは消えるがGit履歴には残る)
+  async purgeTrash(trashPath: string, author: GitAuthor): Promise<void> {
+    const normalized = this.validateTrashLeaf(trashPath);
+    const abs = resolveInLibrary(this.libraryPath, normalized);
+    if (!(await this.exists(abs))) {
+      throw new DocNotFoundError(normalized);
+    }
+    await rm(abs, { recursive: true, force: true });
+    await this.tryCommit([normalized], `purge: ${normalized}`, author);
   }
 
   // ---- 履歴(FR-HIST) ----
