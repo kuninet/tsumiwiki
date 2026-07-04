@@ -275,3 +275,80 @@ describe('計画者レビュー反映分', () => {
     expect(status.not_added).toContain('外部作成.md');
   }, 20_000);
 });
+
+describe('レビュー指摘の回帰テスト', () => {
+  it('大文字小文字のみのリネームが成功する', async () => {
+    const created = await api('POST', '/api/docs', { folder: '', title: 'readme' });
+    const moved = await api('POST', '/api/docs/move', {
+      path: created.json().path,
+      newFolder: '',
+      newTitle: 'README',
+    });
+    expect(moved.statusCode).toBe(200);
+    expect(moved.json().path).toBe('README.md');
+  }, 20_000);
+
+  it('移動先に別の文書があると409', async () => {
+    await api('POST', '/api/docs', { folder: '', title: '先客' });
+    const created = await api('POST', '/api/docs', { folder: '', title: '移動する方' });
+    const res = await api('POST', '/api/docs/move', {
+      path: created.json().path,
+      newFolder: '',
+      newTitle: '先客',
+    });
+    expect(res.statusCode).toBe(409);
+  }, 20_000);
+
+  it('CRLF文書を保存するとLFに統一される(NFR-COMP-03)', async () => {
+    await writeFile(join(lib, 'CRLF文書.md'), '---\r\ntags: [win]\r\n---\r\n\r\n本文行1\r\n本文行2\r\n', 'utf8');
+    await app.indexerService.indexFile('CRLF文書.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('CRLF文書.md')}`);
+    const saved = await api('PUT', '/api/docs', {
+      path: 'CRLF文書.md',
+      body: got.json().body,
+      tags: ['win'],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+
+    const raw = await readFile(join(lib, 'CRLF文書.md'), 'utf8');
+    expect(raw).not.toContain('\r');
+    expect(raw).toContain('本文行1');
+  }, 20_000);
+
+  it('壊れた(未終端)フロントマターの文書は往復で二重化しない', async () => {
+    const broken = '---\ntags: [unclosed\n本文だけが続く\n';
+    await writeFile(join(lib, '壊れFM.md'), broken, 'utf8');
+    await app.indexerService.indexFile('壊れFM.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('壊れFM.md')}`);
+    const saved = await api('PUT', '/api/docs', {
+      path: '壊れFM.md',
+      body: got.json().body,
+      tags: ['付けたいタグ'],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+
+    const raw = await readFile(join(lib, '壊れFM.md'), 'utf8');
+    // FMフェンスが増えていない(二重化なし)
+    expect(raw.match(/^---$/gm)?.length ?? 0).toBeLessThanOrEqual(1);
+    expect(raw).toContain('本文だけが続く');
+  }, 20_000);
+
+  it('削除は「元パスの削除+.trashへの追加」としてコミットされる', async () => {
+    const created = await api('POST', '/api/docs', { folder: '', title: 'コミット確認' });
+    await api('DELETE', `/api/docs?path=${encodeURIComponent(created.json().path)}`);
+
+    const { simpleGit } = await import('simple-git');
+    const show = await simpleGit({ baseDir: lib }).raw(['show', '--name-status', '--pretty=format:', 'HEAD']);
+    expect(show).toContain('.trash/コミット確認.md');
+  }, 20_000);
+
+  it('既存ファイルと同名のフォルダ作成は400', async () => {
+    const created = await api('POST', '/api/docs', { folder: '', title: 'ファイル先客' });
+    const res = await api('POST', '/api/folders', { path: created.json().path });
+    expect(res.statusCode).toBe(400);
+  }, 20_000);
+});

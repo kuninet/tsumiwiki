@@ -110,7 +110,7 @@ export class DocService {
   // 文書パスとして妥当か検証して正規化する(保護パス・拡張子)
   private validateDocPath(relPath: string): string {
     const normalized = normalizeRelPath(relPath);
-    if (!normalized || isProtectedPath(normalized) || normalized.startsWith('.trash/')) {
+    if (!normalized || isProtectedPath(normalized) || normalized.split('/').includes('.trash')) {
       throw new InvalidPathError(relPath);
     }
     if (!normalized.toLowerCase().endsWith('.md')) {
@@ -121,7 +121,7 @@ export class DocService {
 
   private validateFolderPath(relPath: string): string {
     const normalized = normalizeRelPath(relPath);
-    if (!normalized || isProtectedPath(normalized) || normalized === '.trash' || normalized.startsWith('.trash/')) {
+    if (!normalized || isProtectedPath(normalized) || normalized.split('/').includes('.trash')) {
       throw new InvalidPathError(relPath);
     }
     return normalized;
@@ -164,7 +164,7 @@ export class DocService {
       if (!entry.isDirectory()) continue;
       const name = entry.name.normalize('NFC');
       const rel = relDir ? `${relDir}/${name}` : name;
-      if (isProtectedPath(rel) || rel === '.trash') continue;
+      if (isProtectedPath(rel) || name === '.trash') continue;
       out.push(rel);
       await this.walkFolders(rel, out);
     }
@@ -252,7 +252,8 @@ export class DocService {
       );
     }
 
-    const content = this.composeContent(current, body, tags);
+    // 保存はLFに統一する(NFR-COMP-03。CRLF文書も保存時にLF化する)
+    const content = this.composeContent(current, body, tags).replace(/\r\n/g, '\n');
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `edit: ${normalized}`, author);
     await this.indexer.indexFile(normalized);
@@ -272,6 +273,11 @@ export class DocService {
     if (!fmMatch) {
       // 元々フロントマターがない文書には不要なフロントマターを付けない
       if (!normalizedTags || normalizedTags.length === 0) return body;
+      if (/^---\r?\n/.test(body)) {
+        // 未終端フロントマター等、解釈の割れる文書にはFMを追加しない(二重化防止)
+        this.logger?.warn('フロントマターの構造が不明なためタグ更新をスキップしました');
+        return body;
+      }
       const fm = yamlStringify({ tags: normalizedTags, updated: localIso() });
       return `---\n${fm}---\n\n${body.replace(/^\n/, '')}`;
     }
@@ -335,7 +341,10 @@ export class DocService {
       return { path: oldNorm };
     }
     const newAbs = resolveInLibrary(this.libraryPath, newNorm);
-    if (await this.exists(newAbs)) {
+    // 大文字小文字のみの変更は、case-insensitiveなFS(Windows/macOS)では
+    // existsが自分自身を指してしまうため、衝突チェックを行わずrenameに通す
+    const caseOnly = newNorm.toLowerCase() === oldNorm.toLowerCase();
+    if (!caseOnly && (await this.exists(newAbs))) {
       throw new DocConflictError(`移動先に同名の文書があります: ${newNorm}`);
     }
     await mkdir(path.dirname(newAbs), { recursive: true });
@@ -350,24 +359,35 @@ export class DocService {
   async createFolder(relPath: string): Promise<void> {
     const normalized = this.validateFolderPath(relPath);
     const abs = resolveInLibrary(this.libraryPath, normalized);
-    await mkdir(abs, { recursive: true });
+    try {
+      await mkdir(abs, { recursive: true });
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      // 同名ファイルが存在する等
+      if (code === 'EEXIST' || code === 'ENOTDIR') {
+        throw new InvalidPathError(relPath);
+      }
+      throw e;
+    }
     // 空フォルダはGit管理外(コミットは文書が置かれたときに発生する)
   }
 
   async moveFolder(relPath: string, newRelPath: string, author: GitAuthor): Promise<void> {
     const oldNorm = this.validateFolderPath(relPath);
     const newNorm = this.validateFolderPath(newRelPath);
+    if (newNorm === oldNorm) return;
+    // 自分自身の配下への移動は不可(existsより先に判定する)
+    if (newNorm.startsWith(`${oldNorm}/`)) {
+      throw new InvalidPathError(newRelPath);
+    }
     const oldAbs = resolveInLibrary(this.libraryPath, oldNorm);
     const newAbs = resolveInLibrary(this.libraryPath, newNorm);
     if (!(await this.exists(oldAbs))) {
       throw new DocNotFoundError(oldNorm);
     }
-    if (await this.exists(newAbs)) {
+    const caseOnly = newNorm.toLowerCase() === oldNorm.toLowerCase();
+    if (!caseOnly && (await this.exists(newAbs))) {
       throw new DocConflictError(`移動先に同名のフォルダがあります: ${newNorm}`);
-    }
-    // 自分自身の配下への移動は不可
-    if (newNorm === oldNorm || newNorm.startsWith(`${oldNorm}/`)) {
-      throw new InvalidPathError(newRelPath);
     }
     await mkdir(path.dirname(newAbs), { recursive: true });
     await rename(oldAbs, newAbs);
