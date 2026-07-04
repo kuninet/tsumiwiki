@@ -25,6 +25,7 @@
     "@tiptap/pm": "^2.27.2",
     "@tiptap/react": "^2.27.2",
     "@tiptap/starter-kit": "^2.27.2",
+    "@tiptap/suggestion": "^2.27.2",
     "@tsumiwiki/shared": "workspace:*",
     "mermaid": "^11.16.0",
     "react": "^18.3.0",

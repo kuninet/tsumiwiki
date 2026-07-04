@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { DocResponse, User } from '@tsumiwiki/shared';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
@@ -51,7 +52,9 @@ function renderDocView(doc: DocResponse = DOC, currentUser: User = CURRENT_USER)
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <DocView doc={doc} currentUser={currentUser} />
+      <MemoryRouter>
+        <DocView doc={doc} currentUser={currentUser} />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -169,7 +172,9 @@ describe('DocView', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { rerender } = render(
       <QueryClientProvider client={queryClient}>
-        <DocView doc={DOC} currentUser={CURRENT_USER} />
+        <MemoryRouter>
+          <DocView doc={DOC} currentUser={CURRENT_USER} />
+        </MemoryRouter>
       </QueryClientProvider>,
     );
 
@@ -178,7 +183,9 @@ describe('DocView', () => {
     const updatedDoc: DocResponse = { ...DOC, body: '更新後の本文' };
     rerender(
       <QueryClientProvider client={queryClient}>
-        <DocView doc={updatedDoc} currentUser={CURRENT_USER} />
+        <MemoryRouter>
+          <DocView doc={updatedDoc} currentUser={CURRENT_USER} />
+        </MemoryRouter>
       </QueryClientProvider>,
     );
 
@@ -193,7 +200,9 @@ describe('DocView', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { rerender } = render(
       <QueryClientProvider client={queryClient}>
-        <DocView doc={DOC} currentUser={CURRENT_USER} />
+        <MemoryRouter>
+          <DocView doc={DOC} currentUser={CURRENT_USER} />
+        </MemoryRouter>
       </QueryClientProvider>,
     );
 
@@ -203,7 +212,9 @@ describe('DocView', () => {
     const updatedDoc: DocResponse = { ...DOC, body: '外部で更新された本文' };
     rerender(
       <QueryClientProvider client={queryClient}>
-        <DocView doc={updatedDoc} currentUser={CURRENT_USER} />
+        <MemoryRouter>
+          <DocView doc={updatedDoc} currentUser={CURRENT_USER} />
+        </MemoryRouter>
       </QueryClientProvider>,
     );
 
@@ -211,5 +222,17 @@ describe('DocView', () => {
       expect(screen.queryByText('外部で更新された本文')).toBeNull();
     });
     expect(screen.getByText('本文です')).toBeTruthy();
+  });
+});
+
+describe('#32レビュー指摘の回帰テスト', () => {
+  it('リンクURLのスキーム検証(javascript:等の実行系を拒否)', async () => {
+    const { isAllowedLinkUrl } = await import('../lib/allowed-link');
+    for (const u of ['https://example.com', 'http://a', 'mailto:a@b', 'file:///C:/x', 'notes/x']) {
+      expect(isAllowedLinkUrl(u)).toBe(true);
+    }
+    for (const u of ['javascript:alert(1)', 'data:text/html,x', 'vbscript:x', 'JAVASCRIPT:alert(1)']) {
+      expect(isAllowedLinkUrl(u)).toBe(false);
+    }
   });
 });
