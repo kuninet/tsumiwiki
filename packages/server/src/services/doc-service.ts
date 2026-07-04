@@ -374,6 +374,53 @@ export class DocService {
     return { path: newNorm };
   }
 
+  // ---- 履歴(FR-HIST) ----
+
+  async history(relPath: string) {
+    const normalized = this.validateDocPath(relPath);
+    return this.git.history(normalized);
+  }
+
+  // 過去版の内容。存在しない版はDocNotFoundError
+  async contentAt(relPath: string, rev: string): Promise<string> {
+    const normalized = this.validateDocPath(relPath);
+    try {
+      return await this.git.contentAt(rev, normalized);
+    } catch {
+      throw new DocNotFoundError(`${normalized} @${rev.slice(0, 7)}`);
+    }
+  }
+
+  // 2版間の差分。against省略時は現行版(HEAD)と比較(FR-HIST-03)
+  async diffVersions(relPath: string, rev: string, against?: string): Promise<string> {
+    const normalized = this.validateDocPath(relPath);
+    try {
+      return await this.git.diff(rev, against ?? 'HEAD', normalized);
+    } catch {
+      throw new DocNotFoundError(`${normalized} @${rev.slice(0, 7)}`);
+    }
+  }
+
+  // 過去版の内容で上書き保存する。履歴は改変せず新しいコミットとして記録
+  // (FR-HIST-04)。編集ロックの保持が前提(設計03章)
+  async restoreDoc(
+    relPath: string,
+    rev: string,
+    userId: number,
+    author: GitAuthor,
+  ): Promise<{ updatedAt: string }> {
+    const normalized = this.validateDocPath(relPath);
+    const abs = resolveInLibrary(this.libraryPath, normalized);
+    this.locks.assertHeldBy(normalized, userId);
+    const content = await this.contentAt(normalized, rev);
+    await this.writeAtomic(abs, content);
+    await this.tryCommit([normalized], `restore: ${normalized} @${rev.slice(0, 7)}`, author);
+    await this.indexer.indexFile(normalized);
+    this.drafts.remove(normalized);
+    const after = await stat(abs);
+    return { updatedAt: after.mtime.toISOString() };
+  }
+
   // ---- フォルダ ----
 
   async createFolder(relPath: string): Promise<void> {

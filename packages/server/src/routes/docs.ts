@@ -14,7 +14,7 @@ import { DocLockedError, LockExpiredError } from '../services/lock-service.js';
 
 // 文書・フォルダAPI(設計03章)
 
-function authorOf(req: FastifyRequest): GitAuthor {
+export function authorOf(req: FastifyRequest): GitAuthor {
   // コミットauthor表記は「表示名 <username@tsumiwiki.local>」(設計06章6.2)
   return {
     name: req.user!.displayName,
