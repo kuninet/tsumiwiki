@@ -1,18 +1,21 @@
 import { useParams } from 'react-router-dom';
-import { useDoc } from '../api/docs';
+import { useMe } from '../api/auth';
 import { ApiRequestError } from '../api/client';
+import { useDoc } from '../api/docs';
+import { DocView } from '../components/DocView';
+import { useEditStore } from '../stores/edit';
 
-// メイン画面(SC-02)の文書表示。WYSIWYG表示は#31でDocViewer/DocEditorに置換予定の暫定実装
-
-function titleFromPath(path: string): string {
-  const base = path.split('/').pop() ?? path;
-  return base.replace(/\.md$/i, '');
-}
+// メイン画面(SC-02)。文書未選択時はプレースホルダ、選択時はDocViewで閲覧・編集する
 
 export function MainPage() {
   const params = useParams();
   const docPath = params['*'];
-  const { data: doc, isLoading, error } = useDoc(docPath);
+  const editMode = useEditStore((s) => s.mode);
+  const { data: doc, isLoading, error } = useDoc(docPath, {
+    // 編集中は他者更新の取り込みでロック取得直後の内容が上書きされないよう再取得を止める
+    refetchInterval: editMode === 'view' ? 60_000 : false,
+  });
+  const { data: currentUser } = useMe();
 
   if (!docPath) {
     return (
@@ -38,14 +41,7 @@ export function MainPage() {
     return <div className="p-6 text-red-600">{message}</div>;
   }
 
-  if (!doc) return null;
+  if (!doc || !currentUser) return null;
 
-  return (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold text-gray-800">{titleFromPath(doc.path)}</h1>
-      <p className="mt-1 text-sm text-gray-500">更新日時: {doc.updatedAt}</p>
-      {/* WYSIWYG表示は#31で置換予定の暫定表示 */}
-      <pre className="mt-4 whitespace-pre-wrap text-sm text-gray-800">{doc.body}</pre>
-    </div>
-  );
+  return <DocView key={doc.path} doc={doc} currentUser={currentUser} />;
 }
