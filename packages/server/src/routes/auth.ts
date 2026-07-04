@@ -60,7 +60,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       httpOnly: true,
       sameSite: 'lax',
       maxAge: app.config.sessionTtlMinutes * 60,
-      // 初期リリースは社内HTTP運用のためsecureは付けない(NFR-SEC-05)。HTTPS化時に有効化
+      // 初期リリースは初期のHTTP運用のためsecureは付けない(NFR-SEC-05)。HTTPS化時に有効化
     });
     return { user };
   });
