@@ -33,11 +33,11 @@ export function EditorDemo() {
   return (
     <div className="editor-demo">
       <section className="pane">
-        <h2>WYSIWYG編集(Tiptap)</h2>
+        <h2 className="pane-title">WYSIWYG編集(Tiptap)</h2>
         <EditorContent editor={editor} />
       </section>
       <section className="pane">
-        <h2>Markdownシリアライズ結果</h2>
+        <h2 className="pane-title">Markdownシリアライズ結果</h2>
         <pre className="markdown-output" data-testid="markdown-output">
           {markdown}
         </pre>

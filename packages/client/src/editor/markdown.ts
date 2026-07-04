@@ -10,6 +10,7 @@ import TaskList from '@tiptap/extension-task-list';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from 'tiptap-markdown';
 import { ObsidianEmbed } from './extensions/embed';
+import { ListKeymap } from './extensions/list-keymap';
 import { RawBlock } from './extensions/raw-block';
 import { Wikilink } from './extensions/wikilink';
 
@@ -38,6 +39,7 @@ export function createEditorExtensions(): Extensions {
     Wikilink,
     ObsidianEmbed,
     RawBlock,
+    ListKeymap,
     Markdown.configure({
       html: true, // HTMLブロックをrawBlockとして保全するため有効化(raw-block.ts参照)
       tightLists: true,

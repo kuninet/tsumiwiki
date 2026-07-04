@@ -13,15 +13,40 @@
   overflow: auto;
 }
 
-.editor-demo .pane h2 {
+/* ペインの見出しは専用クラスで指定する
+   (`.pane h2` のような子孫セレクタはエディタ内のh2要素にも当たってしまう) */
+.editor-demo .pane-title {
   margin: 0 0 0.5rem;
   font-size: 0.85rem;
+  font-weight: bold;
   color: #666;
 }
 
 .editor-demo .ProseMirror {
   outline: none;
   min-height: 260px;
+}
+
+/* 文書見出しのサイズを明示(h1 > h2 > h3 の階層が崩れないように) */
+.ProseMirror h1 {
+  font-size: 1.7em;
+}
+
+.ProseMirror h2 {
+  font-size: 1.45em;
+}
+
+.ProseMirror h3 {
+  font-size: 1.25em;
+}
+
+.ProseMirror h4 {
+  font-size: 1.1em;
+}
+
+.ProseMirror h5,
+.ProseMirror h6 {
+  font-size: 1em;
 }
 
 .editor-demo pre.markdown-output {
