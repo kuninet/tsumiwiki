@@ -22,12 +22,20 @@ if (scan.failedPaths.length > 0) {
   logger.warn({ failedPaths: scan.failedPaths }, '読み込みに失敗した文書があります(索引は継続)');
 }
 
+// 期限切れ編集ロックの定期掃除(FR-LOCK-03。判定自体はクエリ時にも行われる)
+const lockSweep = setInterval(() => {
+  const n = app.lockService.cleanupExpired();
+  if (n > 0) logger.info(`期限切れの編集ロックを${n}件解放しました`);
+}, 60_000);
+lockSweep.unref();
+
 // 停止時にWALチェックポイント・ログフラッシュを確実に行う
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   logger.info(`${signal} を受信しました。シャットダウンします`);
+  clearInterval(lockSweep);
   await app.close();
   db.close();
   process.exit(0);

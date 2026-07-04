@@ -81,6 +81,8 @@ export const docResponseSchema = z.object({
   tags: z.array(z.string()),
   body: z.string(),
   updatedAt: z.string(),
+  // 編集中ユーザー(FR-LOCK-01)。ロックなしはnull
+  lock: z.object({ userId: z.number(), displayName: z.string() }).nullable(),
 });
 export type DocResponse = z.infer<typeof docResponseSchema>;
 
@@ -115,6 +117,25 @@ export const moveFolderRequestSchema = z.object({
   newPath: z.string().min(1),
 });
 export type MoveFolderRequest = z.infer<typeof moveFolderRequestSchema>;
+
+// ---- 編集ロック・下書き(FR-LOCK / FR-EDIT-08) ----
+
+export const lockInfoSchema = z.object({
+  userId: z.number(),
+  displayName: z.string(),
+});
+export type LockInfo = z.infer<typeof lockInfoSchema>;
+
+export const lockRequestSchema = z.object({
+  path: z.string().min(1),
+});
+export type LockRequest = z.infer<typeof lockRequestSchema>;
+
+export const saveDraftRequestSchema = z.object({
+  path: z.string().min(1),
+  content: z.string(),
+});
+export type SaveDraftRequest = z.infer<typeof saveDraftRequestSchema>;
 
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({

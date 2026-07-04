@@ -6,10 +6,14 @@ import type { AppDatabase } from './db';
 import { authPlugin } from './plugins/auth.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerDocRoutes } from './routes/docs.js';
+import { registerDraftRoutes } from './routes/drafts.js';
+import { registerLockRoutes } from './routes/locks.js';
 import { registerUserRoutes } from './routes/users.js';
 import { DocService } from './services/doc-service.js';
+import { DraftService } from './services/draft-service.js';
 import { GitService } from './services/git-service.js';
 import { IndexerService } from './services/indexer-service.js';
+import { LockService } from './services/lock-service.js';
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -24,6 +28,8 @@ declare module 'fastify' {
     gitService: GitService;
     indexerService: IndexerService;
     docService: DocService;
+    lockService: LockService;
+    draftService: DraftService;
   }
 }
 
@@ -37,9 +43,21 @@ export function buildApp(options: BuildAppOptions) {
 
   const gitService = new GitService(config.libraryPath);
   const indexerService = new IndexerService(db, config.libraryPath);
-  const docService = new DocService(db, config, gitService, indexerService, logger === false ? undefined : logger);
+  const lockService = new LockService(db, config.lockTimeoutMinutes);
+  const draftService = new DraftService(db);
+  const docService = new DocService(
+    db,
+    config,
+    gitService,
+    indexerService,
+    lockService,
+    draftService,
+    logger === false ? undefined : logger,
+  );
   app.decorate('gitService', gitService);
   app.decorate('indexerService', indexerService);
+  app.decorate('lockService', lockService);
+  app.decorate('draftService', draftService);
   app.decorate('docService', docService);
 
   // ライブラリのGitリポジトリ初期化(未初期化なら git init。設計06章6.1)
@@ -52,6 +70,8 @@ export function buildApp(options: BuildAppOptions) {
     registerAuthRoutes(instance);
     registerUserRoutes(instance);
     registerDocRoutes(instance);
+    registerLockRoutes(instance);
+    registerDraftRoutes(instance);
   });
 
   app.get('/api/health', async (): Promise<HealthResponse> => {
