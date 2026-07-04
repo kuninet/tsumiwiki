@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
@@ -23,7 +26,7 @@ async function login(username: string, password: string): Promise<string> {
 }
 
 beforeEach(async () => {
-  const config = loadConfig({ LIBRARY_PATH: '/tmp/test-library' });
+  const config = loadConfig({ LIBRARY_PATH: mkdtempSync(join(tmpdir(), 'tsumiwiki-auth-')) });
   const db = openDatabase(':memory:');
   app = buildApp({ config, db, logger: false });
   await app.ready();

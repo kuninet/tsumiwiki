@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { SerialQueue } from './serial-queue';
@@ -23,19 +23,25 @@ const SYSTEM_NAME = 'TsumiWiki';
 const SYSTEM_EMAIL = 'system@tsumiwiki.local';
 
 export class GitService {
-  private readonly git: SimpleGit;
+  private gitInstance: SimpleGit | null = null;
   private readonly queue = new SerialQueue();
 
-  constructor(private readonly libraryPath: string) {
-    // committerはinit()で設定するリポジトリローカルのuser.name/user.email
-    // (=システム名義)が使われる。authorはコミット時に--authorで指定する。
-    this.git = simpleGit({ baseDir: libraryPath });
+  constructor(private readonly libraryPath: string) {}
+
+  // simple-gitは存在しないbaseDirで即例外を投げるため、
+  // 初回利用時(init後)に遅延生成する。
+  // committerはinit()で設定するリポジトリローカルのuser.name/user.email
+  // (=システム名義)が使われる。authorはコミット時に--authorで指定する。
+  private get git(): SimpleGit {
+    this.gitInstance ??= simpleGit({ baseDir: this.libraryPath });
+    return this.gitInstance;
   }
 
   // ライブラリをGitリポジトリとして初期化する(設計06章6.1)。
   // 既存リポジトリ(Obsidianヴォルトを既にGit管理している場合等)はそのまま使う。
   async init(): Promise<void> {
     await this.queue.run(async () => {
+      mkdirSync(this.libraryPath, { recursive: true });
       if (!existsSync(join(this.libraryPath, '.git'))) {
         await this.git.init(['--initial-branch=main']);
       }
@@ -51,9 +57,7 @@ export class GitService {
   async commit(paths: string[], message: string, author: GitAuthor): Promise<void> {
     await this.queue.run(async () => {
       await this.git.add(paths);
-      await this.git.commit(message, undefined, {
-        '--author': `${author.name} <${author.email}>`,
-      });
+      await this.commitStaged(message, author);
     });
   }
 
@@ -61,9 +65,17 @@ export class GitService {
   async commitAll(message: string, author: GitAuthor): Promise<void> {
     await this.queue.run(async () => {
       await this.git.add(['-A']);
-      await this.git.commit(message, undefined, {
-        '--author': `${author.name} <${author.email}>`,
-      });
+      await this.commitStaged(message, author);
+    });
+  }
+
+  // ステージ済みの変更をコミットする。差分ゼロ(同一内容の上書き保存等)は
+  // エラーにせず何もしない
+  private async commitStaged(message: string, author: GitAuthor): Promise<void> {
+    const staged = await this.git.raw(['diff', '--cached', '--name-only']);
+    if (!staged.trim()) return;
+    await this.git.commit(message, undefined, {
+      '--author': `${author.name} <${author.email}>`,
     });
   }
 

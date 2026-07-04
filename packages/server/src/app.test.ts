@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { healthResponseSchema } from '@tsumiwiki/shared';
 import { buildApp } from './app.js';
@@ -5,7 +8,7 @@ import { loadConfig } from './config.js';
 import { openDatabase } from './db/index.js';
 
 function buildTestApp() {
-  const config = loadConfig({ LIBRARY_PATH: '/tmp/test-library' });
+  const config = loadConfig({ LIBRARY_PATH: mkdtempSync(join(tmpdir(), 'tsumiwiki-app-')) });
   const db = openDatabase(':memory:');
   return buildApp({ config, db, logger: false });
 }

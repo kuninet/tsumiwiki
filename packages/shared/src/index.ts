@@ -58,6 +58,64 @@ export const changePasswordRequestSchema = z.object({
 });
 export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>;
 
+// ---- 文書・フォルダ(FR-DOC / 設計03章) ----
+
+export const docSummarySchema = z.object({
+  path: z.string(),
+  title: z.string(),
+  folder: z.string(),
+  updatedAt: z.string(),
+});
+export type DocSummary = z.infer<typeof docSummarySchema>;
+
+export const treeResponseSchema = z.object({
+  folders: z.array(z.string()),
+  docs: z.array(docSummarySchema),
+});
+export type TreeResponse = z.infer<typeof treeResponseSchema>;
+
+export const docResponseSchema = z.object({
+  path: z.string(),
+  // フロントマター全体(未知キー含む)。エディタにはbodyのみ渡す(設計05章5.1)
+  frontmatter: z.record(z.string(), z.unknown()),
+  tags: z.array(z.string()),
+  body: z.string(),
+  updatedAt: z.string(),
+});
+export type DocResponse = z.infer<typeof docResponseSchema>;
+
+export const createDocRequestSchema = z.object({
+  folder: z.string(), // '' = ルート
+  title: z.string().min(1),
+});
+export type CreateDocRequest = z.infer<typeof createDocRequestSchema>;
+
+export const saveDocRequestSchema = z.object({
+  path: z.string().min(1),
+  body: z.string(),
+  tags: z.array(z.string()).optional(), // 省略時はタグ変更なし
+  baseUpdatedAt: z.string().min(1), // 競合検知用(取得時のupdatedAt)
+});
+export type SaveDocRequest = z.infer<typeof saveDocRequestSchema>;
+
+export const moveDocRequestSchema = z.object({
+  path: z.string().min(1),
+  newFolder: z.string(),
+  newTitle: z.string().min(1),
+});
+export type MoveDocRequest = z.infer<typeof moveDocRequestSchema>;
+
+export const createFolderRequestSchema = z.object({
+  path: z.string().min(1),
+});
+export type CreateFolderRequest = z.infer<typeof createFolderRequestSchema>;
+
+export const moveFolderRequestSchema = z.object({
+  path: z.string().min(1),
+  newPath: z.string().min(1),
+});
+export type MoveFolderRequest = z.infer<typeof moveFolderRequestSchema>;
+
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({
   error: z.object({
