@@ -178,7 +178,7 @@ export type RestoreTrashRequest = z.infer<typeof restoreTrashRequestSchema>;
 export const searchResultSchema = z.object({
   path: z.string(),
   title: z.string(),
-  snippet: z.string(), // <mark>ハイライト付き抜粋
+  snippet: z.string(), // HTMLエスケープ済み抜粋(<mark>ハイライトのみHTML)。innerHTML描画可
 });
 export type SearchResult = z.infer<typeof searchResultSchema>;
 

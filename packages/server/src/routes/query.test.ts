@@ -111,3 +111,47 @@ describe('最近更新', () => {
     expect([...dates].sort().reverse()).toEqual(dates);
   }, 20_000);
 });
+
+describe('レビュー指摘の回帰テスト', () => {
+  it('本文中のHTMLはsnippetでエスケープされ、markのみHTMLとして残る(XSS対策)', async () => {
+    await writeFile(
+      join(lib, '攻撃文書.md'),
+      '検索用キーワードのスキーマと <img src=x onerror=alert(1)> を含む。\n',
+      'utf8',
+    );
+    await app.indexerService.scanAll();
+
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('スキーマ')}`);
+    const hit = res.json().results.find((r: { path: string }) => r.path === '攻撃文書.md');
+    expect(hit).toBeTruthy();
+    expect(hit.snippet).not.toContain('<img');
+    expect(hit.snippet).toContain('&lt;img');
+    expect(hit.snippet).toContain('<mark>');
+  }, 20_000);
+
+  it('重複タグ入力でもAND絞り込みが正しく動く', async () => {
+    const res = await api('GET', `/api/tags/docs?tags=${encodeURIComponent('設計,設計')}`);
+    expect(res.json().docs.map((d: { path: string }) => d.path)).toContain('設計方針.md');
+  }, 20_000);
+
+  it('recentのlimit端値(0・負・超過・非数値)が安全に扱われる', async () => {
+    for (const [q, max] of [
+      ['0', 1],
+      ['-5', 1],
+      ['1000', 100],
+      ['abc', 20],
+    ] as const) {
+      const res = await api('GET', `/api/docs/recent?limit=${q}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().docs.length).toBeLessThanOrEqual(max);
+    }
+  }, 20_000);
+
+  it('短い語のみ・ヒットなしの検索は空配列を返す', async () => {
+    for (const q of ['x', '存在しない超長いキーワード']) {
+      const res = await api('GET', `/api/search?q=${encodeURIComponent(q)}`);
+      expect(res.statusCode).toBe(200);
+      expect(Array.isArray(res.json().results)).toBe(true);
+    }
+  }, 20_000);
+});

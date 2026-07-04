@@ -19,10 +19,14 @@ export function registerQueryRoutes(app: FastifyInstance): void {
 
   app.get('/api/tags/docs', async (req, reply) => {
     const { tags } = req.query as { tags?: string };
-    const list = (tags ?? '')
-      .split(',')
-      .map((t) => t.trim().replace(/^#/, '').normalize('NFC'))
-      .filter(Boolean);
+    const list = [
+      ...new Set(
+        (tags ?? '')
+          .split(',')
+          .map((t) => t.trim().replace(/^#/, '').normalize('NFC'))
+          .filter(Boolean),
+      ),
+    ];
     if (list.length === 0) {
       return sendError(reply, 400, 'VALIDATION_ERROR', 'tagsを指定してください');
     }
@@ -31,7 +35,10 @@ export function registerQueryRoutes(app: FastifyInstance): void {
 
   app.get('/api/docs/recent', async (req) => {
     const { limit } = req.query as { limit?: string };
-    const n = Math.min(Math.max(Number(limit) || 20, 1), 100);
+    const parsedLimit = Number(limit);
+    const n = Number.isFinite(parsedLimit)
+      ? Math.min(Math.max(Math.trunc(parsedLimit), 1), 100)
+      : 20;
     return { docs: app.queryService.recent(n) };
   });
 }
