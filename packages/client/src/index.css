@@ -21,10 +21,14 @@
   --color-accent: var(--tw-accent);
   --color-accent-hover: var(--tw-accent-hover);
   --color-accent-soft: var(--tw-accent-soft);
+  --color-accent-softer: var(--tw-accent-softer);
   --color-accent-border: var(--tw-accent-border);
   --color-success: var(--tw-success);
+  /* success/danger の hover は color-mix で少し暗く。tokens.css には追加せずindex.cssで派生 */
+  --color-success-hover: color-mix(in srgb, var(--tw-success), black 10%);
   --color-warning: var(--tw-warning);
   --color-danger: var(--tw-danger);
+  --color-danger-hover: color-mix(in srgb, var(--tw-danger), black 10%);
   --color-info: var(--tw-info);
 
   /* --- フォント --- */
@@ -42,10 +46,13 @@
   --text-body--line-height: var(--tw-lh-body);
   --text-h3: var(--tw-fs-h3);
   --text-h3--line-height: var(--tw-lh-tight);
+  --text-h3--font-weight: 600;
   --text-h2: var(--tw-fs-h2);
   --text-h2--line-height: 1.3;
+  --text-h2--font-weight: 700;
   --text-h1: var(--tw-fs-h1);
   --text-h1--line-height: 1.25;
+  --text-h1--font-weight: 700;
 
   /* --- 角丸(handoff/tailwind.config.jsのborderRadiusスケール準拠。
      design-tokens.cssの--tw-radius-md/lgとは値がずれているため固定値を直書きする) --- */
@@ -66,4 +73,9 @@
   --spacing-sidebar: 250px;
   --spacing-content: 760px;
   --spacing-app: 1280px;
+
+  /* --- モーション(handoff/tailwind.config.js の transitionTimingFunction/Duration に対応) --- */
+  --ease-smooth: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --default-transition-duration: 180ms;
+  --default-transition-timing-function: var(--ease-smooth);
 }

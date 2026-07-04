@@ -272,7 +272,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
 
   return (
     <div className="flex h-full flex-col bg-canvas">
-      <div className="flex items-start justify-between px-8 pb-4 pt-5">
+      <div className="flex items-start justify-between px-4 pb-4 pt-5 sm:px-6 lg:px-8">
         <div className="min-w-0">
           {breadcrumb.length > 0 && (
             <nav className="truncate text-xs text-ink-faint">
@@ -325,7 +325,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
               <button
                 type="button"
                 onClick={handleSave}
-                className="h-8 rounded bg-success px-3 text-sm text-white hover:opacity-90"
+                className="h-8 rounded bg-success px-3 text-sm text-white hover:bg-success-hover"
               >
                 <span aria-hidden="true">✓</span> 保存
               </button>
@@ -343,7 +343,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
       )}
 
       {session.mode === 'edit' && (
-        <div className="border-b border-line px-8 py-2">
+        <div className="border-b border-line px-4 py-2 sm:px-6 lg:px-8">
           <label className="block text-xs text-ink-faint">
             タグ(カンマ区切り)
             <input
@@ -356,7 +356,9 @@ export function DocView({ doc, currentUser }: DocViewProps) {
       )}
 
       <div className="flex-1 overflow-auto" onClick={handleContainerClick}>
-        <div className="mx-auto max-w-[760px] px-8 py-4">
+        {/* コンテンツ幅は最大760pxで、狭くなるにつれ padding→本文ブロック順に自動追従する。
+            記事幅がビューポート幅を超えないよう `max-w-full` を保険で入れる */}
+        <div className="mx-auto max-w-[min(760px,100%)] px-4 py-4 sm:px-6 lg:px-8">
           <EditorContent editor={editor} />
         </div>
       </div>
@@ -367,6 +369,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
           message="未保存の下書きがあります。復元しますか?"
           confirmLabel="復元"
           cancelLabel="破棄"
+          variant="primary"
           onConfirm={handleRestoreDraft}
           onCancel={() => void session.discardDraftPrompt()}
         />

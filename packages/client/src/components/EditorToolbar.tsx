@@ -71,7 +71,7 @@ export function EditorToolbar({ editor, onOpenLinkDialog, onPickImage }: EditorT
   return (
     <div
       data-testid="editor-toolbar"
-      className="flex h-10 flex-wrap items-center gap-1 border-y border-line bg-panel px-8"
+      className="flex h-10 flex-wrap items-center gap-1 border-y border-line bg-panel px-4 sm:px-6 lg:px-8"
     >
       <ToolbarButton
         label="H1"

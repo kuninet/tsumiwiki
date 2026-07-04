@@ -6,7 +6,8 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
 export function relativeTime(iso: string, now: Date = new Date()): string {
-  const diffMs = now.getTime() - new Date(iso).getTime();
+  // クライアントとサーバーの時計ずれで未来時刻が来た場合も「たった今」に丸める
+  const diffMs = Math.max(0, now.getTime() - new Date(iso).getTime());
   if (diffMs < MINUTE_MS) return 'たった今';
   if (diffMs < HOUR_MS) return `${Math.floor(diffMs / MINUTE_MS)}分前`;
   if (diffMs < DAY_MS) return `${Math.floor(diffMs / HOUR_MS)}時間前`;

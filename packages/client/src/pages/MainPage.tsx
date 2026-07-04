@@ -15,25 +15,25 @@ function RecentDocsList() {
 
   return (
     <div className="p-6">
-      <h1 className="text-lg font-bold text-gray-800">最近更新した文書</h1>
+      <h1 className="text-h1 font-bold text-ink">最近更新した文書</h1>
 
-      {isLoading && <p className="mt-4 text-sm text-gray-500">読み込み中...</p>}
+      {isLoading && <p className="mt-4 text-sm text-ink-faint">読み込み中...</p>}
 
       {!isLoading && (docs ?? []).length === 0 && (
-        <p className="mt-4 text-sm text-gray-500">文書がありません</p>
+        <p className="mt-4 text-sm text-ink-faint">文書がありません</p>
       )}
 
       {!isLoading && (docs ?? []).length > 0 && (
-        <ul className="mt-4 divide-y divide-gray-100">
+        <ul className="mt-4 divide-y divide-line">
           {(docs ?? []).map((doc) => (
             <li key={doc.path}>
               <button
                 type="button"
                 onClick={() => navigate(docUrl(doc.path))}
-                className="block w-full py-2 text-left hover:bg-gray-50"
+                className="block w-full py-2 text-left hover:bg-hoverbg"
               >
-                <div className="text-sm font-medium text-gray-800">{doc.title}</div>
-                <div className="text-xs text-gray-500">
+                <div className="text-sm font-medium text-ink">{doc.title}</div>
+                <div className="text-xs text-ink-faint">
                   {doc.folder || '(ルート)'} ・ {doc.updatedAt}
                 </div>
               </button>
@@ -61,7 +61,7 @@ export function MainPage() {
 
   if (isLoading) {
     return (
-      <div className="p-6 text-gray-500" role="status">
+      <div className="p-6 text-ink-faint" role="status">
         読み込み中...
       </div>
     );
@@ -72,7 +72,7 @@ export function MainPage() {
       error instanceof ApiRequestError && error.status === 404
         ? '指定された文書が見つかりません'
         : '文書の取得に失敗しました';
-    return <div className="p-6 text-red-600">{message}</div>;
+    return <div className="p-6 text-danger">{message}</div>;
   }
 
   if (!doc || !currentUser) return null;

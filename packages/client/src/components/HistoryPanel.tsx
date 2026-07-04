@@ -31,11 +31,17 @@ function formatDateTime(iso: string): string {
 
 const DIFF_LINE_CLASS: Record<string, string> = {
   add: 'bg-success/10 text-success',
-  del: 'bg-danger/10 text-danger',
+  // 削除行の背景は handoff 仕様の rgba(220,38,38,0.08) に合わせる
+  del: 'bg-danger/[0.08] text-danger',
   hunk: 'bg-panel-2 text-ink-faint',
   meta: 'text-ink-faint',
   context: 'text-ink-soft',
 };
+
+function titleFromPath(path: string): string {
+  const base = path.split('/').pop() ?? path;
+  return base.replace(/\.md$/i, '');
+}
 
 export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
   // Escapeキーでパネルを閉じる(操作性・a11y)
@@ -101,7 +107,9 @@ export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
   return (
     <div className="fixed inset-y-0 right-0 z-[40] flex w-[400px] flex-col border-l border-line bg-panel shadow-lg">
       <div className="flex flex-shrink-0 items-center justify-between border-b border-line px-4 py-3">
-        <h2 className="text-sm font-bold text-ink">履歴</h2>
+        <h2 className="truncate text-sm font-bold text-ink">
+          履歴 <span className="text-ink-faint">·</span> {titleFromPath(path)}
+        </h2>
         <button
           type="button"
           onClick={onClose}
@@ -201,6 +209,7 @@ export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
           title="この版に戻す"
           message="現在の内容を破棄してこの版に戻します。よろしいですか?"
           confirmLabel="戻す"
+          variant="primary"
           onConfirm={() => void handleRestore()}
           onCancel={() => setRestoreConfirmVisible(false)}
         />

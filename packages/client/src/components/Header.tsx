@@ -52,18 +52,19 @@ export function Header() {
         <span className="text-base font-bold text-ink">TsumiWiki</span>
       </Link>
 
-      <SearchBox ref={searchInputRef} />
+      <div className="mx-auto flex flex-1 justify-center">
+        <SearchBox ref={searchInputRef} />
+      </div>
 
-      <button
-        type="button"
-        onClick={handleRescan}
-        className="flex flex-shrink-0 items-center gap-1.5 rounded border border-line px-3 py-1.5 text-sm text-ink-soft hover:bg-hoverbg"
-      >
-        <span aria-hidden="true">↻</span>
-        更新確認
-      </button>
-
-      <div className="ml-auto flex flex-shrink-0 items-center gap-2">
+      <div className="flex flex-shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={handleRescan}
+          className="flex items-center gap-1.5 rounded border border-line px-3 py-1.5 text-sm text-ink-soft hover:bg-hoverbg"
+        >
+          <span aria-hidden="true">↻</span>
+          更新確認
+        </button>
         <ThemeToggle />
         <UserMenu />
       </div>

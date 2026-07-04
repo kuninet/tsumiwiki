@@ -95,6 +95,8 @@ export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props,
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    // IME変換中のEnter/矢印は候補操作に使わない(FR-EDIT-05。変換確定の誤遷移防止)
+    if (e.nativeEvent.isComposing) return;
     if (e.key === 'Escape') {
       setOpen(false);
       return;

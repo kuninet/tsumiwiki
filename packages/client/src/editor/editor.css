@@ -38,11 +38,23 @@
 .ProseMirror {
   color: var(--color-ink-soft);
   font-size: var(--text-body);
-  line-height: 1.85;
+  line-height: 1.75;
+}
+
+/* 編集モード時のフォーカス枠(browserデフォルト青枠)は表示しない。デザインhandoff準拠 */
+.ProseMirror:focus,
+.ProseMirror:focus-visible {
+  outline: none;
 }
 
 .ProseMirror p {
-  margin-bottom: 0.875rem;
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+.ProseMirror h1 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
 }
 
 /* 文書見出しのサイズを明示(h1 > h2 > h3 の階層が崩れないように) */
@@ -82,12 +94,16 @@
 .ProseMirror ul,
 .ProseMirror ol {
   padding-left: 1.5rem;
-  margin-bottom: 0.875rem;
+  margin-bottom: 0.75rem;
 }
 
 .ProseMirror li {
   color: var(--color-ink-soft);
-  line-height: 1.7;
+  /* liの行高は本文と揃える(以前は独自の1.7で余白バランスが崩れていた) */
+}
+
+.ProseMirror li > p {
+  margin-bottom: 0.25rem;
 }
 
 /* インラインコード */

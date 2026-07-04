@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { type KeyboardEvent, type MouseEvent, useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   docQueryKey,
@@ -71,6 +71,15 @@ export function FolderTree() {
 
   const expandedFolders = useUIStore((s) => s.expandedFolders);
   const toggleFolderExpanded = useUIStore((s) => s.toggleFolderExpanded);
+  const createDocRequestNonce = useUIStore((s) => s.createDocRequestNonce);
+
+  // AppShellのサイドバーフッター「+ 新規文書」の要求を拾ってルート直下の新規文書ダイアログを開く
+  useEffect(() => {
+    if (createDocRequestNonce > 0) {
+      setDialog({ kind: 'createDoc', folder: '' });
+    }
+    // 初期nonce=0では発火しない。以降は変化のたびにダイアログを再表示する
+  }, [createDocRequestNonce]);
 
   const createDoc = useCreateDoc();
   const createFolder = useCreateFolder();

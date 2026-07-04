@@ -148,11 +148,14 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
   const updateBody = useCallback((body: string) => {
     contentRef.current.body = body;
     setDirty(true);
+    // 追加編集後に「自動保存済み」バッジが残らないよう毎編集でクリアする(次の自動保存で再点灯)
+    setLastDraftSavedAt(null);
   }, []);
 
   const updateTags = useCallback((tags: string[]) => {
     contentRef.current.tags = tags;
     setDirty(true);
+    setLastDraftSavedAt(null);
   }, []);
 
   const restoreDraft = useCallback((): string => {
