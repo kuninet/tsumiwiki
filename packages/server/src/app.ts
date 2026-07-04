@@ -37,7 +37,7 @@ export function buildApp(options: BuildAppOptions) {
 
   const gitService = new GitService(config.libraryPath);
   const indexerService = new IndexerService(db, config.libraryPath);
-  const docService = new DocService(db, config, gitService, indexerService);
+  const docService = new DocService(db, config, gitService, indexerService, logger === false ? undefined : logger);
   app.decorate('gitService', gitService);
   app.decorate('indexerService', indexerService);
   app.decorate('docService', docService);

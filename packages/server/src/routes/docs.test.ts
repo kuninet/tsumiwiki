@@ -228,3 +228,50 @@ describe('フォルダ操作', () => {
     expect(res.statusCode).toBe(400);
   }, 20_000);
 });
+
+describe('計画者レビュー反映分', () => {
+  it('フロントマターのコメント・未知キーのスタイルが保存後も残る(外科的編集)', async () => {
+    await writeFile(
+      join(lib, 'スタイル保持.md'),
+      '---\ntags: [旧]\n# 大事なコメント\ncustom: {a: 1}\n---\n\n本文\n',
+      'utf8',
+    );
+    await app.indexerService.indexFile('スタイル保持.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('スタイル保持.md')}`);
+    await api('PUT', '/api/docs', {
+      path: 'スタイル保持.md',
+      body: got.json().body,
+      tags: ['新'],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+
+    const raw = await readFile(join(lib, 'スタイル保持.md'), 'utf8');
+    expect(raw).toContain('# 大事なコメント'); // コメント保持
+    expect(raw).toMatch(/custom: \{ ?a: 1 ?\}/); // フロースタイル保持(空白差は許容)
+    expect(raw).toContain('新');
+    expect(raw).not.toContain('旧');
+  }, 20_000);
+
+  it('Windows予約デバイス名のタイトルには_が付く', async () => {
+    const created = await api('POST', '/api/docs', { folder: '', title: 'CON' });
+    expect(created.json().path).toBe('CON_.md');
+  }, 20_000);
+
+  it('移動コミットは無関係な外部変更を巻き込まない(スコープコミット)', async () => {
+    const created = await api('POST', '/api/docs', { folder: '', title: '移動対象' });
+    // 外部ツールが作った未コミットのファイル
+    await writeFile(join(lib, '外部作成.md'), 'AIが直接書いた\n', 'utf8');
+
+    await api('POST', '/api/docs/move', {
+      path: created.json().path,
+      newFolder: '',
+      newTitle: '移動済み',
+    });
+
+    // 外部ファイルは未追跡のまま残る(moveコミットに巻き込まれない)
+    const { simpleGit } = await import('simple-git');
+    const status = await simpleGit({ baseDir: lib }).status();
+    expect(status.not_added).toContain('外部作成.md');
+  }, 20_000);
+});
