@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import type { DocSummary, SearchResult } from '@tsumiwiki/shared';
 import { api } from './client';
 
@@ -15,7 +15,10 @@ export function useSearch(q: string) {
       );
       return results;
     },
-    enabled: trimmed.length > 0,
+    // trigramの特性上3文字未満は実質ヒットしないため発火させない
+    enabled: trimmed.length >= 3,
+    // タイプ中に前回結果を保持してフリッカーを防ぐ
+    placeholderData: keepPreviousData,
   });
 }
 

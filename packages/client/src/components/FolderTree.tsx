@@ -13,13 +13,12 @@ import {
 } from '../api/docs';
 import { buildTree, parentOf, type TreeNode } from '../lib/build-tree';
 import { docUrl } from '../lib/doc-path';
-import { useEditStore } from '../stores/edit';
+import { confirmNavigationIfDirty } from '../lib/navigation-guard';
 import { useUIStore } from '../stores/ui';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { PromptDialog } from './PromptDialog';
 
-const UNSAVED_NAVIGATION_WARNING = '未保存の変更があります。移動しますか?';
 
 // フォルダツリー(設計04章4.2・デザインhandoff components.md)。ルート・フォルダ・文書の
 // 右クリックメニューから新規作成・リネーム・削除を行う。キーボード操作にも対応する
@@ -185,7 +184,7 @@ export function FolderTree() {
   }
 
   function handleNavigateToDoc(path: string) {
-    if (useEditStore.getState().dirty && !window.confirm(UNSAVED_NAVIGATION_WARNING)) {
+    if (!confirmNavigationIfDirty()) {
       return;
     }
     navigate(docUrl(path));

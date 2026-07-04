@@ -1,13 +1,12 @@
 import { useNavigate } from 'react-router-dom';
 import { useDocsByTags, useTags } from '../api/tags';
 import { docUrl } from '../lib/doc-path';
-import { useEditStore } from '../stores/edit';
+import { confirmNavigationIfDirty } from '../lib/navigation-guard';
 import { useUIStore } from '../stores/ui';
 
 // タグペイン(設計04章4.2・デザインhandoff components.md)。複数選択でAND絞り込みし、
 // 該当文書一覧を下に表示する
 
-const UNSAVED_NAVIGATION_WARNING = '未保存の変更があります。移動しますか?';
 
 export function TagPane() {
   const { data: tags } = useTags();
@@ -18,7 +17,7 @@ export function TagPane() {
   const navigate = useNavigate();
 
   function handleNavigateToDoc(path: string) {
-    if (useEditStore.getState().dirty && !window.confirm(UNSAVED_NAVIGATION_WARNING)) {
+    if (!confirmNavigationIfDirty()) {
       return;
     }
     navigate(docUrl(path));

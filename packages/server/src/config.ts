@@ -1,4 +1,6 @@
+import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // アプリ設定(設計01章1.4)。環境変数から読み込む。
 
@@ -13,6 +15,8 @@ export interface AppConfig {
   backupRemote: string | null;
   backupPushIntervalMinutes: number;
   maxUploadMb: number;
+  // クライアントのビルド成果物。存在すればAPIサーバーが静的配信する(単一ポート運用)
+  staticRoot: string | null;
   logLevel: string;
   logFile: string | null;
 }
@@ -82,7 +86,17 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       'BACKUP_PUSH_INTERVAL_MINUTES',
     ),
     maxUploadMb: intOf(env.MAX_UPLOAD_MB, 20, 'MAX_UPLOAD_MB', 1024),
+    staticRoot: resolveStaticRoot(env.STATIC_ROOT),
     logLevel,
     logFile: env.LOG_FILE ?? null,
   };
+}
+
+// 静的配信ルートの解決。STATIC_ROOT指定が最優先、未指定ならモノレポ内の
+// クライアントビルド成果物(packages/client/dist)を自動検出する(cwd非依存)
+function resolveStaticRoot(envValue: string | undefined): string | null {
+  if (envValue) return path.resolve(envValue);
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidate = path.resolve(here, '..', '..', 'client', 'dist');
+  return existsSync(candidate) ? candidate : null;
 }

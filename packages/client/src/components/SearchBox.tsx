@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useRecentDocs, useSearch } from '../api/search';
 import { useTags } from '../api/tags';
 import { docUrl } from '../lib/doc-path';
-import { useEditStore } from '../stores/edit';
+import { confirmNavigationIfDirty } from '../lib/navigation-guard';
+import { sanitizeSnippet } from '../lib/sanitize-snippet';
 import { useUIStore } from '../stores/ui';
 
 // ヘッダー検索・SearchDropdown(SC-04・デザインhandoff components.md)。
@@ -13,7 +14,6 @@ import { useUIStore } from '../stores/ui';
 const DEBOUNCE_MS = 300;
 const MIN_RECOMMENDED_LENGTH = 3; // trigramトークナイザの特性上、これ未満はヒットしないことがある
 const MAX_TAG_SUGGESTIONS = 8;
-const UNSAVED_NAVIGATION_WARNING = '未保存の変更があります。移動しますか?';
 
 type NavItem = { kind: 'doc'; path: string } | { kind: 'tag'; tag: string };
 
@@ -73,7 +73,7 @@ export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props,
   }
 
   function handleSelectDoc(path: string) {
-    if (useEditStore.getState().dirty && !window.confirm(UNSAVED_NAVIGATION_WARNING)) {
+    if (!confirmNavigationIfDirty()) {
       return;
     }
     navigate(docUrl(path));
@@ -193,12 +193,12 @@ export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props,
                           <div className="text-sm text-ink">{r.title}</div>
                           {/*
                             snippetはサーバー側でHTMLエスケープ済み+<mark>ハイライトのみを許可した契約
-                            (packages/shared/src/index.ts の searchResultSchema コメント参照)のため
-                            dangerouslySetInnerHTMLで描画してよい
+                            (packages/shared/src/index.ts の searchResultSchema コメント参照)。
+                            クライアント側でも<mark>以外を除去して二重に防御する
                           */}
                           <div
                             className="mt-0.5 truncate text-xs text-ink-faint"
-                            dangerouslySetInnerHTML={{ __html: r.snippet }}
+                            dangerouslySetInnerHTML={{ __html: sanitizeSnippet(r.snippet) }}
                           />
                         </button>
                       </li>
