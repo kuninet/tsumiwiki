@@ -40,3 +40,38 @@ describe('parseDiff', () => {
     ]);
   });
 });
+
+describe('レビュー指摘の回帰テスト', () => {
+  it('frontmatter区切り(---)の削除行はdelとして分類される', async () => {
+    const { parseDiff } = await import('./parse-diff');
+    const diff = [
+      '--- a/文書.md',
+      '+++ b/文書.md',
+      '@@ -1,4 +1,2 @@',
+      '----',
+      '-tags: [旧]',
+      '----',
+      ' 本文',
+    ].join('\n');
+    const lines = parseDiff(diff);
+    expect(lines[0].type).toBe('meta'); // --- a/文書.md
+    expect(lines[1].type).toBe('meta'); // +++ b/文書.md
+    expect(lines[3].type).toBe('del'); // -「---」
+    expect(lines[4].type).toBe('del');
+    expect(lines[5].type).toBe('del');
+    expect(lines[6].type).toBe('context');
+  });
+
+  it('追加された+++風の行もハンク内ではaddになる', async () => {
+    const { parseDiff } = await import('./parse-diff');
+    const lines = parseDiff('@@ -1 +1 @@\n+++強調++');
+    expect(lines[1].type).toBe('add');
+  });
+
+  it('複数ハンクでも種別が維持される', async () => {
+    const { parseDiff } = await import('./parse-diff');
+    const diff = '@@ -1 +1 @@\n-a\n+b\n@@ -10 +10 @@\n-c\n+d';
+    const types = parseDiff(diff).map((l) => l.type);
+    expect(types).toEqual(['hunk', 'del', 'add', 'hunk', 'del', 'add']);
+  });
+});

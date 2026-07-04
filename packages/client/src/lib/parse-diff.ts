@@ -8,15 +8,6 @@ export interface DiffLine {
   text: string;
 }
 
-function isMetaLine(line: string): boolean {
-  return (
-    line.startsWith('+++') ||
-    line.startsWith('---') ||
-    line.startsWith('diff ') ||
-    line.startsWith('index ')
-  );
-}
-
 export function parseDiff(diff: string): DiffLine[] {
   if (!diff) return [];
 
@@ -26,9 +17,21 @@ export function parseDiff(diff: string): DiffLine[] {
     lines.pop();
   }
 
+  // 種別は位置ベースで判定する: @@より前だけがヘッダ(meta)。
+  // 接頭辞ベースの判定だと、frontmatter区切りや水平線「---」の削除行
+  // (=「----」)がヘッダに誤分類される(#33レビュー指摘)
+  let inHunk = false;
   return lines.map((line): DiffLine => {
-    if (isMetaLine(line)) return { type: 'meta', text: line };
-    if (line.startsWith('@@')) return { type: 'hunk', text: line };
+    if (line.startsWith('@@')) {
+      inHunk = true;
+      return { type: 'hunk', text: line };
+    }
+    if (line.startsWith('diff ')) {
+      // 複数ファイル差分の区切り(単一文書履歴では通常出ないが防御)
+      inHunk = false;
+      return { type: 'meta', text: line };
+    }
+    if (!inHunk) return { type: 'meta', text: line };
     if (line.startsWith('+')) return { type: 'add', text: line };
     if (line.startsWith('-')) return { type: 'del', text: line };
     return { type: 'context', text: line };

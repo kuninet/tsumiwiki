@@ -36,6 +36,15 @@ const DIFF_LINE_CLASS: Record<string, string> = {
 };
 
 export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
+  // Escapeキーでパネルを閉じる(操作性・a11y)
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   const { data: history, isLoading } = useHistory(path);
   const [selectedRev, setSelectedRev] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('diff');
@@ -79,6 +88,7 @@ export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
       queryClient.invalidateQueries({ queryKey: historyQueryKey(path) });
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       showToast('success', 'この版に戻しました');
+      onClose(); // 復元後は旧版選択が残らないようパネルを閉じる
     } catch (err) {
       showToast('error', err instanceof ApiRequestError ? err.message : '復元に失敗しました');
     } finally {
