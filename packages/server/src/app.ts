@@ -1,4 +1,5 @@
 import fastifyMultipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import type { Logger } from 'pino';
 import type { HealthResponse } from '@tsumiwiki/shared';
@@ -102,6 +103,20 @@ export function buildApp(options: BuildAppOptions) {
     registerAttachmentRoutes(instance);
     registerLibraryRoutes(instance);
   });
+
+  // クライアントの静的配信(本番の単一ポート運用。設計01章1.4)
+  if (config.staticRoot) {
+    app.register(fastifyStatic, { root: config.staticRoot, prefix: '/' });
+    // SPAフォールバック: /api以外の未知パスはindex.htmlを返す
+    app.setNotFoundHandler((req, reply) => {
+      if (req.url.startsWith('/api/')) {
+        return reply
+          .code(404)
+          .send({ error: { code: 'NOT_FOUND', message: 'エンドポイントがありません' } });
+      }
+      return reply.sendFile('index.html');
+    });
+  }
 
   app.get('/api/health', async (): Promise<HealthResponse> => {
     return {
