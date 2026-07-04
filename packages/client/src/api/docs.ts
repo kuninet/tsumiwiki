@@ -45,6 +45,11 @@ export function saveDoc(body: SaveDocRequest): Promise<{ updatedAt: string }> {
   return api('PUT', '/api/docs', body);
 }
 
+// 保存競合時、最新のupdatedAtだけを取得し直すための素の関数(設計04章4.4)
+export function fetchDoc(path: string): Promise<DocResponse> {
+  return api('GET', `/api/docs?path=${encodeURIComponent(path)}`);
+}
+
 // 文書・フォルダの変更系mutation共通処理: 成功時にtree/tagsを更新し結果をトースト表示する
 function useLibraryMutation<TVariables>(
   mutationFn: (variables: TVariables) => Promise<unknown>,

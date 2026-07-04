@@ -1,6 +1,6 @@
 import { EditorContent, useEditor } from '@tiptap/react';
 import type { DocResponse, User } from '@tsumiwiki/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createEditorExtensions } from '../editor/markdown';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
@@ -45,17 +45,31 @@ export function DocView({ doc, currentUser }: DocViewProps) {
     editor?.setEditable(session.mode === 'edit');
   }, [editor, session.mode]);
 
+  // 閲覧中に限り、外部要因(他者更新・定期refetch等)でdocが変わったら本文を追随させる。
+  // 編集中は絶対に上書きしない(編集内容が消えるため)
+  useEffect(() => {
+    if (session.mode === 'view' && editor && !editor.isDestroyed) {
+      editor.commands.setContent(doc.body);
+    }
+  }, [editor, doc.body, session.mode]);
+
+  // sessionは毎レンダリングで新しいオブジェクトになるため、refに固定して
+  // keydownリスナーの登録/解除がレンダリングのたびに走らないようにする
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (session.mode !== 'edit' || e.isComposing) return;
+      const current = sessionRef.current;
+      if (current.mode !== 'edit' || e.isComposing) return;
       const isSaveShortcut = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's';
       if (!isSaveShortcut) return;
       e.preventDefault();
-      void session.save();
+      void current.save();
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [session]);
+  }, []);
 
   const lockedByOther = doc.lock && doc.lock.userId !== currentUser.id ? doc.lock : null;
 
@@ -64,8 +78,13 @@ export function DocView({ doc, currentUser }: DocViewProps) {
     void session.startEditing(doc.body, doc.tags);
   }
 
+  function handleTagsInputChange(value: string) {
+    setTagsInput(value);
+    // 保存経路(ボタン/Ctrl+S)によらず常に最新のタグが送られるよう、入力の都度sessionへ反映する
+    session.updateTags(parseTagsInput(value));
+  }
+
   function handleSave() {
-    session.updateTags(parseTagsInput(tagsInput));
     void session.save();
   }
 
@@ -136,7 +155,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
             タグ(カンマ区切り)
             <input
               value={tagsInput}
-              onChange={(e) => setTagsInput(e.target.value)}
+              onChange={(e) => handleTagsInputChange(e.target.value)}
               className="mt-1 block w-full rounded border border-gray-300 px-2 py-1 text-sm text-gray-800"
             />
           </label>
@@ -166,6 +185,17 @@ export function DocView({ doc, currentUser }: DocViewProps) {
           cancelLabel="編集を続ける"
           onConfirm={handleConfirmCancel}
           onCancel={() => setCancelConfirmVisible(false)}
+        />
+      )}
+
+      {session.conflict && (
+        <ConfirmDialog
+          title="保存の競合"
+          message="保存先が取得後に変更されています。"
+          confirmLabel="自分の内容で上書き保存"
+          cancelLabel="破棄して最新を読み込む"
+          onConfirm={() => void session.resolveConflictOverwrite()}
+          onCancel={() => void session.resolveConflictDiscard()}
         />
       )}
     </div>

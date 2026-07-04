@@ -141,4 +141,75 @@ describe('DocView', () => {
       expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/drafts')).toBe(true);
     });
   });
+
+  it('タグ入力を変更してCtrl+Sで保存すると、ボタン経由でなくても新しいタグが送られる', async () => {
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'PUT /api/docs': { updatedAt: '2026-07-02T00:00:00+09:00' },
+    });
+    renderDocView();
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
+    const tagsInput = await screen.findByLabelText('タグ(カンマ区切り)');
+    fireEvent.change(tagsInput, { target: { value: '設計, 新タグ' } });
+
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true });
+
+    await waitFor(() => {
+      expect(calls.some((c) => c.method === 'PUT' && c.path === '/api/docs')).toBe(true);
+    });
+
+    const saveCall = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs')!;
+    expect(saveCall.body).toMatchObject({ tags: ['設計', '新タグ'] });
+  });
+
+  it('閲覧モードでdocの本文が変わるとエディタの表示が追随する', async () => {
+    stubFetch();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <DocView doc={DOC} currentUser={CURRENT_USER} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('本文です')).toBeTruthy());
+
+    const updatedDoc: DocResponse = { ...DOC, body: '更新後の本文' };
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <DocView doc={updatedDoc} currentUser={CURRENT_USER} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('更新後の本文')).toBeTruthy());
+  });
+
+  it('編集モード中はdocの本文が変わってもエディタの表示を上書きしない', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <DocView doc={DOC} currentUser={CURRENT_USER} />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
+    await screen.findByRole('button', { name: '保存' });
+
+    const updatedDoc: DocResponse = { ...DOC, body: '外部で更新された本文' };
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <DocView doc={updatedDoc} currentUser={CURRENT_USER} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText('外部で更新された本文')).toBeNull();
+    });
+    expect(screen.getByText('本文です')).toBeTruthy();
+  });
 });

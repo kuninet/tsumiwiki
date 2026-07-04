@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { docQueryKey, saveDoc, TAGS_QUERY_KEY, TREE_QUERY_KEY } from '../api/docs';
+import { docQueryKey, fetchDoc, saveDoc, TAGS_QUERY_KEY, TREE_QUERY_KEY } from '../api/docs';
 import { ApiRequestError } from '../api/client';
 import { deleteDraft, getDraft, saveDraft } from '../api/drafts';
 import { acquireLock, refreshLock, releaseLock } from '../api/locks';
@@ -34,6 +34,7 @@ export interface UseEditingSessionResult {
   dirty: boolean;
   lastDraftSavedAt: string | null;
   draftPrompt: DraftPrompt | null;
+  conflict: boolean;
   startEditing: (initialBody: string, initialTags: string[]) => Promise<void>;
   updateBody: (body: string) => void;
   updateTags: (tags: string[]) => void;
@@ -41,17 +42,37 @@ export interface UseEditingSessionResult {
   cancelEditing: () => Promise<void>;
   restoreDraft: () => string;
   discardDraftPrompt: () => Promise<void>;
+  resolveConflictOverwrite: () => Promise<void>;
+  resolveConflictDiscard: () => Promise<void>;
 }
 
+// sendBeaconはヘッダをカスタマイズできないため、CSRFヘッダが必須な本APIには使えない。
+// keepalive付きfetchでページ離脱・SPA内遷移(アンマウント)後も送信を試行する(設計04章4.4)
 function releaseLockBeacon(path: string): void {
-  // sendBeaconはヘッダをカスタマイズできないため、CSRFヘッダが必須な本APIには使えない。
-  // keepalive付きfetchでページ離脱後も送信を試行する(設計04章4.4)
   void fetch(`/api/locks?path=${encodeURIComponent(path)}`, {
     method: 'DELETE',
     credentials: 'same-origin',
     keepalive: true,
     headers: { 'X-Requested-With': 'TsumiWiki' },
   });
+}
+
+function saveDraftBeacon(path: string, content: string): void {
+  void fetch('/api/drafts', {
+    method: 'PUT',
+    credentials: 'same-origin',
+    keepalive: true,
+    headers: { 'X-Requested-With': 'TsumiWiki', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content }),
+  });
+}
+
+// 離脱・アンマウント時の後始末: dirtyなら最終下書きを保存してからロックを解放する
+function flushOnLeave(path: string, dirty: boolean, body: string): void {
+  if (dirty) {
+    saveDraftBeacon(path, body);
+  }
+  releaseLockBeacon(path);
 }
 
 export function useEditingSession(options: UseEditingSessionOptions): UseEditingSessionResult {
@@ -69,12 +90,16 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
   const [dirty, setDirty] = useState(false);
   const [lastDraftSavedAt, setLastDraftSavedAt] = useState<string | null>(null);
   const [draftPrompt, setDraftPrompt] = useState<DraftPrompt | null>(null);
+  const [conflict, setConflict] = useState(false);
 
   const contentRef = useRef<{ body: string; tags: string[] }>({ body: '', tags: [] });
   const optionsRef = useRef(options);
   optionsRef.current = options;
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const savingRef = useRef(false);
 
   useEffect(() => setStoreMode(mode), [mode, setStoreMode]);
   useEffect(() => setStoreDirty(dirty), [dirty, setStoreDirty]);
@@ -85,6 +110,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     setDirty(false);
     setDraftPrompt(null);
     setLastDraftSavedAt(null);
+    setConflict(false);
     setStoreLockedPath(null);
   }, [setStoreLockedPath]);
 
@@ -101,6 +127,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
       contentRef.current = { body: initialBody, tags: initialTags };
       setDirty(false);
       setDraftPrompt(null);
+      setConflict(false);
       setMode('edit');
       setStoreLockedPath(path);
 
@@ -153,10 +180,12 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
   );
 
   const save = useCallback(async () => {
+    if (savingRef.current) return; // Ctrl+S連打等での多重送信を防ぐ
     const path = optionsRef.current.path;
     const baseUpdatedAt = optionsRef.current.baseUpdatedAt;
     if (!path || !baseUpdatedAt) return;
 
+    savingRef.current = true;
     try {
       const { updatedAt } = await saveDoc({
         path,
@@ -175,10 +204,52 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
         stopEditingLocally();
         return;
       }
-      // CONFLICT等その他のエラーは編集内容を保持したまま継続する
+      if (err instanceof ApiRequestError && err.code === 'CONFLICT') {
+        // 編集内容は保持したまま、競合解消ダイアログの表示に切り替える
+        showToast('error', err.message);
+        setConflict(true);
+        return;
+      }
+      showToast('error', err instanceof ApiRequestError ? err.message : '保存に失敗しました');
+    } finally {
+      savingRef.current = false;
+    }
+  }, [invalidateAfterSave, showToast, stopEditingLocally]);
+
+  // 競合解消: 自分の編集内容を保持したまま、最新のupdatedAtを取得し直して再保存する
+  const resolveConflictOverwrite = useCallback(async () => {
+    const path = optionsRef.current.path;
+    if (!path) return;
+    try {
+      const latest = await fetchDoc(path);
+      const { updatedAt } = await saveDoc({
+        path,
+        body: contentRef.current.body,
+        tags: contentRef.current.tags,
+        baseUpdatedAt: latest.updatedAt,
+      });
+      await releaseLock(path).catch(() => {});
+      invalidateAfterSave(path);
+      stopEditingLocally();
+      showToast('success', '保存しました');
+      optionsRef.current.onSaved?.(updatedAt);
+    } catch (err) {
+      // 再度の競合等はダイアログを表示したまま再試行できるようにする
       showToast('error', err instanceof ApiRequestError ? err.message : '保存に失敗しました');
     }
   }, [invalidateAfterSave, showToast, stopEditingLocally]);
+
+  // 競合解消: 自分の編集を破棄し、最新の内容を読み込み直す
+  const resolveConflictDiscard = useCallback(async () => {
+    const path = optionsRef.current.path;
+    setConflict(false);
+    if (path) {
+      await deleteDraft(path).catch(() => {});
+      await releaseLock(path).catch(() => {});
+      queryClient.invalidateQueries({ queryKey: docQueryKey(path) });
+    }
+    stopEditingLocally();
+  }, [queryClient, stopEditingLocally]);
 
   const cancelEditing = useCallback(async () => {
     const path = optionsRef.current.path;
@@ -233,7 +304,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     function handlePageHide() {
       const path = optionsRef.current.path;
       if (modeRef.current === 'edit' && path) {
-        releaseLockBeacon(path);
+        flushOnLeave(path, dirtyRef.current, contentRef.current.body);
       }
     }
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -244,12 +315,12 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     };
   }, [dirty]);
 
-  // アンマウント時も編集中ならロック解放を試行する
+  // アンマウント時(SPA内遷移含む)も編集中ならdirtyな内容を下書き保存してからロックを解放する
   useEffect(() => {
     return () => {
       const path = optionsRef.current.path;
       if (modeRef.current === 'edit' && path) {
-        releaseLockBeacon(path);
+        flushOnLeave(path, dirtyRef.current, contentRef.current.body);
       }
     };
   }, []);
@@ -259,6 +330,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     dirty,
     lastDraftSavedAt,
     draftPrompt,
+    conflict,
     startEditing,
     updateBody,
     updateTags,
@@ -266,5 +338,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     cancelEditing,
     restoreDraft,
     discardDraftPrompt,
+    resolveConflictOverwrite,
+    resolveConflictDiscard,
   };
 }

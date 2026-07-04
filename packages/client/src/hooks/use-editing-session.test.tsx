@@ -192,6 +192,31 @@ describe('useEditingSession', () => {
     expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/locks')).toBe(true);
   });
 
+  it('保存中に連続で呼び出しても多重送信しない', async () => {
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'PUT /api/docs': { updatedAt: '2026-07-02T00:00:00+09:00' },
+    });
+
+    const { result } = renderHook(
+      () => useEditingSession({ path: 'a.md', baseUpdatedAt: '2026-07-01T00:00:00+09:00' }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.startEditing('本文', []);
+    });
+    act(() => result.current.updateBody('新しい本文'));
+
+    await act(async () => {
+      await Promise.all([result.current.save(), result.current.save()]);
+    });
+
+    const saveCalls = calls.filter((c) => c.method === 'PUT' && c.path === '/api/docs');
+    expect(saveCalls).toHaveLength(1);
+  });
+
   it('保存が競合(409 CONFLICT)の場合は編集モードを継続する', async () => {
     stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
@@ -218,7 +243,63 @@ describe('useEditingSession', () => {
 
     expect(result.current.mode).toBe('edit');
     expect(result.current.dirty).toBe(true);
+    expect(result.current.conflict).toBe(true);
     expect(useToastStore.getState().toast).toMatchObject({ kind: 'error' });
+  });
+
+  it('競合解消(上書き保存)は最新のupdatedAtを取得し直して再保存し、閲覧モードへ戻る', async () => {
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/docs': { path: 'a.md', frontmatter: {}, tags: [], body: '他者更新後の本文', updatedAt: '2026-07-01T05:00:00+09:00', lock: null },
+      'PUT /api/docs': { updatedAt: '2026-07-02T00:00:00+09:00' },
+    });
+
+    const { result } = renderHook(
+      () => useEditingSession({ path: 'a.md', baseUpdatedAt: '2026-07-01T00:00:00+09:00' }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.startEditing('本文', []);
+    });
+    act(() => result.current.updateBody('自分の変更'));
+
+    await act(async () => {
+      await result.current.resolveConflictOverwrite();
+    });
+
+    expect(calls.some((c) => c.method === 'GET' && c.path === '/api/docs')).toBe(true);
+    const saveCall = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs')!;
+    expect((saveCall.body as { baseUpdatedAt: string }).baseUpdatedAt).toBe('2026-07-01T05:00:00+09:00');
+    expect(result.current.mode).toBe('view');
+    expect(result.current.conflict).toBe(false);
+  });
+
+  it('競合解消(破棄)は編集を破棄し、文書クエリを更新して閲覧モードへ戻る', async () => {
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+    });
+
+    const { result } = renderHook(
+      () => useEditingSession({ path: 'a.md', baseUpdatedAt: '2026-07-01T00:00:00+09:00' }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.startEditing('本文', []);
+    });
+    act(() => result.current.updateBody('自分の変更'));
+
+    await act(async () => {
+      await result.current.resolveConflictDiscard();
+    });
+
+    expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/drafts')).toBe(true);
+    expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/locks')).toBe(true);
+    expect(result.current.mode).toBe('view');
+    expect(result.current.conflict).toBe(false);
   });
 
   it('取消すると下書きを破棄してロックを解放し閲覧モードへ戻る', async () => {

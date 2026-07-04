@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 // フォルダツリー等で使う汎用の右クリックコンテキストメニュー(設計04章4.2)
 
@@ -15,7 +15,25 @@ interface ContextMenuProps {
   onClose: () => void;
 }
 
+const VIEWPORT_MARGIN = 4;
+
 export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ x, y });
+
+  // 実際の描画サイズを測ってから、右端・下端でビューポート外へはみ出さないよう補正する
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!el) {
+      setPosition({ x, y });
+      return;
+    }
+    const rect = el.getBoundingClientRect();
+    const clampedX = Math.max(VIEWPORT_MARGIN, Math.min(x, window.innerWidth - rect.width - VIEWPORT_MARGIN));
+    const clampedY = Math.max(VIEWPORT_MARGIN, Math.min(y, window.innerHeight - rect.height - VIEWPORT_MARGIN));
+    setPosition({ x: clampedX, y: clampedY });
+  }, [x, y]);
+
   useEffect(() => {
     window.addEventListener('click', onClose);
     window.addEventListener('contextmenu', onClose);
@@ -27,8 +45,9 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
 
   return (
     <div
+      ref={menuRef}
       role="menu"
-      style={{ left: x, top: y }}
+      style={{ left: position.x, top: position.y }}
       className="fixed z-50 min-w-[160px] rounded border border-gray-200 bg-white py-1 text-sm shadow-lg"
       onClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.stopPropagation()}
