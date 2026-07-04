@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { AppDatabase } from '../db/index.js';
@@ -188,7 +189,7 @@ export class IndexerService {
 
   private async walk(relDir: string, out: Map<string, WalkedFile>, absDirReal?: string): Promise<void> {
     const absDir = absDirReal ?? this.libraryPath;
-    let entries: Awaited<ReturnType<typeof readdir>>;
+    let entries: Dirent[];
     try {
       entries = await readdir(absDir, { withFileTypes: true });
     } catch {
