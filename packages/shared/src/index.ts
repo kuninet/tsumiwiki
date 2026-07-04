@@ -8,6 +8,15 @@ export const healthResponseSchema = z.object({
   name: z.string(),
   version: z.string(),
   time: z.string(),
+  // バックアップpushの概況(設計06章6.5)。healthは未認証で読めるため
+  // 詳細(エラー文字列=内部パスを含みうる)は認証必須の/api/library/statusで返す
+  backup: z
+    .object({
+      configured: z.boolean(),
+      healthy: z.boolean(),
+      lastSuccessAt: z.string().nullable(),
+    })
+    .optional(),
 });
 
 export type HealthResponse = z.infer<typeof healthResponseSchema>;

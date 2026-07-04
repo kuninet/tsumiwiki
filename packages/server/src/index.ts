@@ -3,6 +3,7 @@ import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 import { openDatabase } from './db/index.js';
 import { createLogger } from './logger.js';
+import { LibraryWatcher } from './services/library-watcher.js';
 
 const config = loadConfig();
 const logger = createLogger(config);
@@ -22,6 +23,26 @@ if (scan.failedPaths.length > 0) {
   logger.warn({ failedPaths: scan.failedPaths }, '読み込みに失敗した文書があります(索引は継続)');
 }
 
+// 外部変更の自動取り込み(FR-DOC-08 / 設計06章6.4の多重防御)
+// ①ファイルシステム監視(デバウンス3秒) ②定期ポーリング(5分) ③手動rescan API
+const watcher = new LibraryWatcher(config.libraryPath, () => {
+  void app.syncService.run().catch((e) => logger.error(e, '外部変更の取り込みに失敗しました'));
+});
+watcher.start();
+const syncPoll = setInterval(() => {
+  void app.syncService.run().catch((e) => logger.error(e, '外部変更の取り込みに失敗しました'));
+}, 5 * 60_000);
+syncPoll.unref();
+
+// バックアップpush(NFR-AVL-02。BACKUP_REMOTE設定時のみ)
+let backupTimer: NodeJS.Timeout | null = null;
+if (app.backupService.configured) {
+  backupTimer = setInterval(() => {
+    void app.backupService.pushNow();
+  }, config.backupPushIntervalMinutes * 60_000);
+  backupTimer.unref();
+}
+
 // 期限切れ編集ロックの定期掃除(FR-LOCK-03。判定自体はクエリ時にも行われる)
 const lockSweep = setInterval(() => {
   const n = app.lockService.cleanupExpired();
@@ -38,6 +59,14 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   logger.info(`${signal} を受信しました。シャットダウンします`);
   clearInterval(lockSweep);
+  clearInterval(syncPoll);
+  if (backupTimer) clearInterval(backupTimer);
+  await watcher.stop();
+  // 停止直前の外部変更を取り込んでから最終push(いずれも時間上限つき)
+  const withTimeout = (p: Promise<unknown>, ms: number) =>
+    Promise.race([p.catch(() => undefined), new Promise((r) => setTimeout(r, ms).unref?.())]);
+  await withTimeout(app.syncService.run(), 15_000);
+  await withTimeout(app.backupService.pushNow(), 15_000);
   await app.close();
   db.close();
   process.exit(0);

@@ -43,7 +43,7 @@ describe('GitService', () => {
     expect(history[0].message).toBe('add: 議事録/週次ミーティング.md');
 
     // committerは固定のシステム名義(設計06章6.2)
-    const committer = await simpleGit({ baseDir: lib }).raw(['log', '--pretty=format:%cn']);
+    const committer = await simpleGit({ baseDir: lib }).raw(['log', '-1', '--pretty=format:%cn']);
     expect(committer).toBe('TsumiWiki');
   }, 20_000);
 
@@ -82,7 +82,8 @@ describe('GitService', () => {
     await Promise.all(jobs);
 
     const log = await simpleGit({ baseDir: lib }).log();
-    expect(log.total).toBe(10);
+    // init時の.gitignoreコミット+10件
+    expect(log.total).toBe(11);
   }, 30_000);
 
   it('外部変更(直接ファイル操作)を検知できる', async () => {
