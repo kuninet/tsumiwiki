@@ -16,6 +16,7 @@ export function LoginPage() {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (login.isPending) return; // Enterキー連打の二重送信ガード
     setErrorMessage(null);
     login.mutate(
       { username, password },

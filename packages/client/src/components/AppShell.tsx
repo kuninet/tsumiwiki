@@ -28,7 +28,10 @@ export function AppShell() {
       setSidebarWidth(e.clientX);
     }
     function handleMouseUp() {
+      if (!draggingRef.current) return;
       draggingRef.current = false;
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
     }
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
@@ -117,8 +120,11 @@ export function AppShell() {
             </div>
             <div className="p-3 text-sm text-gray-400">実装予定</div>
             <div
-              onMouseDown={() => {
+              onMouseDown={(e) => {
+                e.preventDefault(); // ドラッグ中のテキスト選択を防ぐ
                 draggingRef.current = true;
+                document.body.style.userSelect = 'none';
+                document.body.style.cursor = 'col-resize';
               }}
               className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-blue-300"
             />
