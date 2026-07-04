@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { openDatabase } from './index.js';
 
@@ -36,10 +39,40 @@ describe('openDatabase', () => {
     expect(hits).toEqual(['設計/データモデル.md']);
   });
 
-  it('再オープンしてもマイグレーションが二重実行されない', () => {
+  it('同じDBファイルを再オープンしてもマイグレーションが二重実行されない', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'tsumiwiki-db-')), 'app.db');
+    const db1 = openDatabase(dbPath);
+    db1.prepare(
+      `INSERT INTO users (username, display_name, password_hash, role, disabled, created_at, updated_at)
+       VALUES ('a', 'A', 'h', 'user', 0, '2026-01-01', '2026-01-01')`,
+    ).run();
+    db1.close();
+
+    // 適用済みの同一ファイルを再オープン(テーブル重複エラーが出ないこと)
+    const db2 = openDatabase(dbPath);
+    expect(db2.pragma('user_version', { simple: true })).toBe(1);
+    expect((db2.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n).toBe(1);
+    db2.close();
+  });
+
+  it('アプリより新しいスキーマバージョンのDBは開けない(破損防止)', () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), 'tsumiwiki-db-')), 'app.db');
+    const db = openDatabase(dbPath);
+    db.pragma('user_version = 99');
+    db.close();
+
+    expect(() => openDatabase(dbPath)).toThrow(/新しい/);
+  });
+
+  it('CHECK制約が不正な値を拒否する', () => {
     const db = openDatabase(':memory:');
-    expect(db.pragma('user_version', { simple: true })).toBe(1);
-    // 同一DBに対する再migrate相当(異常が出ないこと)
-    expect(() => openDatabase(':memory:')).not.toThrow();
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO users (username, display_name, password_hash, role, disabled, created_at, updated_at)
+           VALUES ('x', 'X', 'h', 'superuser', 0, '2026-01-01', '2026-01-01')`,
+        )
+        .run(),
+    ).toThrow(/CHECK/);
   });
 });
