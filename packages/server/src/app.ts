@@ -3,6 +3,9 @@ import type { Logger } from 'pino';
 import type { HealthResponse } from '@tsumiwiki/shared';
 import type { AppConfig } from './config';
 import type { AppDatabase } from './db';
+import { authPlugin } from './plugins/auth.js';
+import { registerAuthRoutes } from './routes/auth.js';
+import { registerUserRoutes } from './routes/users.js';
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -24,6 +27,12 @@ export function buildApp(options: BuildAppOptions) {
 
   app.decorate('config', config);
   app.decorate('db', db);
+
+  app.register(authPlugin);
+  app.register(async (instance) => {
+    registerAuthRoutes(instance);
+    registerUserRoutes(instance);
+  });
 
   app.get('/api/health', async (): Promise<HealthResponse> => {
     return {
