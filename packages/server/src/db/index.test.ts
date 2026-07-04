@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { openDatabase } from './index.js';
+import { SCHEMA_VERSION, openDatabase } from './index.js';
 
 describe('openDatabase', () => {
   it('スキーマが作成されuser_versionが設定される', () => {
@@ -15,7 +15,7 @@ describe('openDatabase', () => {
     for (const t of ['users', 'sessions', 'locks', 'drafts', 'doc_index', 'doc_tags', 'doc_fts']) {
       expect(tables).toContain(t);
     }
-    expect(db.pragma('user_version', { simple: true })).toBe(1);
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION);
   });
 
   it('FTS5(trigram)で日本語全文検索ができる', () => {
@@ -50,7 +50,7 @@ describe('openDatabase', () => {
 
     // 適用済みの同一ファイルを再オープン(テーブル重複エラーが出ないこと)
     const db2 = openDatabase(dbPath);
-    expect(db2.pragma('user_version', { simple: true })).toBe(1);
+    expect(db2.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION);
     expect((db2.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n).toBe(1);
     db2.close();
   });

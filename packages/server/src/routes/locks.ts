@@ -1,5 +1,7 @@
+import { existsSync } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { lockRequestSchema } from '@tsumiwiki/shared';
+import { isProtectedPath, normalizeRelPath, resolveInLibrary } from '../lib/paths.js';
 import { requireAdmin, sendError } from '../plugins/auth.js';
 import { handling } from './docs.js';
 
@@ -12,7 +14,16 @@ export function registerLockRoutes(app: FastifyInstance): void {
       return sendError(reply, 400, 'VALIDATION_ERROR', 'pathを指定してください');
     }
     return handling(reply, async () => {
-      const lock = app.lockService.acquire(parsed.data.path, req.user!.id);
+      // 存在しない文書への孤児ロックを防ぐ(移動時のPK衝突源にもなる)
+      const normalized = normalizeRelPath(parsed.data.path);
+      if (
+        isProtectedPath(normalized) ||
+        !normalized.toLowerCase().endsWith('.md') ||
+        !existsSync(resolveInLibrary(app.config.libraryPath, normalized))
+      ) {
+        return sendError(reply, 404, 'NOT_FOUND', `文書が見つかりません: ${normalized}`);
+      }
+      const lock = app.lockService.acquire(normalized, req.user!.id);
       return { lock: { userId: lock.userId, displayName: lock.displayName } };
     });
   });

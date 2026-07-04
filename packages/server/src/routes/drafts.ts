@@ -38,9 +38,10 @@ export function registerDraftRoutes(app: FastifyInstance): void {
     return handling(reply, async () => {
       // 自分の下書きのみ破棄できる
       const draft = app.draftService.getOwn(docPath, req.user!.id);
-      if (draft) {
-        app.draftService.remove(docPath);
+      if (!draft) {
+        return sendError(reply, 404, 'NOT_FOUND', '下書きがありません');
       }
+      app.draftService.removeOwn(docPath, req.user!.id);
       return { ok: true };
     });
   });

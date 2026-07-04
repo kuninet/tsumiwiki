@@ -266,8 +266,8 @@ export class DocService {
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `edit: ${normalized}`, author);
     await this.indexer.indexFile(normalized);
-    // 明示保存に成功したら自動保存の下書きは不要になる(FR-EDIT-08)
-    this.drafts.remove(normalized);
+    // 明示保存に成功したら本人の下書きは不要になる(FR-EDIT-08)
+    this.drafts.removeOwn(normalized, userId);
     const after = await stat(abs);
     return { updatedAt: after.mtime.toISOString() };
   }
@@ -335,7 +335,7 @@ export class DocService {
     await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}`, author);
     this.indexer.removeFile(normalized);
     this.locks.forceRelease(normalized);
-    this.drafts.remove(normalized);
+    this.drafts.removeAll(normalized);
   }
 
   async moveDoc(
@@ -416,7 +416,7 @@ export class DocService {
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `restore: ${normalized} @${rev.slice(0, 7)}`, author);
     await this.indexer.indexFile(normalized);
-    this.drafts.remove(normalized);
+    this.drafts.removeOwn(normalized, userId);
     const after = await stat(abs);
     return { updatedAt: after.mtime.toISOString() };
   }

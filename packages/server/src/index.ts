@@ -26,6 +26,8 @@ if (scan.failedPaths.length > 0) {
 const lockSweep = setInterval(() => {
   const n = app.lockService.cleanupExpired();
   if (n > 0) logger.info(`期限切れの編集ロックを${n}件解放しました`);
+  const d = app.draftService.cleanupStale();
+  if (d > 0) logger.info(`保持期限を超えた下書きを${d}件回収しました`);
 }, 60_000);
 lockSweep.unref();
 
