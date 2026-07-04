@@ -134,12 +134,12 @@ export class DocService {
   }
 
   // アトミック書き込み: 同一ディレクトリの一時ファイルに書いてからrename
-  private async writeAtomic(abs: string, content: string): Promise<void> {
+  private async writeAtomic(abs: string, content: string | Buffer): Promise<void> {
     const tmp = path.join(
       path.dirname(abs),
       `.tsumiwiki-tmp-${randomBytes(6).toString('hex')}`,
     );
-    await writeFile(tmp, content, 'utf8');
+    await writeFile(tmp, content);
     await rename(tmp, abs);
   }
 
@@ -374,6 +374,55 @@ export class DocService {
     this.locks.repath(oldNorm, newNorm);
     this.drafts.repath(oldNorm, newNorm);
     return { path: newNorm };
+  }
+
+  // ---- 添付(FR-IMG / FR-OBS-05) ----
+
+  // 添付として受け付ける拡張子(画像のみ。PDF等はFR-IMG-04=COULDで将来)
+  static readonly ATTACHMENT_EXTENSIONS = new Set([
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.svg',
+    '.webp',
+  ]);
+
+  // 画像添付の保存(FR-IMG-01/02)。保存先は既定で文書と同じフォルダ、
+  // 設定(ATTACHMENT_DIR_MODE)でフォルダ名指定も可能
+  async addAttachment(
+    docPath: string,
+    originalName: string,
+    data: Buffer,
+    author: GitAuthor,
+  ): Promise<{ fileName: string; path: string }> {
+    const docNorm = this.validateDocPath(docPath);
+    if (!(await this.exists(resolveInLibrary(this.libraryPath, docNorm)))) {
+      throw new DocNotFoundError(docNorm);
+    }
+    const ext = path.posix.extname(originalName.normalize('NFC')).toLowerCase();
+    if (!DocService.ATTACHMENT_EXTENSIONS.has(ext)) {
+      throw new InvalidPathError(originalName);
+    }
+
+    const mode = this.config.attachmentDirMode;
+    const dirRel = mode === 'same-folder' ? path.posix.dirname(docNorm) : mode;
+    const dirNorm = dirRel === '.' ? '' : dirRel;
+    const absDir = dirNorm ? resolveInLibrary(this.libraryPath, dirNorm) : this.libraryPath;
+    await mkdir(absDir, { recursive: true });
+
+    // image-YYYYMMDDHHmmss形式+衝突時は連番(要件05章5.1)
+    const d = new Date();
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+    let fileName = `image-${stamp}${ext}`;
+    for (let i = 2; await this.exists(path.join(absDir, fileName)); i++) {
+      fileName = `image-${stamp}-${i}${ext}`;
+    }
+    const relPath = dirNorm ? `${dirNorm}/${fileName}` : fileName;
+    await this.writeAtomic(path.join(absDir, fileName), data);
+    await this.tryCommit([relPath], `attach: ${relPath}`, author);
+    return { fileName, path: relPath };
   }
 
   // ---- ごみ箱(FR-DOC-07) ----
