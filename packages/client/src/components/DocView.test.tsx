@@ -86,6 +86,22 @@ describe('DocView', () => {
     expect(editButton.disabled).toBe(true);
   });
 
+  it('編集モード中は履歴ボタンが無効化される', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+    });
+    renderDocView();
+
+    const historyButton = (await screen.findByRole('button', { name: '履歴' })) as HTMLButtonElement;
+    expect(historyButton.disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: '編集' }));
+    await screen.findByRole('button', { name: '保存' });
+
+    expect(historyButton.disabled).toBe(true);
+  });
+
   it('編集を開始して保存すると、baseUpdatedAtを含めてPUT /api/docsを呼び出す', async () => {
     const calls = stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
