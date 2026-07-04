@@ -60,7 +60,7 @@ describe('認証', () => {
     expect(out.statusCode).toBe(200);
 
     const meAfter = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie } });
-    expect(meAfter.statusCode).toBe(401);
+    expect(meAfter.json().user).toBeNull();
   });
 
   it('パスワード誤りは401', async () => {
@@ -94,9 +94,13 @@ describe('認証', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('未認証アクセスは401', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/auth/me' });
-    expect(res.statusCode).toBe(401);
+  it('未認証の保護APIは401、meは200で{user:null}を返す', async () => {
+    const protectedRes = await app.inject({ method: 'GET', url: '/api/tree' });
+    expect(protectedRes.statusCode).toBe(401);
+
+    const me = await app.inject({ method: 'GET', url: '/api/auth/me' });
+    expect(me.statusCode).toBe(200);
+    expect(me.json().user).toBeNull();
   });
 
   it('CSRFヘッダなしの変更系リクエストは403', async () => {
@@ -116,7 +120,7 @@ describe('認証', () => {
       .run(new Date(Date.now() - 1000).toISOString(), sid);
 
     const res = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie } });
-    expect(res.statusCode).toBe(401);
+    expect(res.json().user).toBeNull();
   });
 
   it('ログイン中に無効化されたユーザーは次のリクエストで401(遅延失効)', async () => {
@@ -130,7 +134,7 @@ describe('認証', () => {
       payload: { disabled: true },
     });
 
-    const res = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie } });
+    const res = await app.inject({ method: 'GET', url: '/api/tree', headers: { cookie } });
     expect(res.statusCode).toBe(401);
   });
 
@@ -141,7 +145,7 @@ describe('認証', () => {
     const nearExpiry = new Date(Date.now() + 10 * 60_000).toISOString();
     app.db.prepare('UPDATE sessions SET expires_at = ? WHERE id = ?').run(nearExpiry, sid);
 
-    const res = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie } });
+    const res = await app.inject({ method: 'GET', url: '/api/tree', headers: { cookie } });
     expect(res.statusCode).toBe(200);
     const row = app.db.prepare('SELECT expires_at FROM sessions WHERE id = ?').get(sid) as {
       expires_at: string;
@@ -298,7 +302,7 @@ describe('パスワード変更', () => {
     const me1 = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: cookie1 } });
     expect(me1.statusCode).toBe(200);
     const me2 = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: cookie2 } });
-    expect(me2.statusCode).toBe(401);
+    expect(me2.json().user).toBeNull();
   });
 
   it('現在のパスワードが違うと変更できない', async () => {
