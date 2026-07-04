@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
+import { forwardRef, type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSearch } from '../api/search';
 import { docUrl } from '../lib/doc-path';
@@ -10,7 +10,7 @@ const DEBOUNCE_MS = 300;
 const MIN_RECOMMENDED_LENGTH = 3; // trigramトークナイザの特性上、これ未満はヒットしないことがある
 const UNSAVED_NAVIGATION_WARNING = '未保存の変更があります。移動しますか?';
 
-export function SearchBox() {
+export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props, forwardedRef) {
   const [input, setInput] = useState('');
   const [debounced, setDebounced] = useState('');
   const [open, setOpen] = useState(false);
@@ -73,24 +73,33 @@ export function SearchBox() {
   const showNoResults = trimmed.length >= MIN_RECOMMENDED_LENGTH && results && results.length === 0;
 
   return (
-    <div ref={containerRef} className="relative">
-      <input
-        type="text"
-        placeholder="検索"
-        value={input}
-        onChange={(e) => {
-          setInput(e.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onKeyDown={handleKeyDown}
-        className="w-64 rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-800"
-      />
+    <div ref={containerRef} className="relative w-full max-w-[420px]">
+      <div className="flex items-center gap-2 rounded border border-line bg-panel-2 px-3 py-1.5">
+        <span className="text-ink-faint" aria-hidden="true">
+          🔍
+        </span>
+        <input
+          ref={forwardedRef}
+          type="text"
+          placeholder="検索"
+          value={input}
+          onChange={(e) => {
+            setInput(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={handleKeyDown}
+          className="w-full bg-transparent text-sm text-ink placeholder:text-ink-faint focus:outline-none"
+        />
+        <span className="flex-shrink-0 rounded border border-line px-1.5 py-0.5 font-mono text-xs text-ink-faint">
+          Ctrl K
+        </span>
+      </div>
 
       {open && trimmed.length > 0 && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-96 rounded border border-gray-200 bg-white shadow-lg">
-          {showHint && <p className="px-3 py-2 text-xs text-gray-400">3文字以上を推奨します</p>}
-          {showNoResults && <p className="px-3 py-2 text-sm text-gray-400">見つかりませんでした</p>}
+        <div className="absolute left-0 top-full z-[40] mt-1 w-96 rounded-lg border border-line bg-panel shadow-lg">
+          {showHint && <p className="px-3 py-2 text-xs text-ink-faint">3文字以上を推奨します</p>}
+          {showNoResults && <p className="px-3 py-2 text-sm text-ink-faint">見つかりませんでした</p>}
           {results && results.length > 0 && (
             <ul>
               {results.map((r, i) => (
@@ -99,17 +108,17 @@ export function SearchBox() {
                     type="button"
                     onClick={() => handleSelect(r.path)}
                     className={`block w-full px-3 py-2 text-left ${
-                      i === activeIndex ? 'bg-blue-50' : 'hover:bg-gray-100'
+                      i === activeIndex ? 'bg-active' : 'hover:bg-hoverbg'
                     }`}
                   >
-                    <div className="text-sm text-gray-800">{r.title}</div>
+                    <div className="text-sm text-ink">{r.title}</div>
                     {/*
                       snippetはサーバー側でHTMLエスケープ済み+<mark>ハイライトのみを許可した契約
                       (packages/shared/src/index.ts の searchResultSchema コメント参照)のため
                       dangerouslySetInnerHTMLで描画してよい
                     */}
                     <div
-                      className="mt-0.5 truncate text-xs text-gray-500"
+                      className="mt-0.5 truncate text-xs text-ink-faint"
                       dangerouslySetInnerHTML={{ __html: r.snippet }}
                     />
                   </button>
@@ -121,4 +130,4 @@ export function SearchBox() {
       )}
     </div>
   );
-}
+});

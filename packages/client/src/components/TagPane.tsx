@@ -4,7 +4,8 @@ import { docUrl } from '../lib/doc-path';
 import { useEditStore } from '../stores/edit';
 import { useUIStore } from '../stores/ui';
 
-// タグペイン(設計04章4.2)。複数選択でAND絞り込みし、該当文書一覧を下に表示する
+// タグペイン(設計04章4.2・デザインhandoff components.md)。複数選択でAND絞り込みし、
+// 該当文書一覧を下に表示する
 
 const UNSAVED_NAVIGATION_WARNING = '未保存の変更があります。移動しますか?';
 
@@ -25,42 +26,46 @@ export function TagPane() {
 
   return (
     <div className="p-2">
-      <ul>
+      {selectedTags.length > 0 && (
+        <div className="mb-2 flex items-center justify-between px-1">
+          <span className="text-xs text-ink-faint">絞り込み中</span>
+          <button type="button" onClick={clearTags} className="text-xs text-accent hover:underline">
+            全解除
+          </button>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-1.5 p-1">
         {(tags ?? []).map((t) => {
           const selected = selectedTags.includes(t.tag);
           return (
-            <li key={t.tag}>
-              <button
-                type="button"
-                onClick={() => toggleTag(t.tag)}
-                aria-pressed={selected}
-                className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm ${
-                  selected ? 'bg-blue-50 font-medium text-blue-700' : 'text-gray-700 hover:bg-gray-100'
-                }`}
-              >
-                <span>{t.tag}</span>
-                <span className="text-xs text-gray-400">{t.count}</span>
-              </button>
-            </li>
+            <button
+              key={t.tag}
+              type="button"
+              onClick={() => toggleTag(t.tag)}
+              aria-pressed={selected}
+              className={`rounded-full border px-2.5 py-1 text-sm ${
+                selected
+                  ? 'border-accent-border bg-accent-soft text-accent'
+                  : 'border-line bg-panel-2 text-ink-soft hover:bg-hoverbg'
+              }`}
+            >
+              <span>{`#${t.tag}`}</span> <span className="text-ink-faint">{t.count}</span>
+            </button>
           );
         })}
-      </ul>
+      </div>
 
       {selectedTags.length > 0 && (
-        <div className="mt-3 border-t border-gray-200 pt-2">
-          <div className="mb-1 flex items-center justify-between px-2">
-            <span className="text-xs text-gray-500">絞り込み結果</span>
-            <button type="button" onClick={clearTags} className="text-xs text-blue-600 hover:underline">
-              選択解除
-            </button>
-          </div>
+        <div className="mt-3 border-t border-line pt-2">
+          <div className="mb-1 px-1 text-xs text-ink-faint">絞り込み結果</div>
           <ul>
             {(docs ?? []).map((doc) => (
               <li key={doc.path}>
                 <button
                   type="button"
                   onClick={() => handleNavigateToDoc(doc.path)}
-                  className="block w-full truncate rounded px-2 py-1 text-left text-sm text-gray-700 hover:bg-gray-100"
+                  className="block w-full truncate rounded px-2 py-1 text-left text-sm text-ink-soft hover:bg-hoverbg"
                 >
                   {doc.title}
                 </button>

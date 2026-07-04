@@ -50,14 +50,15 @@ describe('AppShell', () => {
     useUIStore.setState({ sidebarCollapsed: false });
   });
 
-  it('ログイン中のユーザー名を表示する', async () => {
+  it('ログイン中のユーザー名をアバターに表示する', async () => {
     renderAppShell();
-    expect(await screen.findByText('太郎')).toBeTruthy();
+    const avatar = await screen.findByRole('button', { name: 'ユーザーメニュー(太郎)' });
+    expect(avatar.textContent).toBe('太');
   });
 
   it('サイドバー折りたたみボタンで表示・非表示が切り替わる', async () => {
     renderAppShell();
-    await screen.findByText('太郎');
+    await screen.findByRole('button', { name: 'ユーザーメニュー(太郎)' });
 
     expect(screen.getByTestId('sidebar')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'サイドバーを折りたたむ' }));

@@ -62,7 +62,7 @@ describe('FolderTree', () => {
     renderFolderTree('/doc/ルート文書.md');
 
     const el = await screen.findByTestId('doc-ルート文書.md');
-    expect(el.className).toContain('text-blue-700');
+    expect(el.className).toContain('text-accent');
   });
 
   it('#等の特殊文字を含む文書パスでも、遷移先でuseParams["*"]に完全なパスが渡る', async () => {
@@ -92,5 +92,47 @@ describe('FolderTree', () => {
 
     const probe = await screen.findByTestId('params-probe');
     expect(probe.textContent).toBe('見出し#1.md');
+  });
+
+  it('↓キーで次の行にフォーカスが移動する', async () => {
+    renderFolderTree();
+    const folderRow = (await screen.findByText('フォルダA')).closest('button')!;
+    folderRow.focus();
+
+    fireEvent.keyDown(folderRow, { key: 'ArrowDown' });
+
+    expect(document.activeElement).not.toBeNull();
+    expect(document.activeElement).not.toBe(folderRow);
+    expect(document.activeElement?.tagName).toBe('BUTTON');
+  });
+
+  it('→キーで折りたたまれたフォルダが展開される', async () => {
+    renderFolderTree();
+    const folderRow = (await screen.findByText('フォルダA')).closest('button')!;
+    folderRow.focus();
+
+    fireEvent.keyDown(folderRow, { key: 'ArrowRight' });
+
+    expect(await screen.findByText('子文書')).toBeTruthy();
+  });
+
+  it('F2キーでリネームダイアログが開く', async () => {
+    renderFolderTree();
+    const docRow = (await screen.findByText('ルート文書')).closest('button')!;
+    docRow.focus();
+
+    fireEvent.keyDown(docRow, { key: 'F2' });
+
+    expect(await screen.findByText('文書のリネーム')).toBeTruthy();
+  });
+
+  it('Deleteキーで削除確認ダイアログが開く', async () => {
+    renderFolderTree();
+    const docRow = (await screen.findByText('ルート文書')).closest('button')!;
+    docRow.focus();
+
+    fireEvent.keyDown(docRow, { key: 'Delete' });
+
+    expect(await screen.findByText('文書の削除')).toBeTruthy();
   });
 });

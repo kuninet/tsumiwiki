@@ -1,0 +1,116 @@
+/* TsumiWiki Design Tokens
+ * Light theme = default (:root)
+ * Dark theme  = [data-theme="dark"] on <html> or any ancestor
+ *
+ * Usage:
+ *   <html data-theme="dark">
+ *   or programmatically: document.documentElement.setAttribute('data-theme', 'dark')
+ */
+
+:root {
+  /* --- Accent (theme-invariant) --- */
+  --tw-accent:            #7c6cf0;
+  --tw-accent-hover:      #6b5be6;
+  --tw-accent-soft:       rgba(124, 108, 240, 0.10);
+  --tw-accent-softer:     rgba(124, 108, 240, 0.06);
+  --tw-accent-border:     rgba(124, 108, 240, 0.33);
+  --tw-accent-gradient:   linear-gradient(135deg, #7c6cf0, #5b4bd6);
+
+  /* --- Semantic (light) --- */
+  --tw-bg:                #ffffff;
+  --tw-bg-panel:          #fbfbfa;   /* sidebar / header / status bar */
+  --tw-bg-panel-2:        #f4f4f2;   /* search box / th / code inline bg */
+  --tw-bg-hover:          rgba(0, 0, 0, 0.035);
+  --tw-bg-active:         rgba(124, 108, 240, 0.10);
+
+  --tw-text:              #2b2b30;   /* headings, primary text */
+  --tw-text-soft:         #4d4e55;   /* body copy */
+  --tw-text-faint:        #9a9ba2;   /* meta, placeholders */
+  --tw-text-on-accent:    #ffffff;
+
+  --tw-border:            #ececeb;
+  --tw-border-strong:     #dcdcda;
+
+  /* status */
+  --tw-success:           #22a06b;
+  --tw-warning:           #d97706;
+  --tw-danger:            #dc2626;
+  --tw-info:              #2563eb;
+
+  /* code inline text color (light) */
+  --tw-code-text:         #c2185b;
+
+  /* --- Layout --- */
+  --tw-header-h:          52px;
+  --tw-statusbar-h:       28px;
+  --tw-sidebar-w:         250px;
+  --tw-content-max:       760px;
+  --tw-min-app-w:         1280px;
+
+  /* --- Radius --- */
+  --tw-radius-sm:         5px;
+  --tw-radius:            7px;
+  --tw-radius-md:         8px;
+  --tw-radius-lg:         10px;
+  --tw-radius-full:       9999px;
+
+  /* --- Typography --- */
+  --tw-font-sans:         'Noto Sans JP', system-ui, -apple-system, 'Segoe UI', 'Hiragino Kaku Gothic ProN', '游ゴシック', 'Yu Gothic', sans-serif;
+  --tw-font-mono:         'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+
+  --tw-fs-xs:             11px;
+  --tw-fs-sm:             12.5px;
+  --tw-fs-base:           13.5px;
+  --tw-fs-body:           15px;
+  --tw-fs-h3:             15px;
+  --tw-fs-h2:             17px;
+  --tw-fs-h1:             22px;
+
+  --tw-lh-body:           1.85;
+  --tw-lh-tight:          1.3;
+
+  /* --- Shadow --- */
+  --tw-shadow-sm:         0 1px 2px rgba(0, 0, 0, 0.04);
+  --tw-shadow:            0 4px 12px rgba(0, 0, 0, 0.06);
+  --tw-shadow-lg:         0 10px 28px rgba(0, 0, 0, 0.08);
+
+  /* --- Motion --- */
+  --tw-ease:              cubic-bezier(0.2, 0.7, 0.2, 1);
+  --tw-dur-fast:          120ms;
+  --tw-dur:               180ms;
+
+  /* --- Z-index --- */
+  --tw-z-sidebar:         10;
+  --tw-z-header:          20;
+  --tw-z-dropdown:        40;
+  --tw-z-toast:           60;
+  --tw-z-modal:           80;
+}
+
+[data-theme="dark"] {
+  --tw-bg:                #1a1b1e;
+  --tw-bg-panel:          #202124;
+  --tw-bg-panel-2:        #26272b;
+  --tw-bg-hover:          rgba(255, 255, 255, 0.05);
+  --tw-bg-active:         rgba(124, 108, 240, 0.16);
+
+  --tw-text:              #e6e6e9;
+  --tw-text-soft:         #c3c4c9;
+  --tw-text-faint:        #8a8b92;
+
+  --tw-border:            #303136;
+  --tw-border-strong:     #3d3e44;
+
+  --tw-code-text:         #e6a3c8;
+
+  --tw-shadow-sm:         0 1px 2px rgba(0, 0, 0, 0.4);
+  --tw-shadow:            0 4px 12px rgba(0, 0, 0, 0.5);
+  --tw-shadow-lg:         0 10px 28px rgba(0, 0, 0, 0.6);
+}
+
+/* --- Convenience base styles (optional) --- */
+html, body {
+  background: var(--tw-bg);
+  color: var(--tw-text);
+  font-family: var(--tw-font-sans);
+}

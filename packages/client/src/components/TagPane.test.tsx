@@ -54,17 +54,17 @@ describe('TagPane', () => {
   it('タグ一覧を件数付きで表示する', async () => {
     renderTagPane();
 
-    expect(await screen.findByText('設計')).toBeTruthy();
+    expect(await screen.findByText('#設計')).toBeTruthy();
     expect(screen.getByText('12')).toBeTruthy();
-    expect(screen.getByText('議事録')).toBeTruthy();
+    expect(screen.getByText('#議事録')).toBeTruthy();
   });
 
-  it('タグを選択すると該当文書一覧を取得して表示し、選択解除ボタンが現れる', async () => {
+  it('タグを選択すると該当文書一覧を取得して表示し、全解除ボタンが現れる', async () => {
     renderTagPane();
 
-    fireEvent.click(await screen.findByText('設計'));
+    fireEvent.click(await screen.findByText('#設計'));
 
     expect(await screen.findByText('設計ドキュメント')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '選択解除' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '全解除' })).toBeTruthy();
   });
 });
