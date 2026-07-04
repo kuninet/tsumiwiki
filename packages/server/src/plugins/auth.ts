@@ -12,7 +12,9 @@ import { UserService } from '../services/user-service.js';
 export const SESSION_COOKIE = 'tsumiwiki_sid';
 export const CSRF_HEADER_VALUE = 'TsumiWiki';
 
-const PUBLIC_PATHS = new Set(['/api/health', '/api/auth/login']);
+// /api/auth/me は「未認証でも200で{user:null}を返す」公開プローブ。
+// 401イベントを本物のセッション失効に限定するための設計(#29レビュー対応)
+const PUBLIC_PATHS = new Set(['/api/health', '/api/auth/login', '/api/auth/me']);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 declare module 'fastify' {
@@ -61,7 +63,19 @@ export const authPlugin = fp(async (app) => {
     if (!SAFE_METHODS.has(req.method) && req.headers['x-requested-with'] !== CSRF_HEADER_VALUE) {
       return sendError(reply, 403, 'FORBIDDEN', 'X-Requested-Withヘッダが必要です');
     }
-    if (PUBLIC_PATHS.has(path)) return;
+    if (PUBLIC_PATHS.has(path)) {
+      // 公開パスでもセッションがあればreq.userを積む(meが自身を返せるように)
+      const sid0 = req.cookies[SESSION_COOKIE];
+      const session0 = sid0 ? app.sessionService.get(sid0) : null;
+      if (session0) {
+        const user0 = app.userService.byId(session0.userId);
+        if (user0 && !user0.disabled) {
+          req.user = user0;
+          req.sessionId = session0.id;
+        }
+      }
+      return;
+    }
 
     const sid = req.cookies[SESSION_COOKIE];
     const session = sid ? app.sessionService.get(sid) : null;

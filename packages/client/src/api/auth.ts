@@ -1,25 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { LoginRequest, User } from '@tsumiwiki/shared';
-import { ApiRequestError, api } from './client';
+import { api } from './client';
 
 export const ME_QUERY_KEY = ['me'] as const;
 
 // 未ログイン(401)は「ユーザーなし」として扱う。それ以外のエラーは呼び出し側に伝播させる
 export function useMe() {
-  return useQuery({
+  return useQuery<User | null>({
     queryKey: ME_QUERY_KEY,
-    queryFn: async (): Promise<User | null> => {
-      try {
-        const { user } = await api<{ user: User }>('GET', '/api/auth/me');
-        return user;
-      } catch (err) {
-        if (err instanceof ApiRequestError && err.status === 401) {
-          return null;
-        }
-        throw err;
-      }
+    // meは未認証でも200で{user:null}を返す公開プローブ(サーバー側で対応済み)。
+    // 一時的なネットワークエラーで誤ログアウトしないよう1回リトライする
+    queryFn: async () => {
+      const res = await api<{ user: User | null }>('GET', '/api/auth/me');
+      return res.user;
     },
-    retry: false,
+    retry: 1,
+    staleTime: 30_000,
   });
 }
 

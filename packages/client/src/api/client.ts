@@ -29,7 +29,9 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
   });
 
   if (!res.ok) {
-    if (res.status === 401) {
+    // 401イベントは「セッション失効」に限定する。ログイン失敗の401は
+    // 認証情報の誤りでありリダイレクト対象ではない(#29レビュー対応)
+    if (res.status === 401 && path !== '/api/auth/login') {
       window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
     }
     const parsed = apiErrorSchema.safeParse(await res.json().catch(() => null));
@@ -38,8 +40,7 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
     throw new ApiRequestError(res.status, code, message);
   }
 
-  if (res.status === 204) {
-    return undefined as T;
-  }
-  return (await res.json()) as T;
+  // 204や空ボディでも例外にしない(#29レビュー対応)
+  if (res.status === 204) return undefined as T;
+  return (await res.json().catch(() => undefined)) as T;
 }
