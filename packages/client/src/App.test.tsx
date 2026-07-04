@@ -45,13 +45,25 @@ describe('App', () => {
   it('認証済み状態で / にアクセスするとメイン画面を表示する', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve({
-            user: { id: 1, username: 'taro', displayName: '太郎', role: 'user', disabled: false },
-          }),
+      vi.fn((url: string) => {
+        if (url.startsWith('/api/auth/me')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                user: { id: 1, username: 'taro', displayName: '太郎', role: 'user', disabled: false },
+              }),
+          });
+        }
+        if (url.startsWith('/api/tree')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ folders: [], docs: [] }),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ tags: [] }) });
       }),
     );
 
