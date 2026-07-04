@@ -10,6 +10,7 @@ import { InvalidPathError } from '../lib/paths.js';
 import { sendError } from '../plugins/auth.js';
 import { DocConflictError, DocNotFoundError } from '../services/doc-service.js';
 import type { GitAuthor } from '../services/git-service.js';
+import { DocLockedError, LockExpiredError } from '../services/lock-service.js';
 
 // 文書・フォルダAPI(設計03章)
 
@@ -21,8 +22,11 @@ function authorOf(req: FastifyRequest): GitAuthor {
   };
 }
 
-// DocService系エラーをAPIエラー形式へ変換する
-async function handling<T>(reply: FastifyReply, fn: () => Promise<T>): Promise<T | FastifyReply> {
+// サービス系エラーをAPIエラー形式へ変換する(locks/draftsルートでも共用)
+export async function handling<T>(
+  reply: FastifyReply,
+  fn: () => Promise<T>,
+): Promise<T | FastifyReply> {
   try {
     return await fn();
   } catch (e) {
@@ -34,6 +38,12 @@ async function handling<T>(reply: FastifyReply, fn: () => Promise<T>): Promise<T
     }
     if (e instanceof DocConflictError) {
       return sendError(reply, 409, 'CONFLICT', e.message);
+    }
+    if (e instanceof DocLockedError) {
+      return sendError(reply, 409, 'DOC_LOCKED', e.message);
+    }
+    if (e instanceof LockExpiredError) {
+      return sendError(reply, 409, 'LOCK_EXPIRED', e.message);
     }
     throw e;
   }
@@ -73,7 +83,9 @@ export function registerDocRoutes(app: FastifyInstance): void {
       return sendError(reply, 400, 'VALIDATION_ERROR', '保存内容が不正です');
     }
     const { path: docPath, body, tags, baseUpdatedAt } = parsed.data;
-    return handling(reply, () => app.docService.saveDoc(docPath, body, tags, baseUpdatedAt, authorOf(req)));
+    return handling(reply, () =>
+      app.docService.saveDoc(docPath, body, tags, baseUpdatedAt, req.user!.id, authorOf(req)),
+    );
   });
 
   app.delete('/api/docs', async (req, reply) => {
@@ -82,7 +94,7 @@ export function registerDocRoutes(app: FastifyInstance): void {
       return sendError(reply, 400, 'VALIDATION_ERROR', 'pathを指定してください');
     }
     return handling(reply, async () => {
-      await app.docService.deleteDoc(docPath, authorOf(req));
+      await app.docService.deleteDoc(docPath, req.user!.id, authorOf(req));
       return { ok: true };
     });
   });
@@ -93,7 +105,13 @@ export function registerDocRoutes(app: FastifyInstance): void {
       return sendError(reply, 400, 'VALIDATION_ERROR', '移動先の指定が不正です');
     }
     return handling(reply, () =>
-      app.docService.moveDoc(parsed.data.path, parsed.data.newFolder, parsed.data.newTitle, authorOf(req)),
+      app.docService.moveDoc(
+        parsed.data.path,
+        parsed.data.newFolder,
+        parsed.data.newTitle,
+        req.user!.id,
+        authorOf(req),
+      ),
     );
   });
 
@@ -116,7 +134,7 @@ export function registerDocRoutes(app: FastifyInstance): void {
       return sendError(reply, 400, 'VALIDATION_ERROR', '移動先の指定が不正です');
     }
     return handling(reply, async () => {
-      await app.docService.moveFolder(parsed.data.path, parsed.data.newPath, authorOf(req));
+      await app.docService.moveFolder(parsed.data.path, parsed.data.newPath, req.user!.id, authorOf(req));
       return { ok: true };
     });
   });
@@ -127,7 +145,7 @@ export function registerDocRoutes(app: FastifyInstance): void {
       return sendError(reply, 400, 'VALIDATION_ERROR', 'pathを指定してください');
     }
     return handling(reply, async () => {
-      await app.docService.deleteFolder(folderPath, authorOf(req));
+      await app.docService.deleteFolder(folderPath, req.user!.id, authorOf(req));
       return { ok: true };
     });
   });

@@ -51,6 +51,12 @@ function api(method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, payload?: u
   });
 }
 
+// 保存はロック保持が前提(FR-LOCK)。ロック取得してからPUTするヘルパー
+async function saveDoc(payload: { path: string; [k: string]: unknown }) {
+  await api('POST', '/api/locks', { path: payload.path });
+  return api('PUT', '/api/docs', payload);
+}
+
 describe('文書CRUD', () => {
   it('作成→ツリー反映→取得(フロントマター分離)の一連が動作する', async () => {
     const created = await api('POST', '/api/docs', { folder: '議事録', title: '週次ミーティング' });
@@ -74,7 +80,7 @@ describe('文書CRUD', () => {
     const docPath = created.json().path;
     const got = await api('GET', `/api/docs?path=${encodeURIComponent(docPath)}`);
 
-    const saved = await api('PUT', '/api/docs', {
+    const saved = await saveDoc({
       path: docPath,
       body: '# メモ\n\n本文です。',
       tags: ['設計', 'メモ'],
@@ -101,7 +107,7 @@ describe('文書CRUD', () => {
     await app.indexerService.indexFile('プラグイン文書.md');
 
     const got = await api('GET', `/api/docs?path=${encodeURIComponent('プラグイン文書.md')}`);
-    const saved = await api('PUT', '/api/docs', {
+    const saved = await saveDoc({
       path: 'プラグイン文書.md',
       body: '更新した本文',
       tags: ['新タグ'],
@@ -120,7 +126,7 @@ describe('文書CRUD', () => {
     await app.indexerService.indexFile('素の文書.md');
 
     const got = await api('GET', `/api/docs?path=${encodeURIComponent('素の文書.md')}`);
-    await api('PUT', '/api/docs', {
+    await saveDoc({
       path: '素の文書.md',
       body: '更新後の本文',
       baseUpdatedAt: got.json().updatedAt,
@@ -137,13 +143,13 @@ describe('文書CRUD', () => {
     const got = await api('GET', `/api/docs?path=${encodeURIComponent(docPath)}`);
 
     // 1回目の保存(成功)でmtimeが変わる
-    await api('PUT', '/api/docs', {
+    await saveDoc({
       path: docPath,
       body: '先に保存',
       baseUpdatedAt: got.json().updatedAt,
     });
     // 古いbaseUpdatedAtでの保存は拒否される
-    const conflicted = await api('PUT', '/api/docs', {
+    const conflicted = await saveDoc({
       path: docPath,
       body: '後から保存',
       baseUpdatedAt: got.json().updatedAt,
@@ -239,7 +245,7 @@ describe('計画者レビュー反映分', () => {
     await app.indexerService.indexFile('スタイル保持.md');
 
     const got = await api('GET', `/api/docs?path=${encodeURIComponent('スタイル保持.md')}`);
-    await api('PUT', '/api/docs', {
+    await saveDoc({
       path: 'スタイル保持.md',
       body: got.json().body,
       tags: ['新'],
@@ -304,7 +310,7 @@ describe('レビュー指摘の回帰テスト', () => {
     await app.indexerService.indexFile('CRLF文書.md');
 
     const got = await api('GET', `/api/docs?path=${encodeURIComponent('CRLF文書.md')}`);
-    const saved = await api('PUT', '/api/docs', {
+    const saved = await saveDoc({
       path: 'CRLF文書.md',
       body: got.json().body,
       tags: ['win'],
@@ -323,7 +329,7 @@ describe('レビュー指摘の回帰テスト', () => {
     await app.indexerService.indexFile('壊れFM.md');
 
     const got = await api('GET', `/api/docs?path=${encodeURIComponent('壊れFM.md')}`);
-    const saved = await api('PUT', '/api/docs', {
+    const saved = await saveDoc({
       path: '壊れFM.md',
       body: got.json().body,
       tags: ['付けたいタグ'],

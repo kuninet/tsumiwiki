@@ -8,8 +8,10 @@ import type { DocResponse, DocSummary, TreeResponse } from '@tsumiwiki/shared';
 import type { AppConfig } from '../config.js';
 import type { AppDatabase } from '../db/index.js';
 import { InvalidPathError, isProtectedPath, normalizeRelPath, resolveInLibrary } from '../lib/paths.js';
+import type { DraftService } from './draft-service.js';
 import type { GitAuthor, GitService } from './git-service.js';
 import type { IndexerService } from './indexer-service.js';
+import type { LockService } from './lock-service.js';
 import { parseDocMeta } from './markdown-meta.js';
 
 // 文書・フォルダ操作(FR-DOC / 設計03章)
@@ -90,6 +92,8 @@ export class DocService {
     private readonly config: AppConfig,
     private readonly git: GitService,
     private readonly indexer: IndexerService,
+    private readonly locks: LockService,
+    private readonly drafts: DraftService,
     private readonly logger?: Logger,
   ) {}
 
@@ -195,12 +199,14 @@ export class DocService {
       // 壊れたフロントマターは空扱い(本文は全文を返す)
     }
     const meta = parseDocMeta(content);
+    const lock = this.locks.getActive(normalized);
     return {
       path: normalized,
       frontmatter,
       tags: meta.frontmatterTags,
       body,
       updatedAt: mtime.toISOString(),
+      lock: lock ? { userId: lock.userId, displayName: lock.displayName } : null,
     };
   }
 
@@ -232,10 +238,13 @@ export class DocService {
     body: string,
     tags: string[] | undefined,
     baseUpdatedAt: string,
+    userId: number,
     author: GitAuthor,
   ): Promise<{ updatedAt: string }> {
     const normalized = this.validateDocPath(relPath);
     const abs = resolveInLibrary(this.libraryPath, normalized);
+    // 保存はロック保持者のみ(FR-LOCK-01/02。#22計画の結合点をここで解決)
+    this.locks.assertHeldBy(normalized, userId);
 
     let current: string;
     let st: Awaited<ReturnType<typeof stat>>;
@@ -257,6 +266,8 @@ export class DocService {
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `edit: ${normalized}`, author);
     await this.indexer.indexFile(normalized);
+    // 明示保存に成功したら自動保存の下書きは不要になる(FR-EDIT-08)
+    this.drafts.remove(normalized);
     const after = await stat(abs);
     return { updatedAt: after.mtime.toISOString() };
   }
@@ -301,12 +312,14 @@ export class DocService {
     return `---\n${doc.toString()}---\n${body}`;
   }
 
-  async deleteDoc(relPath: string, author: GitAuthor): Promise<void> {
+  async deleteDoc(relPath: string, userId: number, author: GitAuthor): Promise<void> {
     const normalized = this.validateDocPath(relPath);
     const abs = resolveInLibrary(this.libraryPath, normalized);
     if (!(await this.exists(abs))) {
       throw new DocNotFoundError(normalized);
     }
+    // 他ユーザーが編集中の文書は削除できない(編集中削除の事故防止)
+    this.locks.assertNotLockedByOther(normalized, userId);
     const trashDir = path.join(this.libraryPath, '.trash');
     await mkdir(trashDir, { recursive: true });
 
@@ -321,12 +334,15 @@ export class DocService {
     // スコープコミット: 無関係な外部変更を巻き込まない(それらはsyncが拾う)
     await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}`, author);
     this.indexer.removeFile(normalized);
+    this.locks.forceRelease(normalized);
+    this.drafts.remove(normalized);
   }
 
   async moveDoc(
     relPath: string,
     newFolder: string,
     newTitle: string,
+    userId: number,
     author: GitAuthor,
   ): Promise<{ path: string }> {
     const oldNorm = this.validateDocPath(relPath);
@@ -334,6 +350,7 @@ export class DocService {
     if (!(await this.exists(oldAbs))) {
       throw new DocNotFoundError(oldNorm);
     }
+    this.locks.assertNotLockedByOther(oldNorm, userId);
     const folderNorm = newFolder ? this.validateFolderPath(newFolder) : '';
     const fileName = `${sanitizeTitle(newTitle)}.md`;
     const newNorm = folderNorm ? `${folderNorm}/${fileName}` : fileName;
@@ -351,6 +368,9 @@ export class DocService {
     await rename(oldAbs, newAbs);
     await this.tryCommit([oldNorm, newNorm], `move: ${oldNorm} -> ${newNorm}`, author);
     await this.indexer.moveFile(oldNorm, newNorm);
+    // ロック・下書きも新パスへ追随させる
+    this.locks.repath(oldNorm, newNorm);
+    this.drafts.repath(oldNorm, newNorm);
     return { path: newNorm };
   }
 
@@ -372,10 +392,16 @@ export class DocService {
     // 空フォルダはGit管理外(コミットは文書が置かれたときに発生する)
   }
 
-  async moveFolder(relPath: string, newRelPath: string, author: GitAuthor): Promise<void> {
+  async moveFolder(
+    relPath: string,
+    newRelPath: string,
+    userId: number,
+    author: GitAuthor,
+  ): Promise<void> {
     const oldNorm = this.validateFolderPath(relPath);
     const newNorm = this.validateFolderPath(newRelPath);
     if (newNorm === oldNorm) return;
+    this.locks.assertFolderNotLockedByOther(oldNorm, userId);
     // 自分自身の配下への移動は不可(existsより先に判定する)
     if (newNorm.startsWith(`${oldNorm}/`)) {
       throw new InvalidPathError(newRelPath);
@@ -394,14 +420,17 @@ export class DocService {
     await this.tryCommit([oldNorm, newNorm], `move: ${oldNorm}/ -> ${newNorm}/`, author);
     // 配下の全文書のパスが変わるため差分走査で付け替える
     await this.indexer.scanAll();
+    this.locks.repathFolder(oldNorm, newNorm);
+    this.drafts.repathFolder(oldNorm, newNorm);
   }
 
-  async deleteFolder(relPath: string, author: GitAuthor): Promise<void> {
+  async deleteFolder(relPath: string, userId: number, author: GitAuthor): Promise<void> {
     const normalized = this.validateFolderPath(relPath);
     const abs = resolveInLibrary(this.libraryPath, normalized);
     if (!(await this.exists(abs))) {
       throw new DocNotFoundError(normalized);
     }
+    this.locks.assertFolderNotLockedByOther(normalized, userId);
     const trashDir = path.join(this.libraryPath, '.trash');
     await mkdir(trashDir, { recursive: true });
     const baseName = path.posix.basename(normalized);
@@ -412,6 +441,8 @@ export class DocService {
     await rename(abs, path.join(trashDir, trashName));
     await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}/`, author);
     await this.indexer.scanAll();
+    this.locks.removeUnder(normalized);
+    this.drafts.removeUnder(normalized);
   }
 
   private async exists(abs: string): Promise<boolean> {
