@@ -53,14 +53,24 @@ export function UserMenu() {
             {user.displayName}
           </div>
           {user.role === 'admin' && (
-            <Link
-              to="/admin/users"
-              role="menuitem"
-              onClick={() => setOpen(false)}
-              className="block px-3 py-2 text-sm text-ink-soft hover:bg-hoverbg"
-            >
-              ユーザー管理
-            </Link>
+            <>
+              <Link
+                to="/admin/users"
+                role="menuitem"
+                onClick={() => setOpen(false)}
+                className="block px-3 py-2 text-sm text-ink-soft hover:bg-hoverbg"
+              >
+                ユーザー管理
+              </Link>
+              <Link
+                to="/admin/library"
+                role="menuitem"
+                onClick={() => setOpen(false)}
+                className="block px-3 py-2 text-sm text-ink-soft hover:bg-hoverbg"
+              >
+                ライブラリ設定
+              </Link>
+            </>
           )}
           <Link
             to="/settings"
