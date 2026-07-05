@@ -216,6 +216,45 @@ describe('FolderTree', () => {
       expect(calls.some((c) => c.method === 'POST' && c.path.startsWith('/api/'))).toBe(false);
     });
 
+    it('選択したものを新規フォルダに移動するとフォルダ作成→対象を一括移動する(#73)', async () => {
+      const calls = stubFetchRecording();
+      renderRecording();
+      const doc1 = (await screen.findByText('ルート文書')).closest('button')!;
+      const doc2 = (await screen.findByText('見出し#1')).closest('button')!;
+
+      // Ctrl+クリックで2件選択
+      fireEvent.click(doc1, { ctrlKey: true });
+      fireEvent.click(doc2, { ctrlKey: true });
+
+      // 『+ 選択したものを新規フォルダに移動』ボタンをクリック
+      fireEvent.click(screen.getByRole('button', { name: /選択したものを新規フォルダに移動/ }));
+
+      // ダイアログでフォルダ名入力
+      const input = await screen.findByRole('textbox');
+      fireEvent.change(input, { target: { value: 'まとめ' } });
+      fireEvent.click(screen.getByRole('button', { name: '作成して移動' }));
+
+      // POST /api/folders → POST /api/docs/move x2 の順で呼ばれる
+      await waitFor(() => {
+        expect(calls.some((c) => c.method === 'POST' && c.path === '/api/folders')).toBe(true);
+      });
+      const createFolderCall = calls.find(
+        (c) => c.method === 'POST' && c.path === '/api/folders',
+      );
+      expect(createFolderCall?.body).toEqual({ path: 'まとめ' });
+
+      await waitFor(() => {
+        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+        expect(moves.length).toBe(2);
+      });
+      const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+      const movedPaths = new Set(moves.map((m) => (m.body as { path: string }).path));
+      expect(movedPaths.has('ルート文書.md')).toBe(true);
+      expect(movedPaths.has('見出し#1.md')).toBe(true);
+      const targets = new Set(moves.map((m) => (m.body as { newFolder: string }).newFolder));
+      expect(targets).toEqual(new Set(['まとめ']));
+    });
+
     it('Ctrl+クリックで複数選択し、選択中の1つを別フォルダへドラッグすると全件が一括移動される(#72)', async () => {
       const calls = stubFetchRecording();
       renderRecording();
