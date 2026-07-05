@@ -52,6 +52,16 @@ export function UserMenu() {
           <div className="truncate border-b border-line px-3 py-2 text-xs text-ink-faint">
             {user.displayName}
           </div>
+          {user.role === 'admin' && (
+            <Link
+              to="/admin/users"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+              className="block px-3 py-2 text-sm text-ink-soft hover:bg-hoverbg"
+            >
+              ユーザー管理
+            </Link>
+          )}
           <Link
             to="/settings"
             role="menuitem"
