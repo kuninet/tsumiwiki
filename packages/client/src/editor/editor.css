@@ -91,10 +91,20 @@
   color: var(--color-ink);
 }
 
-.ProseMirror ul,
+/* Tailwind Preflightが ul/ol の list-style を none にしているので、
+   エディタ本文の中黒(disc)・数字(decimal)マーカーを明示的に復活させる */
+.ProseMirror ul {
+  padding-left: 1.5rem;
+  margin-bottom: 0.75rem;
+  list-style-type: disc;
+  list-style-position: outside;
+}
+
 .ProseMirror ol {
   padding-left: 1.5rem;
   margin-bottom: 0.75rem;
+  list-style-type: decimal;
+  list-style-position: outside;
 }
 
 .ProseMirror li {
