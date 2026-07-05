@@ -3,6 +3,7 @@ import type React from 'react';
 import { type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  createFolder as createFolderApi,
   docQueryKey,
   moveDoc as moveDocApi,
   moveFolder as moveFolderApi,
@@ -40,6 +41,9 @@ type DialogState =
   | { kind: 'createFolder'; parent: string }
   | { kind: 'renameDoc'; path: string; folder: string; title: string }
   | { kind: 'renameFolder'; path: string; name: string }
+  // #73: 選択したものを新規サブフォルダにまとめる。commonParent は移動先フォルダの親
+  // (選択物の共通親フォルダ)、selection は移動対象のパス集合
+  | { kind: 'groupIntoNewFolder'; commonParent: string; selection: string[] }
   | null;
 
 type ConfirmState =
@@ -133,6 +137,22 @@ export function FolderTree() {
   }
 
   function menuItemsFor(target: MenuTarget): ContextMenuItem[] {
+    // #73: 右クリック対象が選択中で 2件以上選ばれていれば「まとめる」を先頭に出す
+    const groupItem: ContextMenuItem | null =
+      target.type !== 'root' &&
+      selectedPaths.has(target.path) &&
+      selectedPaths.size > 1
+        ? {
+            label: `選択したものを新規フォルダに移動(${selectedPaths.size}件)`,
+            onSelect: () =>
+              setDialog({
+                kind: 'groupIntoNewFolder',
+                commonParent: commonParent([...selectedPaths]),
+                selection: [...selectedPaths],
+              }),
+          }
+        : null;
+
     if (target.type === 'root') {
       return [
         { label: '新規文書', onSelect: () => setDialog({ kind: 'createDoc', folder: '' }) },
@@ -140,7 +160,7 @@ export function FolderTree() {
       ];
     }
     if (target.type === 'folder') {
-      return [
+      const items: ContextMenuItem[] = [
         {
           label: '新規文書',
           onSelect: () => setDialog({ kind: 'createDoc', folder: target.path }),
@@ -159,8 +179,9 @@ export function FolderTree() {
           onSelect: () => setConfirm({ kind: 'deleteFolder', path: target.path, name: target.name }),
         },
       ];
+      return groupItem ? [groupItem, ...items] : items;
     }
-    return [
+    const items: ContextMenuItem[] = [
       {
         label: 'リネーム',
         onSelect: () =>
@@ -172,6 +193,7 @@ export function FolderTree() {
         onSelect: () => setConfirm({ kind: 'deleteDoc', path: target.path, title: target.title }),
       },
     ];
+    return groupItem ? [groupItem, ...items] : items;
   }
 
   function handleDialogConfirm(value: string) {
@@ -217,6 +239,31 @@ export function FolderTree() {
           },
         },
       );
+    } else if (dialog.kind === 'groupIntoNewFolder') {
+      // #73 選択物を新規サブフォルダにまとめる。
+      // 新規フォルダを共通親配下に作り、その配下へ選択物を一括移動する
+      const { commonParent: parent, selection } = dialog;
+      const newFolderPath = parent ? `${parent}/${value}` : value;
+      void (async () => {
+        try {
+          await createFolderApi({ path: newFolderPath });
+        } catch (err) {
+          showToast(
+            'error',
+            err instanceof ApiRequestError ? err.message : 'フォルダを作成できませんでした',
+          );
+          queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
+          return;
+        }
+        const nodes = filterMovable(selection, newFolderPath);
+        if (nodes.length === 0) {
+          queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
+          showToast('info', '新規フォルダを作成しましたが、移動対象がありませんでした');
+          return;
+        }
+        await performBatchMove(nodes, newFolderPath);
+        setSelectedPaths(new Set());
+      })();
     }
     setDialog(null);
   }
@@ -276,6 +323,22 @@ export function FolderTree() {
 
   function handleDragEnterTarget(targetFolderPath: string) {
     if (canDropOn(targetFolderPath)) setDragOverPath(targetFolderPath);
+  }
+
+  // #73 選択物の共通親フォルダを求める(全てルートなら空文字)
+  function commonParent(paths: string[]): string {
+    if (paths.length === 0) return '';
+    const parents = paths.map((p) => parentOf(p) ?? '');
+    if (parents.length === 1) return parents[0];
+    const firstParts = parents[0].split('/').filter(Boolean);
+    let common = firstParts;
+    for (const p of parents.slice(1)) {
+      const parts = p.split('/').filter(Boolean);
+      let i = 0;
+      while (i < common.length && i < parts.length && common[i] === parts[i]) i++;
+      common = common.slice(0, i);
+    }
+    return common.join('/');
   }
 
   // ドロップ先が targetFolderPath のとき、対象パス群のうち移動しても意味のある/矛盾しないものだけを返す
@@ -523,15 +586,30 @@ export function FolderTree() {
       </div>
 
       {selectedPaths.size > 1 && (
-        <div className="mb-2 flex items-center justify-between rounded border border-accent-border bg-accent-soft px-2 py-1 text-xs text-accent">
-          <span>{selectedPaths.size}件選択中</span>
+        <div className="mb-2 flex flex-col gap-1 rounded border border-accent-border bg-accent-soft px-2 py-1 text-xs text-accent">
+          <div className="flex items-center justify-between">
+            <span>{selectedPaths.size}件選択中</span>
+            <button
+              type="button"
+              onClick={() => setSelectedPaths(new Set())}
+              className="text-ink-faint hover:text-ink"
+              aria-label="選択解除"
+            >
+              ×
+            </button>
+          </div>
           <button
             type="button"
-            onClick={() => setSelectedPaths(new Set())}
-            className="text-ink-faint hover:text-ink"
-            aria-label="選択解除"
+            onClick={() =>
+              setDialog({
+                kind: 'groupIntoNewFolder',
+                commonParent: commonParent([...selectedPaths]),
+                selection: [...selectedPaths],
+              })
+            }
+            className="rounded border border-accent/40 px-2 py-0.5 text-left text-accent hover:bg-accent-soft"
           >
-            ×
+            + 選択したものを新規フォルダに移動
           </button>
         </div>
       )}
@@ -599,6 +677,19 @@ export function FolderTree() {
           label="フォルダ名"
           defaultValue={dialog.name}
           confirmLabel="変更"
+          onConfirm={handleDialogConfirm}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'groupIntoNewFolder' && (
+        <PromptDialog
+          title={`選択したものを新規フォルダに移動(${dialog.selection.length}件)`}
+          label={
+            dialog.commonParent
+              ? `新規フォルダ名(親: ${dialog.commonParent})`
+              : '新規フォルダ名(ルート直下)'
+          }
+          confirmLabel="作成して移動"
           onConfirm={handleDialogConfirm}
           onCancel={() => setDialog(null)}
         />

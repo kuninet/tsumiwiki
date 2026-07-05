@@ -100,6 +100,11 @@ export function moveFolder(body: MoveFolderRequest): Promise<unknown> {
   return api('POST', '/api/folders/move', body);
 }
 
+// #73 一括まとめ用の素の作成関数(useCreateFolderと違い個別トーストを出さない)
+export function createFolder(body: CreateFolderRequest): Promise<unknown> {
+  return api('POST', '/api/folders', body);
+}
+
 export function useCreateFolder() {
   return useLibraryMutation(
     (body: CreateFolderRequest) => api('POST', '/api/folders', body),
