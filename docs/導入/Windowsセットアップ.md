@@ -122,16 +122,31 @@ $env:LIBRARY_PATH="C:\tsumiwiki-library"
 # (異なるDBに管理者が作られるとログインできない)
 pnpm --filter @tsumiwiki/server create-admin -- --username admin --display-name 管理者
 # パスワードは対話入力
-
-# 手動起動して確認(PORTを3080にする場合)
-$env:PORT="3080"
-pnpm --filter @tsumiwiki/server start
-# ブラウザで http://localhost:3080 → ログインできればOK
 ```
+
+サーバーの手動起動には `scripts\windows\start.bat`(または `start.ps1`)を使う。
+中で `set` / `$env:` によって環境変数をスクリプト内スコープでのみ設定するため、
+親シェルや他アプリケーションと衝突しない:
+
+```powershell
+# バッチ版(コマンドプロンプト・PowerShellどちらでも可)
+scripts\windows\start.bat
+
+# PowerShell版
+.\scripts\windows\start.ps1
+```
+
+初回は `scripts\windows\start.bat` を開いて `LIBRARY_PATH` / `DB_PATH` / `PORT` /
+`BACKUP_REMOTE` などを自環境に合わせて書き換える。書き換えた start.bat はサービス
+化(6章)の環境変数構成の元ネタにもなる。
+
+ブラウザで `http://localhost:<PORT>` にアクセスしてログインできればOK。
 
 ## 6. Windowsサービス化(NSSM)
 
-常時稼働にはNSSM(https://nssm.cc/)でサービス登録する。
+常時稼働にはNSSM(https://nssm.cc/)でサービス登録する。NSSMの `AppEnvironmentExtra`
+はサービスプロセスにのみ適用される環境変数で、システム環境や他アプリケーションに
+一切漏れない。設定内容は 5章 の start.bat と合わせる。
 
 ### 6.1 NSSMの入手と配置
 
