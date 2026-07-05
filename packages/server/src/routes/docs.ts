@@ -133,10 +133,9 @@ export function registerDocRoutes(app: FastifyInstance): void {
     if (!parsed.success) {
       return sendError(reply, 400, 'VALIDATION_ERROR', '移動先の指定が不正です');
     }
-    return handling(reply, async () => {
-      await app.docService.moveFolder(parsed.data.path, parsed.data.newPath, req.user!.id, authorOf(req));
-      return { ok: true };
-    });
+    return handling(reply, () =>
+      app.docService.moveFolder(parsed.data.path, parsed.data.newPath, req.user!.id, authorOf(req)),
+    );
   });
 
   app.delete('/api/folders', async (req, reply) => {

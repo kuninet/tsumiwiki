@@ -51,13 +51,13 @@ export function fetchDoc(path: string): Promise<DocResponse> {
 }
 
 // 文書・フォルダの変更系mutation共通処理: 成功時にtree/tagsを更新し結果をトースト表示する
-function useLibraryMutation<TVariables>(
-  mutationFn: (variables: TVariables) => Promise<unknown>,
+function useLibraryMutation<TVariables, TData = unknown>(
+  mutationFn: (variables: TVariables) => Promise<TData>,
   successMessage: string,
 ) {
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
-  return useMutation({
+  return useMutation<TData, Error, TVariables>({
     mutationFn,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
@@ -84,20 +84,26 @@ export function useDeleteDoc() {
   );
 }
 
+// 移動系のレスポンスは正規化後の新パス。sanitizeTitle 等でサーバー側で名前が変わる
+// ケースがあるため、rename の追従はクライアントで組み立てず必ずこの path を使う
+export interface MovedResponse {
+  path: string;
+}
+
 export function useMoveDoc() {
   return useLibraryMutation(
-    (body: MoveDocRequest) => api('POST', '/api/docs/move', body),
+    (body: MoveDocRequest) => api<MovedResponse>('POST', '/api/docs/move', body),
     '文書を移動しました',
   );
 }
 
 // 素の移動関数(#72 一括移動用)。個別トースト・invalidateを避けたい場面で使う
-export function moveDoc(body: MoveDocRequest): Promise<unknown> {
-  return api('POST', '/api/docs/move', body);
+export function moveDoc(body: MoveDocRequest): Promise<MovedResponse> {
+  return api<MovedResponse>('POST', '/api/docs/move', body);
 }
 
-export function moveFolder(body: MoveFolderRequest): Promise<unknown> {
-  return api('POST', '/api/folders/move', body);
+export function moveFolder(body: MoveFolderRequest): Promise<MovedResponse> {
+  return api<MovedResponse>('POST', '/api/folders/move', body);
 }
 
 // #73 一括まとめ用の素の作成関数(useCreateFolderと違い個別トーストを出さない)
@@ -114,7 +120,7 @@ export function useCreateFolder() {
 
 export function useMoveFolder() {
   return useLibraryMutation(
-    (body: MoveFolderRequest) => api('POST', '/api/folders/move', body),
+    (body: MoveFolderRequest) => api<MovedResponse>('POST', '/api/folders/move', body),
     'フォルダを移動しました',
   );
 }

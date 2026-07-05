@@ -264,6 +264,29 @@ describe('計画者レビュー反映分', () => {
     expect(created.json().path).toBe('CON_.md');
   }, 20_000);
 
+  it('文書の move レスポンスはサーバー側で正規化された path を返す(sanitizeTitle経由)', async () => {
+    // #78 fix-forward: クライアントがraw値でパスを組み立てて 404 になるのを防ぐため、
+    // move レスポンスの path は sanitizeTitle 済みの実パスであることを担保する
+    const created = await api('POST', '/api/docs', { folder: '', title: 'リネーム元' });
+    const moved = await api('POST', '/api/docs/move', {
+      path: created.json().path,
+      newFolder: '',
+      newTitle: 'CON', // sanitize で CON_ になる
+    });
+    expect(moved.statusCode).toBe(200);
+    expect(moved.json().path).toBe('CON_.md');
+  }, 20_000);
+
+  it('フォルダの move レスポンスも正規化された path を返す', async () => {
+    await api('POST', '/api/folders', { path: '元フォルダ' });
+    const moved = await api('POST', '/api/folders/move', {
+      path: '元フォルダ',
+      newPath: '新フォルダ',
+    });
+    expect(moved.statusCode).toBe(200);
+    expect(moved.json().path).toBe('新フォルダ');
+  }, 20_000);
+
   it('移動コミットは無関係な外部変更を巻き込まない(スコープコミット)', async () => {
     const created = await api('POST', '/api/docs', { folder: '', title: '移動対象' });
     // 外部ツールが作った未コミットのファイル

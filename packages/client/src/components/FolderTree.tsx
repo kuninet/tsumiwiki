@@ -80,6 +80,12 @@ export function FolderTree() {
   const showToast = useToastStore((s) => s.show);
   const params = useParams();
   const currentPath = params['*'];
+  // stale closure 対策: mutation.onSuccess は非同期完了時に発火するため、
+  // 発火時点の最新 currentPath を ref 経由で参照する
+  const currentPathRef = useRef<string | undefined>(currentPath);
+  useEffect(() => {
+    currentPathRef.current = currentPath;
+  }, [currentPath]);
 
   const expandedFolders = useUIStore((s) => s.expandedFolders);
   const toggleFolderExpanded = useUIStore((s) => s.toggleFolderExpanded);
@@ -205,16 +211,18 @@ export function FolderTree() {
       createFolder.mutate({ path });
     } else if (dialog.kind === 'renameDoc') {
       const oldPath = dialog.path;
-      const newDocPath = dialog.folder ? `${dialog.folder}/${value}.md` : `${value}.md`;
+      // 表示中文書のリネームで dirty なら離脱確認(他文書のリネームでは確認不要)
+      if (currentPath === oldPath && !confirmNavigationIfDirty()) return;
       moveDoc.mutate(
         { path: oldPath, newFolder: dialog.folder, newTitle: value },
         {
-          onSuccess: () => {
-            // 右ペインで表示中の文書がリネーム対象なら、新しいパスへ遷移して
-            // タイトル・URL・ヘッダを一斉に追従させる(#77 相当の別リクエスト)
-            if (currentPath === oldPath && oldPath !== newDocPath) {
+          onSuccess: (data) => {
+            // 発火時点の URL を ref 経由で参照(stale closure 回避)。
+            // 遷移先はクライアントで組み立てず、必ずサーバー返却の正規化 path を使う
+            // (sanitizeTitle 経由で 'CON' → 'CON_'・空白除去などが起きる場合の 404 対策)
+            if (currentPathRef.current === oldPath && oldPath !== data.path) {
               queryClient.removeQueries({ queryKey: docQueryKey(oldPath) });
-              navigate(docUrl(newDocPath), { replace: true });
+              navigate(docUrl(data.path), { replace: true });
             }
           },
         },
@@ -223,17 +231,31 @@ export function FolderTree() {
       const parent = parentOf(dialog.path);
       const newPath = parent ? `${parent}/${value}` : value;
       const oldFolder = dialog.path;
+      // 表示中文書がリネーム対象フォルダ配下で dirty なら離脱確認
+      if (
+        currentPath &&
+        (currentPath === oldFolder || currentPath.startsWith(`${oldFolder}/`)) &&
+        !confirmNavigationIfDirty()
+      ) {
+        return;
+      }
       moveFolder.mutate(
         { path: oldFolder, newPath },
         {
-          onSuccess: () => {
-            // 表示中の文書がリネームされたフォルダ配下なら URL を書き換えて追従
-            if (
-              currentPath &&
-              (currentPath === oldFolder || currentPath.startsWith(`${oldFolder}/`))
-            ) {
-              const rewritten = newPath + currentPath.slice(oldFolder.length);
-              queryClient.removeQueries({ queryKey: docQueryKey(currentPath) });
+          onSuccess: (data) => {
+            // 発火時点の URL を ref から取り直し、サーバー返却の正規化フォルダパスを起点に書き換える
+            const nowPath = currentPathRef.current;
+            if (nowPath && (nowPath === oldFolder || nowPath.startsWith(`${oldFolder}/`))) {
+              const rewritten = data.path + nowPath.slice(oldFolder.length);
+              // 配下の doc query を prefix 一致で全て捨てる(1件だけの掃除では取り残しが出る)
+              queryClient.removeQueries({
+                predicate: (q) => {
+                  const key = q.queryKey;
+                  if (!Array.isArray(key) || key[0] !== 'doc') return false;
+                  const p = key[1];
+                  return typeof p === 'string' && (p === oldFolder || p.startsWith(`${oldFolder}/`));
+                },
+              });
               navigate(docUrl(rewritten), { replace: true });
             }
           },
