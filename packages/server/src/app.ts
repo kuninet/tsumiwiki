@@ -13,6 +13,7 @@ import { registerDraftRoutes } from './routes/drafts.js';
 import { registerHistoryRoutes } from './routes/history.js';
 import { registerLockRoutes } from './routes/locks.js';
 import { registerLibraryRoutes } from './routes/library.js';
+import { librarySettingsRoutes } from './routes/library-settings.js';
 import { registerQueryRoutes } from './routes/query.js';
 import { registerTrashRoutes } from './routes/trash.js';
 import { registerUserRoutes } from './routes/users.js';
@@ -20,6 +21,7 @@ import { DocService } from './services/doc-service.js';
 import { DraftService } from './services/draft-service.js';
 import { GitService } from './services/git-service.js';
 import { IndexerService } from './services/indexer-service.js';
+import { LibrarySettingsService } from './services/library-settings-service.js';
 import { LockService } from './services/lock-service.js';
 import { QueryService } from './services/query-service.js';
 import { SyncService } from './services/sync-service.js';
@@ -43,6 +45,7 @@ declare module 'fastify' {
     queryService: QueryService;
     syncService: SyncService;
     backupService: BackupService;
+    librarySettingsService: LibrarySettingsService;
   }
 }
 
@@ -81,6 +84,7 @@ export function buildApp(options: BuildAppOptions) {
   );
   app.decorate('draftService', draftService);
   app.decorate('docService', docService);
+  app.decorate('librarySettingsService', new LibrarySettingsService(config.libraryPath, gitService));
 
   // ライブラリのGitリポジトリ初期化(未初期化なら git init。設計06章6.1)
   app.addHook('onReady', async () => {
@@ -102,6 +106,7 @@ export function buildApp(options: BuildAppOptions) {
     registerQueryRoutes(instance);
     registerAttachmentRoutes(instance);
     registerLibraryRoutes(instance);
+    instance.register(librarySettingsRoutes);
   });
 
   // クライアントの静的配信(本番の単一ポート運用。設計01章1.4)

@@ -7,7 +7,7 @@ import chokidar, { type FSWatcher } from 'chokidar';
 
 // .git / .obsidian 等の設定系ドットフォルダは監視対象外
 // (.trashはWiki操作でも変わるため対象に含め、syncのhasExternalChangesで吸収する)
-const IGNORED_RE = /(^|[/\\])(\.(git|obsidian)([/\\]|$)|\.tsumiwiki-tmp-)/;
+const IGNORED_RE = /(^|[/\\])(\.(git|obsidian|tsumiwiki)([/\\]|$)|\.tsumiwiki-tmp-)/;
 
 export class LibraryWatcher {
   private watcher: FSWatcher | null = null;

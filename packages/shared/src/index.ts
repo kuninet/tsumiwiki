@@ -197,6 +197,31 @@ export const tagCountSchema = z.object({
 });
 export type TagCount = z.infer<typeof tagCountSchema>;
 
+// ---- ライブラリ設定(#84 テンプレート機能・デイリーノート) ----
+// ライブラリルート直下の .tsumiwiki/settings.yaml に保存し、gitでバックアップする
+// 全社(=ライブラリ)共通の設定。個人別化は将来検討(ライブラリを個人別にした段階)
+
+export const librarySettingsSchema = z.object({
+  templates: z.object({
+    // .md をテンプレとして扱うフォルダ(ライブラリ直下からの相対パス。空でルート)
+    folder: z.string(),
+  }),
+  dailyNotes: z.object({
+    // 「今日の日誌」を作る先のフォルダ
+    folder: z.string(),
+    // デイリーノートに適用するテンプレのパス(空文字で空白ノート作成)
+    template: z.string(),
+    // ファイル名パターン(変数展開)。既定 'YYYY-MM-DD'
+    filenamePattern: z.string(),
+  }),
+});
+export type LibrarySettings = z.infer<typeof librarySettingsSchema>;
+
+export const LIBRARY_SETTINGS_DEFAULTS: LibrarySettings = {
+  templates: { folder: '_templates' },
+  dailyNotes: { folder: '日記', template: '', filenamePattern: 'YYYY-MM-DD' },
+};
+
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({
   error: z.object({

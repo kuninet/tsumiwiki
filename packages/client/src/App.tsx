@@ -5,6 +5,7 @@ import { RequireAdmin } from './components/RequireAdmin';
 import { RequireAuth } from './components/RequireAuth';
 import { EditorDemo } from './editor/EditorDemo';
 import { AdminUsersPage } from './pages/AdminUsersPage';
+import { LibrarySettingsPage } from './pages/LibrarySettingsPage';
 import { LoginPage } from './pages/LoginPage';
 import { MainPage } from './pages/MainPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -31,6 +32,7 @@ export function App() {
           <Route path="demo" element={<EditorDemo />} />
           <Route element={<RequireAdmin />}>
             <Route path="admin/users" element={<AdminUsersPage />} />
+            <Route path="admin/library" element={<LibrarySettingsPage />} />
           </Route>
         </Route>
       </Route>
