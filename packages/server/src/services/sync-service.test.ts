@@ -29,7 +29,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const dir of cleanup) await rm(dir, { recursive: true, force: true });
+  for (const dir of cleanup) await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe('SyncService', () => {

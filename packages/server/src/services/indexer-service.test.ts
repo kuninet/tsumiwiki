@@ -24,7 +24,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   db.close();
-  await rm(lib, { recursive: true, force: true });
+  await rm(lib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function docIndexRow(docPath: string): { doc_path: string; title: string; folder: string } | undefined {
@@ -236,7 +236,7 @@ describe('IndexerService: 堅牢性(レビュー指摘対応)', () => {
       expect(rows.map((r) => r.doc_path)).toEqual(['正常.md']);
     } finally {
       await chmod(join(lib, '読めない.md'), 0o644).catch(() => {});
-      await rm(lib, { recursive: true, force: true });
+      await rm(lib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 20_000);
 
@@ -260,7 +260,7 @@ describe('IndexerService: 堅牢性(レビュー指摘対応)', () => {
       const rows = db.prepare('SELECT doc_path FROM doc_index').all() as { doc_path: string }[];
       expect(rows.map((r) => r.doc_path)).toEqual(['サブ/通常.md']);
     } finally {
-      await rm(lib, { recursive: true, force: true });
+      await rm(lib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 20_000);
 });

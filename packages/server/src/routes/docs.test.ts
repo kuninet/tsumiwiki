@@ -39,7 +39,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await app.close();
-  await rm(lib, { recursive: true, force: true });
+  await rm(lib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function api(method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, payload?: unknown) {

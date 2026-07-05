@@ -2,13 +2,13 @@ import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSearch } from '../api/search';
 import { docUrl } from '../lib/doc-path';
-import { useEditStore } from '../stores/edit';
+import { confirmNavigationIfDirty } from '../lib/navigation-guard';
+import { sanitizeSnippet } from '../lib/sanitize-snippet';
 
 // ヘッダー検索(SC-04・設計04章)。入力は300msデバウンスしてから検索する
 
 const DEBOUNCE_MS = 300;
 const MIN_RECOMMENDED_LENGTH = 3; // trigramトークナイザの特性上、これ未満はヒットしないことがある
-const UNSAVED_NAVIGATION_WARNING = '未保存の変更があります。移動しますか?';
 
 export function SearchBox() {
   const [input, setInput] = useState('');
@@ -41,7 +41,7 @@ export function SearchBox() {
   }, []);
 
   function handleSelect(path: string) {
-    if (useEditStore.getState().dirty && !window.confirm(UNSAVED_NAVIGATION_WARNING)) {
+    if (!confirmNavigationIfDirty()) {
       return;
     }
     navigate(docUrl(path));
@@ -51,6 +51,8 @@ export function SearchBox() {
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    // IME変換中のEnter/矢印は候補操作に使わない(FR-EDIT-05。変換確定の誤遷移防止)
+    if (e.nativeEvent.isComposing) return;
     if (e.key === 'Escape') {
       setOpen(false);
       return;
@@ -110,7 +112,7 @@ export function SearchBox() {
                     */}
                     <div
                       className="mt-0.5 truncate text-xs text-gray-500"
-                      dangerouslySetInnerHTML={{ __html: r.snippet }}
+                      dangerouslySetInnerHTML={{ __html: sanitizeSnippet(r.snippet) }}
                     />
                   </button>
                 </li>

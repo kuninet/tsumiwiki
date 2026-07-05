@@ -27,7 +27,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const dir of cleanupDirs) {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

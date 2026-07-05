@@ -23,7 +23,7 @@ TsumiWiki(Markdown型Wiki)の要件定義ドキュメント一式。
 | 技術スタック | React + Tiptap + Node.js(TypeScript統一)を推奨 |
 | Obsidian互換 | 既存Obsidianヴォルトをコピーするだけで動くことを目標(wikilink・埋め込み記法・インラインタグ対応) |
 | 添付の保存先 | 文書と同じフォルダ(既定・設定変更可) |
-| サーバー環境 | 社内Windows PC。バックアップはファイルサーバー上のbareリポジトリへpush |
+| サーバー環境 | Windows PC。バックアップはファイルサーバー上のbareリポジトリへpush |
 | 初期リリース範囲 | 全文検索・ごみ箱(`.trash/`)・Mermaidレンダリングを含む |
 
 改訂履歴:
