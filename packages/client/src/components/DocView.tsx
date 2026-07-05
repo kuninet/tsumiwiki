@@ -133,9 +133,14 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   }, [editor, doc.path]);
 
   useEffect(() => {
+    if (!editor) return;
     // 第2引数 emitUpdate=false: setEditable の既定は true で、モード切替のたびに
     // onUpdate → updateBody → dirty=true が誤発火する(初回マウントすら未保存扱いになる)
-    editor?.setEditable(session.mode === 'edit', false);
+    editor.setEditable(session.mode === 'edit', false);
+    // 編集モードに入ったら本文にカーソルを出す(入力位置が視認できるように)
+    if (session.mode === 'edit') {
+      editor.commands.focus();
+    }
   }, [editor, session.mode]);
 
   // 閲覧中に限り、外部要因(他者更新・定期refetch等)でdocが変わったら本文を追随させる。
