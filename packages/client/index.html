@@ -2,8 +2,24 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>TsumiWiki</title>
+
+    <!-- ブラウザタブのfavicon(モダンブラウザはSVGを、旧い環境はPNGにフォールバック) -->
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+
+    <!-- iOS ホーム画面 (『ホーム画面に追加』でスタンドアロン起動) -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="TsumiWiki" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+
+    <!-- PWA / Android ホーム画面 -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#7c6cf0" />
+    <meta name="application-name" content="TsumiWiki" />
   </head>
   <body>
     <div id="root"></div>

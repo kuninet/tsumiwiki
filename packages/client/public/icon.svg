@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    TsumiWiki app icon.
+    Obsidian / Wiki の代表的な記法である wikilink [[...]] で『積』を挟んだ意匠。
+    ひと目で『wiki の何か』だと判別できる。背景はアクセントグラデーション、
+    全体像は iOS/Android のアイコンマスク(squircle等)へ綺麗にはまる全面塗り。
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8a7bff"/>
+      <stop offset="1" stop-color="#5b4bd6"/>
+    </linearGradient>
+    <linearGradient id="innerShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.12"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <rect width="512" height="512" fill="url(#innerShade)"/>
+
+  <!--
+    wikilink の [[ ]] を左右に配置する。
+    フォントに依らず解像度によらず綺麗に出るよう path で描く。
+    ブラケットの垂直区間 y=120..392、太さ12、内側の水平部長=18。
+  -->
+  <g fill="#ffffff" opacity="0.92">
+    <!-- 左外ブラケット [ -->
+    <path d="M52 120 h30 v14 h-16 v244 h16 v14 h-30 z"/>
+    <!-- 左内ブラケット [ -->
+    <path d="M96 120 h30 v14 h-16 v244 h16 v14 h-30 z"/>
+    <!-- 右内ブラケット ] -->
+    <path d="M386 120 h30 v14 h-16 v244 h16 v14 h-30 z" transform="matrix(-1 0 0 1 802 0)"/>
+    <!-- 右外ブラケット ] -->
+    <path d="M430 120 h30 v14 h-16 v244 h16 v14 h-30 z" transform="matrix(-1 0 0 1 890 0)"/>
+  </g>
+
+  <!--
+    中央の『積』。system font にフォールバックしつつ font-weight: 900 で太く。
+    dominant-baseline を central にすることで縦位置がフォントに依らず安定する。
+  -->
+  <text
+    x="256"
+    y="260"
+    text-anchor="middle"
+    dominant-baseline="central"
+    font-family="'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', system-ui, sans-serif"
+    font-weight="900"
+    font-size="240"
+    fill="#ffffff"
+    letter-spacing="-6"
+  >積</text>
+</svg>
