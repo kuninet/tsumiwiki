@@ -22,6 +22,35 @@ import { parseDocMeta } from './markdown-meta.js';
 // - フロントマターはサーバーが管理: クライアントはtagsのみ編集し、
 //   未知キー(Obsidianプラグイン由来等)は保全する(FR-OBS-07)
 
+// .trashに置かれたフォルダの由来メタデータ。空フォルダ削除だとgitに載る差分が
+// なくコミット→git log経由の由来復元が効かないため、フォルダのごみ箱には常に
+// この名前のファイルを書き込んで由来を保持する
+const TRASH_META_FILE = '.tsumiwiki-trash.json';
+
+interface TrashMeta {
+  originalPath: string;
+  deletedAt: string;
+  deletedBy: string;
+}
+
+async function readTrashMeta(folderAbs: string): Promise<TrashMeta | null> {
+  try {
+    const raw = await readFile(path.join(folderAbs, TRASH_META_FILE), 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'originalPath' in parsed &&
+      typeof (parsed as TrashMeta).originalPath === 'string'
+    ) {
+      return parsed as TrashMeta;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export class DocNotFoundError extends Error {
   constructor(relPath: string) {
     super(`文書が見つかりません: ${relPath}`);
@@ -459,12 +488,29 @@ export class DocService {
     } catch {
       return []; // .trash未作成
     }
-    // 削除者・削除日時・元パスは trash: コミットから復元する(要件05章5.1)。
-    // 項目単位で並列取得し、1項目のGitエラーで一覧全体を落とさない
+    // 削除者・削除日時・元パスの取得方針:
+    // - フォルダは `.trash/<name>/.tsumiwiki-trash.json` の由来メタデータを最優先で読む
+    //   (空フォルダ削除でgitに差分が乗らずgit log経由の復元が効かない対策)
+    // - ファイル、またはメタデータ不在時は trash: コミットからの復元にフォールバック
+    // - 項目単位で並列取得し、1項目のGitエラーで一覧全体を落とさない
     const result: TrashEntry[] = await Promise.all(
       entries.map(async (entry) => {
         const name = entry.name.normalize('NFC');
         const trashPath = `.trash/${name}`;
+        const isFolder = entry.isDirectory();
+        if (isFolder) {
+          const meta = await readTrashMeta(path.join(trashDir, name));
+          if (meta) {
+            return {
+              trashPath,
+              name,
+              isFolder,
+              originalPath: meta.originalPath,
+              deletedAt: meta.deletedAt,
+              deletedBy: meta.deletedBy,
+            };
+          }
+        }
         let commit = null;
         try {
           commit = await this.git.lastCommitFor(trashPath);
@@ -475,7 +521,7 @@ export class DocService {
         return {
           trashPath,
           name,
-          isFolder: entry.isDirectory(),
+          isFolder,
           originalPath: m ? m[1] : null,
           deletedAt: commit?.date ?? null,
           deletedBy: commit?.authorName ?? null,
@@ -497,16 +543,24 @@ export class DocService {
       throw new DocNotFoundError(normalized);
     }
 
-    // コミット未存在(手動配置・空リポジトリ)でも復元は続行する
-    let commit = null;
-    try {
-      commit = await this.git.lastCommitFor(normalized);
-    } catch (e) {
-      this.logger?.warn({ err: e, trashPath: normalized }, 'ごみ箱項目の由来取得に失敗しました');
+    // フォルダは由来メタデータを最優先で読む(空フォルダ削除の対策。上記listTrashと同方針)
+    let original: string | null = null;
+    if (isFolder) {
+      const meta = await readTrashMeta(abs);
+      if (meta) original = meta.originalPath;
     }
-    const m = commit?.message.match(/^trash: (.+?)\/?$/);
-    // 元パス不明(手動で.trashに置かれた等)ならルート直下へ戻す
-    const original = m ? m[1] : path.posix.basename(normalized);
+    if (!original) {
+      // ファイル、またはメタデータ不在時は trash: コミットからの復元にフォールバック
+      let commit = null;
+      try {
+        commit = await this.git.lastCommitFor(normalized);
+      } catch (e) {
+        this.logger?.warn({ err: e, trashPath: normalized }, 'ごみ箱項目の由来取得に失敗しました');
+      }
+      const m = commit?.message.match(/^trash: (.+?)\/?$/);
+      // 元パス不明(手動で.trashに置かれた等)ならルート直下へ戻す
+      original = m ? m[1] : path.posix.basename(normalized);
+    }
 
     // 元パスが不正(..等の細工コミット)な場合もbasenameへフォールバックする
     // (先にnormalizeで例外を出すと復元不能になるため、正規化はtryで包む)
@@ -530,6 +584,10 @@ export class DocService {
     const destAbs = resolveInLibrary(this.libraryPath, dest);
     await mkdir(path.dirname(destAbs), { recursive: true });
     await rename(abs, destAbs);
+    // フォルダ復元時は由来メタデータファイルを消す(復元後の中身をクリーンに保つ)
+    if (isFolder) {
+      await rm(path.join(destAbs, TRASH_META_FILE), { force: true });
+    }
     await this.tryCommit([normalized, dest], `untrash: ${dest}${isFolder ? '/' : ''}`, author);
     if (isFolder) {
       await this.indexer.scanAll();
@@ -692,7 +750,20 @@ export class DocService {
     for (let i = 2; await this.exists(path.join(trashDir, trashName)); i++) {
       trashName = `${baseName} (${i})`;
     }
-    await rename(abs, path.join(trashDir, trashName));
+    const trashFolderAbs = path.join(trashDir, trashName);
+    await rename(abs, trashFolderAbs);
+    // 由来メタデータを書き込む(空フォルダでも由来を失わないように。空だと gitに載る差分が
+    // 発生せず trash: コミットが出来ないためgit log経由の復元が効かない問題への対処)
+    const meta: TrashMeta = {
+      originalPath: normalized,
+      deletedAt: new Date().toISOString(),
+      deletedBy: author.name,
+    };
+    await writeFile(
+      path.join(trashFolderAbs, TRASH_META_FILE),
+      `${JSON.stringify(meta, null, 2)}\n`,
+      'utf8',
+    );
     await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}/`, author);
     await this.indexer.scanAll();
     this.locks.removeUnder(normalized);
