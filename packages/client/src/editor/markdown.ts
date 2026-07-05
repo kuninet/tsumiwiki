@@ -15,6 +15,7 @@ import { CodeBlockWithPreview } from './extensions/code-block-view';
 import { ObsidianEmbed } from './extensions/embed';
 import { ObsidianEmbedWithPreview } from './extensions/embed-view';
 import { ImageWithResolvedSrc } from './extensions/image-view';
+import { InlineTagHighlight } from './extensions/inline-tag-highlight';
 import { ListKeymap } from './extensions/list-keymap';
 import { RawBlock } from './extensions/raw-block';
 import { Wikilink } from './extensions/wikilink';
@@ -57,6 +58,7 @@ export function createEditorExtensions(options: EditorExtensionOptions = {}): Ex
     nodeViews ? ObsidianEmbedWithPreview : ObsidianEmbed,
     RawBlock,
     ListKeymap,
+    InlineTagHighlight,
     WikilinkSuggestion.configure({ getDocs: getWikilinkDocs ?? (() => []) }),
     Markdown.configure({
       html: true, // HTMLブロックをrawBlockとして保全するため有効化(raw-block.ts参照)

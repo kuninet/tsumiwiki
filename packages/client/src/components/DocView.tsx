@@ -13,6 +13,7 @@ import { resolveWikilink } from '../lib/resolve-wikilink';
 import { saveBadge } from '../lib/save-badge';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
+import { useUIStore } from '../stores/ui';
 import { ConfirmDialog } from './ConfirmDialog';
 import { EditorToolbar } from './EditorToolbar';
 import { HistoryPanel } from './HistoryPanel';
@@ -79,6 +80,8 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   const navigate = useNavigate();
   const showToast = useToastStore((s) => s.show);
   const setLockedByOtherName = useEditStore((s) => s.setLockedByOtherName);
+  const setSidebarTab = useUIStore((s) => s.setSidebarTab);
+  const toggleTag = useUIStore((s) => s.toggleTag);
   const { data: tree } = useTree();
 
   const wikilinkDocsRef = useRef<DocSummary[]>([]);
@@ -325,6 +328,26 @@ export function DocView({ doc, currentUser }: DocViewProps) {
               <span className="text-warning">{lockedByOther.displayName}さんが編集中</span>
             )}
           </p>
+          {/* #77 Phase A: フロントマター+本文中の #タグ を合算したチップ列を閲覧・編集どちらでも表示。
+              クリックで TagPane のタグフィルタに反映して同じタグを持つ文書一覧を開く */}
+          {doc.tags.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {doc.tags.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => {
+                    setSidebarTab('tag');
+                    toggleTag(tag);
+                  }}
+                  className="rounded-full border border-accent-border bg-accent-soft px-2.5 py-0.5 text-xs text-accent hover:bg-accent-softer"
+                  title={`タグ #${tag} の文書一覧を開く`}
+                >
+                  #{tag}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex flex-shrink-0 gap-2">
           <button

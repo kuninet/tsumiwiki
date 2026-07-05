@@ -170,6 +170,16 @@
   color: var(--color-accent);
 }
 
+/* #77 Phase B: 本文中の #タグ をチップ風にハイライト。
+   装飾のみで文書構造は変えないため、Markdown往復への影響なし */
+.ProseMirror .inline-tag {
+  background: var(--color-accent-softer);
+  color: var(--color-accent);
+  padding: 0 0.375em;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
+
 .ProseMirror pre.raw-block {
   background: var(--color-panel-2);
   border-left: 3px solid var(--color-line-strong);
