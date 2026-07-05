@@ -115,10 +115,12 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   }, [editor, session.mode]);
 
   // 閲覧中に限り、外部要因(他者更新・定期refetch等)でdocが変わったら本文を追随させる。
-  // 編集中は絶対に上書きしない(編集内容が消えるため)
+  // 編集中は絶対に上書きしない(編集内容が消えるため)。
+  // 第2引数 emitUpdate=false: setContent の反映で onUpdate → updateBody → dirty=true と
+  // なってしまうのを防ぐ(保存直後にdocが更新されて未保存扱いになる不具合の対処)
   useEffect(() => {
     if (session.mode === 'view' && editor && !editor.isDestroyed) {
-      editor.commands.setContent(doc.body);
+      editor.commands.setContent(doc.body, false);
     }
   }, [editor, doc.body, session.mode]);
 
