@@ -280,6 +280,32 @@ export class DocService {
     return { path: relPath, updatedAt: st.mtime.toISOString() };
   }
 
+  // #84 Phase 2 デイリーノート・テンプレ流し込み用に、指定パスに任意本文で新規作成する。
+  // 既に存在する場合は EEXIST 相当のエラー(呼び出し側で「存在確認→なければ作成」の分岐)。
+  // 通常の createDoc(自動連番)と違い、パスは呼び出し側で確定させる前提。
+  async createDocWithContent(
+    relPath: string,
+    content: string,
+    author: GitAuthor,
+  ): Promise<{ path: string; updatedAt: string }> {
+    const normalized = this.validateDocPath(relPath);
+    const abs = resolveInLibrary(this.libraryPath, normalized);
+    await mkdir(path.dirname(abs), { recursive: true });
+    // LF 統一 + 末尾改行(NFR-COMP-03。他の書き込みパスに合わせる)
+    const normalizedContent = content.replace(/\r\n/g, '\n');
+    const finalContent = normalizedContent.endsWith('\n') ? normalizedContent : `${normalizedContent}\n`;
+    const buf = Buffer.from(finalContent, 'utf8');
+    // writeExclusive は既存でEEXIST。連番は付けずそのままエラー化する
+    const ok = await this.writeExclusive(abs, buf);
+    if (!ok) {
+      throw new InvalidPathError(`既に存在します: ${normalized}`);
+    }
+    await this.tryCommit([normalized], `add: ${normalized}`, author);
+    await this.indexer.indexFile(normalized);
+    const st = await stat(abs);
+    return { path: normalized, updatedAt: st.mtime.toISOString() };
+  }
+
   async saveDoc(
     relPath: string,
     body: string,

@@ -1,5 +1,8 @@
 import { useEffect, useRef } from 'react';
-import { Link, Outlet } from 'react-router-dom';
+import { Link, Outlet, useNavigate } from 'react-router-dom';
+import { useCreateOrOpenTodayNote } from '../api/daily-notes';
+import { docUrl } from '../lib/doc-path';
+import { confirmNavigationIfDirty } from '../lib/navigation-guard';
 import { useUIStore } from '../stores/ui';
 import { FolderTree } from './FolderTree';
 import { Header } from './Header';
@@ -17,6 +20,16 @@ export function AppShell() {
   const toggleSidebarCollapsed = useUIStore((s) => s.toggleSidebarCollapsed);
   const setSidebarTab = useUIStore((s) => s.setSidebarTab);
   const requestCreateDoc = useUIStore((s) => s.requestCreateDoc);
+
+  const navigate = useNavigate();
+  const createOrOpenTodayNote = useCreateOrOpenTodayNote();
+
+  function handleOpenTodayNote() {
+    if (!confirmNavigationIfDirty()) return;
+    createOrOpenTodayNote.mutate(undefined, {
+      onSuccess: (res) => navigate(docUrl(res.path)),
+    });
+  }
 
   const draggingRef = useRef(false);
 
@@ -80,8 +93,17 @@ export function AppShell() {
             <div className="flex h-[38px] flex-shrink-0 border-t border-line text-sm text-ink-soft">
               <button
                 type="button"
+                onClick={handleOpenTodayNote}
+                disabled={createOrOpenTodayNote.isPending}
+                className="flex flex-1 items-center justify-center gap-1 hover:bg-hoverbg disabled:cursor-progress"
+                title="今日の日誌を開く(なければ作成)"
+              >
+                <span aria-hidden="true">📓</span> 今日の日誌
+              </button>
+              <button
+                type="button"
                 onClick={requestCreateDoc}
-                className="flex flex-1 items-center justify-center gap-1 hover:bg-hoverbg"
+                className="flex flex-1 items-center justify-center gap-1 border-l border-line hover:bg-hoverbg"
               >
                 <span aria-hidden="true">+</span> 新規文書
               </button>

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+export * from './template-vars.js';
 
 // API入出力スキーマはこのパッケージに集約する(設計01章1.3)。
 // サーバーはバリデーション、クライアントは型として利用する。
