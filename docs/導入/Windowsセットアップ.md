@@ -17,8 +17,19 @@ TsumiWikiをWindows PCで本番運用するための手順(設計01章1.4)。
 node --version
 git --version
 corepack enable                     # pnpmを有効化(初回のみ。管理者権限が必要な場合あり)
-pnpm --version                      # 10.34.3 相当が出ればOK
 ```
+
+pnpmのバージョンはリポジトリ内で確認する(package.jsonの `packageManager` フィールドで
+10.34.3 に pin してあり、Corepackが自動でこのバージョンを使う):
+
+```powershell
+cd C:\tsumiwiki                     # 2章でcloneした後
+pnpm --version                      # 10.34.3 が返ればOK
+```
+
+補足: リポジトリ外で `pnpm --version` を叩くと、Corepack最新の pnpm 11 系が
+ダウンロードされる場合があるが、これはリポジトリ外で使う分には無害。TsumiWiki の
+ビルド・実行はリポジトリ内で行うので、必ず 10.34.3 が使われる。
 
 Git for Windowsは既定インストールで問題ないが、以下の点だけ確認する:
 
