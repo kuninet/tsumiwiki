@@ -102,6 +102,36 @@ describe('ごみ箱API', () => {
     expect(restored.json().path).toBe('衝突 (2).md');
   }, 30_000);
 
+  it('空のフォルダを削除しても元パスがメタデータから復元される(ユーザー報告のバグ)', async () => {
+    // 空のフォルダだけを作って削除する
+    await apiAs(yamada, 'POST', '/api/folders', { path: '空フォルダ' });
+    await apiAs(yamada, 'DELETE', `/api/folders?path=${encodeURIComponent('空フォルダ')}`);
+
+    const list = await apiAs(yamada, 'GET', '/api/trash');
+    const entry = list.json().entries.find((e: { name: string }) => e.name === '空フォルダ');
+    expect(entry).toBeTruthy();
+    expect(entry.isFolder).toBe(true);
+    // 中身がない空フォルダはgitに差分が乗らずtrash:コミットが作れないため、
+    // .tsumiwiki-trash.json 由来メタデータ経由で元パスが復元される
+    expect(entry.originalPath).toBe('空フォルダ');
+    expect(entry.deletedBy).toBe('山田');
+  }, 30_000);
+
+  it('ネストしたフォルダを削除・復元すると元の場所に戻り、由来メタは残らない', async () => {
+    await apiAs(yamada, 'POST', '/api/folders', { path: '親/子' });
+    await apiAs(yamada, 'DELETE', `/api/folders?path=${encodeURIComponent('親/子')}`);
+
+    const list = await apiAs(yamada, 'GET', '/api/trash');
+    const entry = list.json().entries.find((e: { name: string }) => e.name === '子');
+    expect(entry.originalPath).toBe('親/子');
+
+    const restored = await apiAs(yamada, 'POST', '/api/trash/restore', { trashPath: '.trash/子' });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json().path).toBe('親/子');
+    const tree = await apiAs(yamada, 'GET', '/api/tree');
+    expect(tree.json().folders).toContain('親/子');
+  }, 30_000);
+
   it('フォルダごと削除→復元で配下の文書も戻る', async () => {
     await apiAs(yamada, 'POST', '/api/docs', { folder: '一式', title: '中身A' });
     await apiAs(yamada, 'POST', '/api/docs', { folder: '一式', title: '中身B' });
