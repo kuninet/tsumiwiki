@@ -221,6 +221,24 @@ nssm set TsumiWiki ObjectName DOMAIN\tsumiwiki-svc "パスワード"
 
 そのアカウントには `C:\tsumiwiki` 配下および `LIBRARY_PATH`/`DB_PATH`/`LOG_FILE` への読み書き権限が必要。
 
+## 6.5 アプリの更新
+
+新しいバージョンを取り込むには `scripts\windows\update.bat`(または `update.ps1`)を実行する:
+
+```powershell
+cd C:\tsumiwiki
+.\scripts\windows\update.bat
+```
+
+中でやっていること: `git pull` → `pnpm install`(依存が増えた場合) → `pnpm build`(SPAリビルド)。
+
+サーバー本体は再起動しないので手動で:
+
+- NSSM運用中: `nssm restart TsumiWiki`
+- start.bat / start-local.bat 起動中: そのコンソールで Ctrl+C → 再度実行
+
+ローカルに変更(例: start-local.bat 以外の追跡ファイル)を残していると `git pull` が中断するので、その場合はメッセージに従ってstash等で退避する。
+
 ## 7. 復旧手順(設計06章6.6)
 
 - **ライブラリ喪失時**: `git clone \\fileserver\share\tsumiwiki.git C:\tsumiwiki-library` → サービス起動(自動リインデックス)
