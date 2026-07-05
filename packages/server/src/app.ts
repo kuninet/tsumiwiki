@@ -14,6 +14,7 @@ import { registerHistoryRoutes } from './routes/history.js';
 import { registerLockRoutes } from './routes/locks.js';
 import { registerLibraryRoutes } from './routes/library.js';
 import { librarySettingsRoutes } from './routes/library-settings.js';
+import { dailyNotesRoutes } from './routes/daily-notes.js';
 import { registerQueryRoutes } from './routes/query.js';
 import { registerTrashRoutes } from './routes/trash.js';
 import { registerUserRoutes } from './routes/users.js';
@@ -107,6 +108,7 @@ export function buildApp(options: BuildAppOptions) {
     registerAttachmentRoutes(instance);
     registerLibraryRoutes(instance);
     instance.register(librarySettingsRoutes);
+    instance.register(dailyNotesRoutes);
   });
 
   // クライアントの静的配信(本番の単一ポート運用。設計01章1.4)
