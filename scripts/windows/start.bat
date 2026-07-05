@@ -1,34 +1,41 @@
 @echo off
 REM ============================================================================
-REM TsumiWiki 手動起動バッチ(Windows)
-REM 環境変数はこの中で setlocal 配下に定義するため、親のコマンドプロンプトや
-REM システム環境に一切漏れず、他アプリケーションと衝突しない。
+REM TsumiWiki startup batch for Windows.
+REM All env vars are set inside a setlocal block so they never leak to the
+REM parent shell or the system environment.
 REM
-REM 使い方:
-REM   1. 下の SET 行を自環境に合わせて書き換える
-REM   2. スタートメニュー等から「PowerShell」または「コマンドプロンプト」を開く
-REM   3. cd C:\tsumiwiki して start.bat を実行
+REM Usage:
+REM   1. Edit the SET lines below to match your environment.
+REM   2. Open Command Prompt or PowerShell.
+REM   3. cd C:\tsumiwiki and run this file: scripts\windows\start.bat
+REM
+REM Note: comments are ASCII-only on purpose. Legacy Windows cmd.exe reads
+REM .bat files with the system code page (Shift-JIS on Japanese Windows) and
+REM will mojibake / choke on multi-byte characters even in REM lines.
 REM ============================================================================
 
 setlocal
+REM Switch console code page to UTF-8 so Japanese paths passed to node work.
+chcp 65001 >nul
 
-REM --- 必須項目 ------------------------------------------------------------
+REM --- Required -----------------------------------------------------------
 set "LIBRARY_PATH=C:\tsumiwiki-library"
 set "DB_PATH=C:\tsumiwiki-data\app.db"
 
-REM --- 待ち受け設定(3000は他のNodeツールと衝突しがちなので変更を推奨) ---
+REM --- Listen address (change PORT to avoid conflicts with other Node apps) -
 set "PORT=3080"
 set "HOST=0.0.0.0"
 
-REM --- バックアップ(省略可)----------------------------------------------
+REM --- Backup (optional) --------------------------------------------------
 set "BACKUP_REMOTE=\\fileserver\share\tsumiwiki.git"
 set "BACKUP_PUSH_INTERVAL_MINUTES=10"
 
-REM --- ログ(省略時は標準出力)---------------------------------------------
+REM --- Log (defaults to stdout if unset) ----------------------------------
 set "LOG_FILE=C:\tsumiwiki-data\app.log"
 
 REM ============================================================================
-REM サーバー起動
+REM Start the server. Change directory to the repository root so pnpm can find
+REM the workspace.
 REM ============================================================================
 pushd "%~dp0\..\.."
 call pnpm --filter @tsumiwiki/server start
