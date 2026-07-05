@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { SerialQueue } from './serial-queue';
@@ -68,9 +68,33 @@ export class GitService {
       // アトミック書き込みの一時ファイルがsyncコミットに巻き込まれるのも防ぐ
       const gitignorePath = join(this.libraryPath, '.gitignore');
       if (!existsSync(gitignorePath)) {
-        writeFileSync(gitignorePath, '.obsidian/\n.DS_Store\nThumbs.db\n.tsumiwiki-tmp-*\n', 'utf8');
+        writeFileSync(
+          gitignorePath,
+          [
+            '.obsidian/',
+            '.DS_Store',
+            'Thumbs.db',
+            '.tsumiwiki-tmp-*',
+            // #86 fix-forward: ごみ箱の由来メタデータは削除者の実名を含むためgit履歴に載せない
+            '.tsumiwiki-trash.json',
+          ].join('\n') + '\n',
+          'utf8',
+        );
         await this.git.add(['.gitignore']);
         await this.commitStaged('add: .gitignore', SYSTEM_AUTHOR);
+      } else {
+        // #86 fix-forward: 既存の .gitignore に .tsumiwiki-trash.json が無ければ追記する
+        // (既存ライブラリで新規trash操作前に確実に無視される状態にする)
+        const current = readFileSync(gitignorePath, 'utf8');
+        if (!/(^|\n)\.tsumiwiki-trash\.json(\s|$)/.test(current)) {
+          const appended = current + (current.endsWith('\n') ? '' : '\n') + '.tsumiwiki-trash.json\n';
+          writeFileSync(gitignorePath, appended, 'utf8');
+          await this.git.add(['.gitignore']);
+          await this.commitStaged(
+            'chore: ignore .tsumiwiki-trash.json',
+            SYSTEM_AUTHOR,
+          );
+        }
       }
     });
   }
