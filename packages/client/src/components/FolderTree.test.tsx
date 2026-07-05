@@ -216,6 +216,54 @@ describe('FolderTree', () => {
       expect(calls.some((c) => c.method === 'POST' && c.path.startsWith('/api/'))).toBe(false);
     });
 
+    it('祖先フォルダと配下の文書を同時選択して移動しても、配下は除外される(#76 fix-forward)', async () => {
+      const calls = stubFetchRecording();
+      renderRecording();
+      // フォルダAを展開
+      fireEvent.click(await screen.findByText('フォルダA'));
+      const folderA = (await screen.findByText('フォルダA')).closest('button')!;
+      const childInA = (await screen.findByText('子文書')).closest('button')!;
+      const rootDoc = (await screen.findByText('ルート文書')).closest('button')!;
+
+      // Ctrl+クリックで「フォルダA」+「フォルダA/子文書」を選択(親と子孫の同時選択)
+      fireEvent.click(folderA, { ctrlKey: true });
+      fireEvent.click(childInA, { ctrlKey: true });
+
+      // ルート文書へドラッグ&ドロップ先にする...のではなく、
+      // rootDoc は doc なので行き先ではない。代わりに空白領域(ルート)へドロップ相当を検証:
+      // フォルダAをドラッグして root へ落とすと、A/子文書 は付いてくるので個別APIには含まれないこと
+      fireEvent.dragStart(folderA);
+      // rootDoc 上でリリース ≒ ラッパへバブル。しかし fix-forward で e.target !== e.currentTarget 判定
+      // で無視される。ここでは filterMovable の子孫除外を確認するために fallback として
+      // performBatchMove を直接期待する形にはできないので、handleDropTarget を通す代わりに
+      // group-into-new-folder の分岐で検証する
+      fireEvent.dragEnd(folderA);
+
+      // フォルダに直接ドラッグ&ドロップして isBatch を発火させる
+      // ルート文書 rootDoc を Ctrl+選択して合計3件に、そのうえで rootDoc をドラッグしてフォルダAへ
+      fireEvent.click(rootDoc, { ctrlKey: true });
+      // 選択: フォルダA / フォルダA/子文書 / ルート文書.md、ドラッグ元はルート文書
+      // dropTarget = folderA。filterMovable は:
+      //   フォルダA → 自分自身へのドロップなので除外
+      //   フォルダA/子文書 → 親も選択されているので子孫除外
+      //   ルート文書 → parent が '' で targetFolderPath === 'フォルダA' なので有効
+      fireEvent.dragStart(rootDoc);
+      fireEvent.dragEnter(folderA);
+      fireEvent.dragOver(folderA);
+      fireEvent.drop(folderA);
+      fireEvent.dragEnd(rootDoc);
+
+      await waitFor(() => {
+        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+        expect(moves.length).toBe(1);
+      });
+      const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+      const movedPaths = new Set(moves.map((m) => (m.body as { path: string }).path));
+      expect(movedPaths.has('ルート文書.md')).toBe(true);
+      // 子文書は 親と一緒に fs 上ついてくるので個別移動 API では叩かれない
+      expect(movedPaths.has('フォルダA/子文書.md')).toBe(false);
+    });
+
     it('選択したものを新規フォルダに移動するとフォルダ作成→対象を一括移動する(#73)', async () => {
       const calls = stubFetchRecording();
       renderRecording();

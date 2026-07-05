@@ -120,6 +120,8 @@ export function FolderTree() {
   // lastClickedPath は Shift+クリックの起点として使う
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [lastClickedPath, setLastClickedPath] = useState<string | null>(null);
+  // #82 fix-forward: 新規フォルダにまとめる操作の in-flight ロック(二重発火防止)
+  const isGroupingRef = useRef(false);
 
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
 
@@ -265,7 +267,18 @@ export function FolderTree() {
       // #73 選択物を新規サブフォルダにまとめる。
       // 新規フォルダを共通親配下に作り、その配下へ選択物を一括移動する
       const { commonParent: parent, selection } = dialog;
-      const newFolderPath = parent ? `${parent}/${value}` : value;
+      // #82 fix-forward: 入力値を trim + `/`/`\`/制御文字拒否
+      const trimmed = value.trim();
+      if (!trimmed || /[\\/ -]/.test(trimmed)) {
+        showToast('error', 'フォルダ名に / や制御文字は使えません');
+        return; // ダイアログは閉じず再入力できる
+      }
+      const newFolderPath = parent ? `${parent}/${trimmed}` : trimmed;
+      // #82 fix-forward: 非同期IIFEの投げっぱなしで二重発火する問題への対処
+      // ダイアログを閉じる前に処理を開始し、submitting 中は再クリックしても無視
+      if (isGroupingRef.current) return;
+      isGroupingRef.current = true;
+      setDialog(null);
       void (async () => {
         try {
           await createFolderApi({ path: newFolderPath });
@@ -276,6 +289,8 @@ export function FolderTree() {
           );
           queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
           return;
+        } finally {
+          isGroupingRef.current = false;
         }
         const nodes = filterMovable(selection, newFolderPath);
         if (nodes.length === 0) {
@@ -286,6 +301,7 @@ export function FolderTree() {
         await performBatchMove(nodes, newFolderPath);
         setSelectedPaths(new Set());
       })();
+      return; // setDialog は上で呼んだのでここでは呼ばない
     }
     setDialog(null);
   }
@@ -363,13 +379,39 @@ export function FolderTree() {
     return common.join('/');
   }
 
+  // ツリー全体の Map<path, TreeNode> を組む。折りたたみ状態(可視な flat)には依存しない。
+  // #76 fix-forward: 折りたたみで選択が可視から外れると batch から無音で脱落する問題への対処
+  const treeByPath = useMemo(() => {
+    const m = new Map<string, TreeNode>();
+    function walk(list: TreeNode[]) {
+      for (const n of list) {
+        m.set(n.path, n);
+        if (n.type === 'folder') walk(n.children);
+      }
+    }
+    walk(nodes);
+    return m;
+  }, [nodes]);
+
   // ドロップ先が targetFolderPath のとき、対象パス群のうち移動しても意味のある/矛盾しないものだけを返す
   function filterMovable(paths: string[], targetFolderPath: string): TreeNode[] {
-    const byPath = new Map<string, TreeNode>();
-    for (const f of flat) byPath.set(f.node.path, f.node);
+    // #76 fix-forward: 選択集合内の祖先フォルダの子孫は除外する。
+    // 祖先が一緒に移動すれば子孫も自動的に付いてくるため、個別に移動を試みると
+    // 404 や順序依存の部分失敗が発生する
+    const selectedSet = new Set(paths);
+    const isDescendantOfSelected = (path: string): boolean => {
+      for (const sel of selectedSet) {
+        if (sel !== path && path.startsWith(`${sel}/`)) {
+          const ancestor = treeByPath.get(sel);
+          if (ancestor?.type === 'folder') return true;
+        }
+      }
+      return false;
+    };
     return paths
-      .map((p) => byPath.get(p))
+      .map((p) => treeByPath.get(p))
       .filter((n): n is TreeNode => !!n)
+      .filter((node) => !isDescendantOfSelected(node.path))
       .filter((node) => {
         if (parentOf(node.path) === targetFolderPath) return false;
         if (node.type === 'folder') {
@@ -583,9 +625,12 @@ export function FolderTree() {
         if (e.target === e.currentTarget) handleDragEnterTarget('');
       }}
       onDragOver={(e) => {
-        if (rootCanAccept) e.preventDefault();
+        // #75 fix-forward: doc行やヘッダのボタン上でのリリースが root drop としてバブル
+        // しないよう、ラッパ自身上でだけ受け入れる(currentTarget === target のときのみ)
+        if (rootCanAccept && e.target === e.currentTarget) e.preventDefault();
       }}
       onDrop={(e) => {
+        if (e.target !== e.currentTarget) return;
         e.preventDefault();
         handleDropTarget('');
       }}
@@ -791,7 +836,13 @@ function TreeItem({
     draggable: true,
     onDragStart: (e: React.DragEvent<HTMLElement>) => {
       e.stopPropagation();
-      if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        // #75 fix-forward: Firefox は dragstart で setData を呼ばないと以降の
+        // dragover/drop を発行しない。text/plain にパスを載せておく(実データは
+        // 内部 state を優先し、これは互換性目的のプレースホルダ)
+        e.dataTransfer.setData('text/plain', node.path);
+      }
       const title = node.type === 'doc' ? node.title : undefined;
       dnd.onDragStart(node.path, node.type, title);
     },
