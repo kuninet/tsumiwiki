@@ -74,7 +74,9 @@ describe('DocView', () => {
     renderDocView();
 
     expect(await screen.findByRole('heading', { name: 'メモ' })).toBeTruthy();
-    expect(screen.getByText(/更新日時: 2026-07-01T00:00:00\+09:00/)).toBeTruthy();
+    // JST表示: 2026/07/01 と 00:00:00 を別々に表示
+    expect(screen.getByText('2026/07/01')).toBeTruthy();
+    expect(screen.getByText('00:00:00')).toBeTruthy();
   });
 
   it('他者がロック中の場合は編集ボタンが無効化され、編集中である旨が表示される', async () => {
