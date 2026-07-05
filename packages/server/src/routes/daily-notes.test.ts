@@ -128,4 +128,47 @@ describe('デイリーノートAPI', () => {
     });
     expect(res.statusCode).toBe(401);
   }, 20_000);
+
+  it('2ユーザーが同時に押しても両方200が返り、pathが一致する(レース)', async () => {
+    const [a, b] = await Promise.all([
+      apiAs(yamada, 'POST', '/api/daily-notes/today'),
+      apiAs(admin, 'POST', '/api/daily-notes/today'),
+    ]);
+    expect(a.statusCode).toBe(200);
+    expect(b.statusCode).toBe(200);
+    expect(a.json().path).toBe(b.json().path);
+    // 片方が created:true、もう片方が false のはず(両方 true / 両方 false にはならない)
+    const createdFlags = [a.json().created, b.json().created];
+    expect(createdFlags.sort()).toEqual([false, true]);
+  }, 30_000);
+
+  it('サブフォルダを含むファイル名パターンで階層に日誌を作れる', async () => {
+    await apiAs(admin, 'PUT', '/api/library/settings', {
+      templates: { folder: '_templates' },
+      dailyNotes: { folder: '日記', template: '', filenamePattern: 'YYYY/MM/DD' },
+    });
+    const res = await apiAs(yamada, 'POST', '/api/daily-notes/today');
+    expect(res.statusCode).toBe(200);
+    expect(res.json().path).toBe(`日記/${todayFilename('YYYY/MM/DD')}.md`);
+  }, 30_000);
+
+  it('ライブラリ設定に不正なファイル名パターンは400で拒否される', async () => {
+    for (const bad of ['', '.', '..', '{{date}}', 'YYYY:MM']) {
+      const res = await apiAs(admin, 'PUT', '/api/library/settings', {
+        templates: { folder: '_templates' },
+        dailyNotes: { folder: '日記', template: '', filenamePattern: bad },
+      });
+      expect(res.statusCode).toBe(400);
+    }
+  }, 30_000);
+
+  it('ライブラリ設定に保護パス(.git/config等)のテンプレは400で拒否される', async () => {
+    for (const bad of ['.git/config', '.tsumiwiki/settings.yaml', '../secret.md']) {
+      const res = await apiAs(admin, 'PUT', '/api/library/settings', {
+        templates: { folder: '_templates' },
+        dailyNotes: { folder: '日記', template: bad, filenamePattern: 'YYYY-MM-DD' },
+      });
+      expect(res.statusCode).toBe(400);
+    }
+  }, 30_000);
 });

@@ -295,10 +295,11 @@ export class DocService {
     const normalizedContent = content.replace(/\r\n/g, '\n');
     const finalContent = normalizedContent.endsWith('\n') ? normalizedContent : `${normalizedContent}\n`;
     const buf = Buffer.from(finalContent, 'utf8');
-    // writeExclusive は既存でEEXIST。連番は付けずそのままエラー化する
+    // writeExclusive は既存でEEXIST。連番は付けずそのまま「衝突」として上位に伝える
+    // (呼び出し側でレース時のフォールバック=既存の再取得ができるように InvalidPath でなく Conflict)
     const ok = await this.writeExclusive(abs, buf);
     if (!ok) {
-      throw new InvalidPathError(`既に存在します: ${normalized}`);
+      throw new DocConflictError(`既に存在します: ${normalized}`);
     }
     await this.tryCommit([normalized], `add: ${normalized}`, author);
     await this.indexer.indexFile(normalized);

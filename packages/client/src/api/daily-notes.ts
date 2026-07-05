@@ -16,6 +16,9 @@ export function useCreateOrOpenTodayNote() {
       if (res.created) {
         queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
         showToast('success', '今日の日誌を作成しました');
+      } else {
+        // 既存の場合も無反応にならないよう軽く通知(既に該当ページに居るとき用)
+        showToast('info', '今日の日誌を開きました');
       }
     },
     onError: (err) => {

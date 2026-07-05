@@ -202,18 +202,42 @@ export type TagCount = z.infer<typeof tagCountSchema>;
 // ライブラリルート直下の .tsumiwiki/settings.yaml に保存し、gitでバックアップする
 // 全社(=ライブラリ)共通の設定。個人別化は将来検討(ライブラリを個人別にした段階)
 
+// パスとしての最低限の妥当性(ドット始まりセグメント・`..`・空白のみ を弾く)。
+// 空文字は許容(『ルート直下』『テンプレ未設定』の意)
+function isSafeSubPath(v: string): boolean {
+  if (v === '') return true;
+  if (/^\s+$/.test(v)) return false;
+  const parts = v.replaceAll('\\', '/').split('/').filter(Boolean);
+  return parts.every((p) => p !== '..' && !p.startsWith('.'));
+}
+
+// ファイル名パターンは Obsidian と同じく素の日付フォーマット文字列(YYYY-MM-DD 等)を想定。
+// {{...}} 変数構文は誤解の元になるので受け付けない
+function isSafeFilenamePattern(v: string): boolean {
+  if (v.trim() === '') return false;
+  if (v.includes('{{')) return false;
+  // ファイルシステム禁止文字と改行を弾く(Windows想定)。'/' は許容(サブフォルダ運用のため)
+  if (/[\\:*?"<>|\r\n]/.test(v)) return false;
+  // 各セグメントが '.' や '..' 単独 or ドット始まり(隠しファイル化)でないこと
+  const segments = v.split('/');
+  if (segments.some((s) => s === '' || s === '.' || s === '..' || s.startsWith('.'))) {
+    return false;
+  }
+  return true;
+}
+
 export const librarySettingsSchema = z.object({
   templates: z.object({
     // .md をテンプレとして扱うフォルダ(ライブラリ直下からの相対パス。空でルート)
-    folder: z.string(),
+    folder: z.string().refine(isSafeSubPath, 'フォルダパスが不正です'),
   }),
   dailyNotes: z.object({
     // 「今日の日誌」を作る先のフォルダ
-    folder: z.string(),
+    folder: z.string().refine(isSafeSubPath, 'フォルダパスが不正です'),
     // デイリーノートに適用するテンプレのパス(空文字で空白ノート作成)
-    template: z.string(),
-    // ファイル名パターン(変数展開)。既定 'YYYY-MM-DD'
-    filenamePattern: z.string(),
+    template: z.string().refine(isSafeSubPath, 'テンプレートパスが不正です'),
+    // ファイル名パターン(日付フォーマット)。既定 'YYYY-MM-DD'。{{...}} 変数は不可
+    filenamePattern: z.string().refine(isSafeFilenamePattern, 'ファイル名パターンが不正です'),
   }),
 });
 export type LibrarySettings = z.infer<typeof librarySettingsSchema>;

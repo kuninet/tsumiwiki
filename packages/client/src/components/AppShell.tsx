@@ -95,7 +95,8 @@ export function AppShell() {
                 type="button"
                 onClick={handleOpenTodayNote}
                 disabled={createOrOpenTodayNote.isPending}
-                className="flex flex-1 items-center justify-center gap-1 hover:bg-hoverbg disabled:cursor-progress"
+                aria-busy={createOrOpenTodayNote.isPending}
+                className="flex flex-1 items-center justify-center gap-1 hover:bg-hoverbg disabled:cursor-progress disabled:opacity-50"
                 title="今日の日誌を開く(なければ作成)"
               >
                 <span aria-hidden="true">📓</span> 今日の日誌
