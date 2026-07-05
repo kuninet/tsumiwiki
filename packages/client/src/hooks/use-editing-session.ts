@@ -1,5 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { DocResponse } from '@tsumiwiki/shared';
 import { docQueryKey, fetchDoc, saveDoc, TAGS_QUERY_KEY, TREE_QUERY_KEY } from '../api/docs';
 import { ApiRequestError } from '../api/client';
 import { deleteDraft, getDraft, saveDraft } from '../api/drafts';
@@ -200,6 +201,11 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
         baseUpdatedAt,
       });
       await releaseLock(path).catch(() => {});
+      // React Query の refetch を待たず、returnされたupdatedAtをキャッシュに即反映する。
+      // 待つと連続保存時に stale な baseUpdatedAt を送って409 CONFLICTになる
+      queryClient.setQueryData<DocResponse | undefined>(docQueryKey(path), (old) =>
+        old ? { ...old, updatedAt } : old,
+      );
       invalidateAfterSave(path);
       stopEditingLocally();
       showToast('success', '保存しました');
@@ -221,7 +227,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     } finally {
       savingRef.current = false;
     }
-  }, [invalidateAfterSave, showToast, stopEditingLocally, setStoreSaveError]);
+  }, [invalidateAfterSave, queryClient, showToast, stopEditingLocally, setStoreSaveError]);
 
   // 競合解消: 自分の編集内容を保持したまま、最新のupdatedAtを取得し直して再保存する
   const resolveConflictOverwrite = useCallback(async () => {
@@ -236,6 +242,9 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
         baseUpdatedAt: latest.updatedAt,
       });
       await releaseLock(path).catch(() => {});
+      queryClient.setQueryData<DocResponse | undefined>(docQueryKey(path), (old) =>
+        old ? { ...old, updatedAt } : old,
+      );
       invalidateAfterSave(path);
       stopEditingLocally();
       showToast('success', '保存しました');
@@ -244,7 +253,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
       // 再度の競合等はダイアログを表示したまま再試行できるようにする
       showToast('error', err instanceof ApiRequestError ? err.message : '保存に失敗しました');
     }
-  }, [invalidateAfterSave, showToast, stopEditingLocally]);
+  }, [invalidateAfterSave, queryClient, showToast, stopEditingLocally]);
 
   // 競合解消: 自分の編集を破棄し、最新の内容を読み込み直す
   const resolveConflictDiscard = useCallback(async () => {
