@@ -182,11 +182,41 @@ export function FolderTree() {
       const path = dialog.parent ? `${dialog.parent}/${value}` : value;
       createFolder.mutate({ path });
     } else if (dialog.kind === 'renameDoc') {
-      moveDoc.mutate({ path: dialog.path, newFolder: dialog.folder, newTitle: value });
+      const oldPath = dialog.path;
+      const newDocPath = dialog.folder ? `${dialog.folder}/${value}.md` : `${value}.md`;
+      moveDoc.mutate(
+        { path: oldPath, newFolder: dialog.folder, newTitle: value },
+        {
+          onSuccess: () => {
+            // 右ペインで表示中の文書がリネーム対象なら、新しいパスへ遷移して
+            // タイトル・URL・ヘッダを一斉に追従させる(#77 相当の別リクエスト)
+            if (currentPath === oldPath && oldPath !== newDocPath) {
+              queryClient.removeQueries({ queryKey: docQueryKey(oldPath) });
+              navigate(docUrl(newDocPath), { replace: true });
+            }
+          },
+        },
+      );
     } else if (dialog.kind === 'renameFolder') {
       const parent = parentOf(dialog.path);
       const newPath = parent ? `${parent}/${value}` : value;
-      moveFolder.mutate({ path: dialog.path, newPath });
+      const oldFolder = dialog.path;
+      moveFolder.mutate(
+        { path: oldFolder, newPath },
+        {
+          onSuccess: () => {
+            // 表示中の文書がリネームされたフォルダ配下なら URL を書き換えて追従
+            if (
+              currentPath &&
+              (currentPath === oldFolder || currentPath.startsWith(`${oldFolder}/`))
+            ) {
+              const rewritten = newPath + currentPath.slice(oldFolder.length);
+              queryClient.removeQueries({ queryKey: docQueryKey(currentPath) });
+              navigate(docUrl(rewritten), { replace: true });
+            }
+          },
+        },
+      );
     }
     setDialog(null);
   }
