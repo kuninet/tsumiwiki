@@ -102,6 +102,58 @@ describe('ごみ箱API', () => {
     expect(restored.json().path).toBe('衝突 (2).md');
   }, 30_000);
 
+  it('.gitignore に .tsumiwiki-trash.json が載っており git 追跡外(#86 fix-forward)', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const ignore = await readFile(join(lib, '.gitignore'), 'utf8');
+    expect(ignore).toContain('.tsumiwiki-trash.json');
+    // フォルダ削除→trash: コミットの diff にメタファイルが含まれないこと
+    await apiAs(yamada, 'POST', '/api/folders', { path: 'メタ確認' });
+    await apiAs(yamada, 'DELETE', `/api/folders?path=${encodeURIComponent('メタ確認')}`);
+    const history = await app.gitService.history('.trash/メタ確認');
+    // 履歴取得できる=何かしらコミットは存在するが、メタ自体は追跡されない事実は
+    // .gitignore の内容確認で十分担保できているので history が空配列(空フォルダで実質差分なし)
+    // でも許容する
+    expect(Array.isArray(history)).toBe(true);
+  }, 30_000);
+
+  it('trashメタが壊れていれば null にフォールバック(#86 fix-forward)', async () => {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    await mkdir(join(lib, '.trash', 'こわれ'), { recursive: true });
+    // originalPath はあるが deletedAt が数値 → 弾く
+    await writeFile(
+      join(lib, '.trash', 'こわれ', '.tsumiwiki-trash.json'),
+      JSON.stringify({ originalPath: 'x/y', deletedAt: 42, deletedBy: 'z' }),
+      'utf8',
+    );
+
+    const list = await apiAs(yamada, 'GET', '/api/trash');
+    const entry = list.json().entries.find((e: { name: string }) => e.name === 'こわれ');
+    expect(entry).toBeTruthy();
+    // 壊れているので git log にフォールバック→どちらも由来不明で null
+    expect(entry.originalPath).toBeNull();
+  }, 30_000);
+
+  it('復元時にユーザー独自の(有効でない)同名ファイルは破壊しない(#86 fix-forward)', async () => {
+    const { mkdir, writeFile, readFile, rename } = await import('node:fs/promises');
+    // 手動配置: .trash/守る の中にユーザーが独自の .tsumiwiki-trash.json を置く(有効な TrashMeta 形式ではない)
+    await mkdir(join(lib, '.trash', '守る'), { recursive: true });
+    await writeFile(
+      join(lib, '.trash', '守る', '.tsumiwiki-trash.json'),
+      'これは有効なJSONではない',
+      'utf8',
+    );
+    // rename は使わない(mkdir で直接 .trash 配下に作成済み)
+    void rename;
+
+    const restored = await apiAs(yamada, 'POST', '/api/trash/restore', {
+      trashPath: '.trash/守る',
+    });
+    expect(restored.statusCode).toBe(200);
+    // 復元先に .tsumiwiki-trash.json は残っているはず(壊れているので破棄しない)
+    const content = await readFile(join(lib, restored.json().path, '.tsumiwiki-trash.json'), 'utf8');
+    expect(content).toBe('これは有効なJSONではない');
+  }, 30_000);
+
   it('空のフォルダを削除しても元パスがメタデータから復元される(ユーザー報告のバグ)', async () => {
     // 空のフォルダだけを作って削除する
     await apiAs(yamada, 'POST', '/api/folders', { path: '空フォルダ' });

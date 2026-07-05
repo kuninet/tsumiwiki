@@ -33,19 +33,23 @@ interface TrashMeta {
   deletedBy: string;
 }
 
+// 3 フィールドすべての型を厳密に検証する。ゆるめだと deletedAt が null で UI 側の
+// Date パースが落ちる等の 2 次事故につながる(#86 fix-forward)
+function isTrashMeta(v: unknown): v is TrashMeta {
+  if (!v || typeof v !== 'object') return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.originalPath === 'string' &&
+    typeof o.deletedAt === 'string' &&
+    typeof o.deletedBy === 'string'
+  );
+}
+
 async function readTrashMeta(folderAbs: string): Promise<TrashMeta | null> {
   try {
     const raw = await readFile(path.join(folderAbs, TRASH_META_FILE), 'utf8');
     const parsed = JSON.parse(raw) as unknown;
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      'originalPath' in parsed &&
-      typeof (parsed as TrashMeta).originalPath === 'string'
-    ) {
-      return parsed as TrashMeta;
-    }
-    return null;
+    return isTrashMeta(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -584,9 +588,21 @@ export class DocService {
     const destAbs = resolveInLibrary(this.libraryPath, dest);
     await mkdir(path.dirname(destAbs), { recursive: true });
     await rename(abs, destAbs);
-    // フォルダ復元時は由来メタデータファイルを消す(復元後の中身をクリーンに保つ)
+    // フォルダ復元時は「TsumiWikiが書き込んだ」メタデータのみ削除する。
+    // ユーザーが独自に置いた同名ファイル(有効なTrashMeta形式でない)は破壊しない(#86 fix-forward)
     if (isFolder) {
-      await rm(path.join(destAbs, TRASH_META_FILE), { force: true });
+      const metaAbs = path.join(destAbs, TRASH_META_FILE);
+      const existing = await readTrashMeta(destAbs);
+      if (existing) {
+        try {
+          await rm(metaAbs, { force: true });
+        } catch (e) {
+          this.logger?.warn(
+            { err: e, dest },
+            'trashメタデータの後片付けに失敗しました(復元自体は完了)',
+          );
+        }
+      }
     }
     await this.tryCommit([normalized, dest], `untrash: ${dest}${isFolder ? '/' : ''}`, author);
     if (isFolder) {
