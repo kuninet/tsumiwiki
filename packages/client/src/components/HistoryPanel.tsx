@@ -11,10 +11,12 @@ import {
 } from '../api/history';
 import { acquireLock, releaseLock } from '../api/locks';
 import { parseDiff } from '../lib/parse-diff';
+import { relativeTime } from '../lib/relative-time';
 import { useToastStore } from '../stores/toast';
 import { ConfirmDialog } from './ConfirmDialog';
 
-// 履歴パネル(SC-03。設計04章4.3)。DocViewの[履歴]ボタンから開く右スライドパネル
+// 履歴パネル(SC-03。設計04章4.3・デザインhandoff components.md)。
+// DocViewの[履歴]ボタンから開く右スライドパネル
 
 interface HistoryPanelProps {
   path: string;
@@ -28,12 +30,18 @@ function formatDateTime(iso: string): string {
 }
 
 const DIFF_LINE_CLASS: Record<string, string> = {
-  add: 'bg-green-50 text-green-800',
-  del: 'bg-red-50 text-red-800',
-  hunk: 'bg-slate-100 text-slate-500',
-  meta: 'text-gray-400',
-  context: 'text-gray-700',
+  add: 'bg-success/10 text-success',
+  // 削除行の背景は handoff 仕様の rgba(220,38,38,0.08) に合わせる
+  del: 'bg-danger/[0.08] text-danger',
+  hunk: 'bg-panel-2 text-ink-faint',
+  meta: 'text-ink-faint',
+  context: 'text-ink-soft',
 };
+
+function titleFromPath(path: string): string {
+  const base = path.split('/').pop() ?? path;
+  return base.replace(/\.md$/i, '');
+}
 
 export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
   // Escapeキーでパネルを閉じる(操作性・a11y)
@@ -97,23 +105,25 @@ export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
   }
 
   return (
-    <div className="fixed inset-y-0 right-0 z-40 flex w-[400px] flex-col border-l border-gray-200 bg-white shadow-xl">
-      <div className="flex flex-shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3">
-        <h2 className="text-sm font-bold text-gray-800">履歴</h2>
+    <div className="fixed inset-y-0 right-0 z-[40] flex w-[400px] flex-col border-l border-line bg-panel shadow-lg">
+      <div className="flex flex-shrink-0 items-center justify-between border-b border-line px-4 py-3">
+        <h2 className="truncate text-sm font-bold text-ink">
+          履歴 <span className="text-ink-faint">·</span> {titleFromPath(path)}
+        </h2>
         <button
           type="button"
           onClick={onClose}
           aria-label="閉じる"
-          className="text-gray-400 hover:text-gray-600"
+          className="text-ink-faint hover:text-ink"
         >
           ×
         </button>
       </div>
 
-      <div className="max-h-[45%] flex-shrink-0 overflow-y-auto border-b border-gray-200">
-        {isLoading && <p className="p-3 text-sm text-gray-400">読み込み中...</p>}
+      <div className="max-h-[45%] flex-shrink-0 overflow-y-auto border-b border-line">
+        {isLoading && <p className="p-3 text-sm text-ink-faint">読み込み中...</p>}
         {!isLoading && (history ?? []).length === 0 && (
-          <p className="p-3 text-sm text-gray-400">履歴がありません</p>
+          <p className="p-3 text-sm text-ink-faint">履歴がありません</p>
         )}
         <ul>
           {(history ?? []).map((entry) => (
@@ -121,14 +131,24 @@ export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
               <button
                 type="button"
                 onClick={() => setSelectedRev(entry.rev)}
-                className={`block w-full border-b border-gray-100 px-3 py-2 text-left ${
-                  selectedRev === entry.rev ? 'bg-blue-50' : 'hover:bg-gray-100'
+                className={`flex w-full items-center gap-2 border-b border-line px-3 py-2 text-left ${
+                  selectedRev === entry.rev ? 'bg-active' : 'hover:bg-hoverbg'
                 }`}
               >
-                <div className="text-sm text-gray-800">{formatDateTime(entry.date)}</div>
-                <div className="mt-0.5 truncate text-xs text-gray-500">
-                  {entry.authorName} ・ {entry.message}
-                </div>
+                <span
+                  aria-hidden="true"
+                  className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-accent text-xs font-semibold text-white"
+                >
+                  {entry.authorName.charAt(0)}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm text-ink" title={formatDateTime(entry.date)}>
+                    {relativeTime(entry.date)}
+                  </span>
+                  <span className="mt-0.5 block truncate text-xs text-ink-faint">
+                    {entry.authorName} ・ {entry.message}
+                  </span>
+                </span>
               </button>
             </li>
           ))}
@@ -136,12 +156,12 @@ export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
       </div>
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <div className="flex flex-shrink-0 border-b border-gray-200">
+        <div className="flex flex-shrink-0 border-b border-line">
           <button
             type="button"
             onClick={() => setTab('diff')}
             className={`flex-1 px-3 py-2 text-sm ${
-              tab === 'diff' ? 'border-b-2 border-blue-600 font-medium text-blue-600' : 'text-gray-500'
+              tab === 'diff' ? 'border-b-2 border-accent font-semibold text-accent' : 'text-ink-faint'
             }`}
           >
             差分
@@ -150,7 +170,7 @@ export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
             type="button"
             onClick={() => setTab('content')}
             className={`flex-1 px-3 py-2 text-sm ${
-              tab === 'content' ? 'border-b-2 border-blue-600 font-medium text-blue-600' : 'text-gray-500'
+              tab === 'content' ? 'border-b-2 border-accent font-semibold text-accent' : 'text-ink-faint'
             }`}
           >
             内容
@@ -159,25 +179,25 @@ export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
 
         <div className="flex-1 overflow-auto p-3">
           {tab === 'content' && (
-            <pre className="whitespace-pre-wrap text-xs text-gray-800">{content ?? ''}</pre>
+            <pre className="whitespace-pre-wrap text-xs text-ink">{content ?? ''}</pre>
           )}
           {tab === 'diff' && (
             <div className="font-mono text-xs">
               {diffLines.map((line, i) => (
                 <div key={i} className={DIFF_LINE_CLASS[line.type]}>
-                  {line.text || ' '}
+                  {line.text || ' '}
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        <div className="flex-shrink-0 border-t border-gray-200 p-3">
+        <div className="flex-shrink-0 border-t border-line p-3">
           <button
             type="button"
             disabled={!selectedRev}
             onClick={() => setRestoreConfirmVisible(true)}
-            className="w-full rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="w-full rounded bg-accent px-3 py-1.5 text-sm text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             この版に戻す
           </button>
@@ -189,6 +209,7 @@ export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
           title="この版に戻す"
           message="現在の内容を破棄してこの版に戻します。よろしいですか?"
           confirmLabel="戻す"
+          variant="primary"
           onConfirm={() => void handleRestore()}
           onCancel={() => setRestoreConfirmVisible(false)}
         />

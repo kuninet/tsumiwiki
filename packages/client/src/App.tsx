@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
 import { RequireAdmin } from './components/RequireAdmin';
@@ -8,10 +9,16 @@ import { LoginPage } from './pages/LoginPage';
 import { MainPage } from './pages/MainPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TrashPage } from './pages/TrashPage';
+import { useThemeStore } from './stores/theme';
 
 // ルーティング定義(設計04章4.1)
 
 export function App() {
+  // 初回マウント時にpersist済みのテーマをdata-theme属性へ反映する(デザインhandoff components.md)
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', useThemeStore.getState().theme);
+  }, []);
+
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />

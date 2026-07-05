@@ -6,8 +6,8 @@
 }
 
 .editor-demo .pane {
-  border: 1px solid #ccc;
-  border-radius: 6px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
   padding: 0.75rem 1rem;
   min-height: 320px;
   overflow: auto;
@@ -19,34 +19,12 @@
   margin: 0 0 0.5rem;
   font-size: 0.85rem;
   font-weight: bold;
-  color: #666;
+  color: var(--color-ink-faint);
 }
 
 .editor-demo .ProseMirror {
   outline: none;
   min-height: 260px;
-}
-
-/* 文書見出しのサイズを明示(h1 > h2 > h3 の階層が崩れないように) */
-.ProseMirror h1 {
-  font-size: 1.7em;
-}
-
-.ProseMirror h2 {
-  font-size: 1.45em;
-}
-
-.ProseMirror h3 {
-  font-size: 1.25em;
-}
-
-.ProseMirror h4 {
-  font-size: 1.1em;
-}
-
-.ProseMirror h5,
-.ProseMirror h6 {
-  font-size: 1em;
 }
 
 .editor-demo pre.markdown-output {
@@ -55,42 +33,160 @@
   margin: 0;
 }
 
+/* --- コンテンツスタイル(デザインhandoff components.md)。閲覧・編集で共通 --- */
+
+.ProseMirror {
+  color: var(--color-ink-soft);
+  font-size: var(--text-body);
+  line-height: 1.75;
+}
+
+/* 編集モード時のフォーカス枠(browserデフォルト青枠)は表示しない。デザインhandoff準拠 */
+.ProseMirror:focus,
+.ProseMirror:focus-visible {
+  outline: none;
+}
+
+.ProseMirror p {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+.ProseMirror h1 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+/* 文書見出しのサイズを明示(h1 > h2 > h3 の階層が崩れないように) */
+.ProseMirror h1 {
+  font-size: var(--text-h1);
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.ProseMirror h2 {
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  font-size: var(--text-h2);
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.ProseMirror h3 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  font-size: var(--text-h3);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.ProseMirror h4 {
+  font-size: 1.1em;
+  color: var(--color-ink);
+}
+
+.ProseMirror h5,
+.ProseMirror h6 {
+  font-size: 1em;
+  color: var(--color-ink);
+}
+
+.ProseMirror ul,
+.ProseMirror ol {
+  padding-left: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.ProseMirror li {
+  color: var(--color-ink-soft);
+  /* liの行高は本文と揃える(以前は独自の1.7で余白バランスが崩れていた) */
+}
+
+.ProseMirror li > p {
+  margin-bottom: 0.25rem;
+}
+
+/* インラインコード */
+.ProseMirror code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--color-panel-2);
+  color: var(--color-code-text);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+/* コードブロック(pre>code)。インラインcodeの背景色をpre内で打ち消す */
+.ProseMirror pre {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--color-panel-2);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-lg);
+  padding: 0.875rem;
+}
+
+.ProseMirror pre code {
+  background: none;
+  color: inherit;
+  padding: 0;
+  border-radius: 0;
+}
+
+.ProseMirror blockquote {
+  border-left: 2px solid var(--color-line);
+  padding-left: 0.75rem;
+  color: var(--color-ink-faint);
+}
+
+.ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--color-line);
+  margin: 1.5rem 0;
+}
+
+/* wikilinkは下線スタイル(旧[[ ]]疑似要素表示は廃止) */
 .ProseMirror .wikilink {
-  color: #4a72b8;
+  color: var(--color-accent);
+  font-weight: 500;
+  border-bottom: 1px solid var(--color-accent-border);
   cursor: pointer;
-}
-
-.ProseMirror .wikilink::before {
-  content: '[[';
-  opacity: 0.4;
-}
-
-.ProseMirror .wikilink::after {
-  content: ']]';
-  opacity: 0.4;
 }
 
 .ProseMirror .obsidian-embed {
-  background: #f0f4fa;
+  background: var(--color-panel-2);
   border-radius: 3px;
   padding: 0 0.25em;
-  color: #4a72b8;
+  color: var(--color-accent);
 }
 
 .ProseMirror pre.raw-block {
-  background: #f6f6f6;
-  border-left: 3px solid #bbb;
+  background: var(--color-panel-2);
+  border-left: 3px solid var(--color-line-strong);
   padding: 0.5em 0.75em;
-  color: #555;
+  color: var(--color-ink-faint);
 }
 
 .code-block-view .mermaid-container {
-  border: 1px solid #dde4ee;
-  border-radius: 6px;
-  padding: 0.75em;
-  background: #fbfcff;
+  position: relative;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-xl);
+  padding: 1.75rem 1rem 1rem;
+  background: var(--color-panel);
   cursor: pointer;
   text-align: center;
+}
+
+/* Mermaidブロックのヘッダラベル(デザインhandoff components.md)。
+   ::beforeのみで実現し、code-block-view.tsxのロジック・classNameは変更しない */
+.code-block-view.is-mermaid .mermaid-container::before {
+  content: 'mermaid';
+  position: absolute;
+  top: 0.5rem;
+  left: 1rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-ink-faint);
 }
 
 .code-block-view .mermaid-preview svg {
@@ -99,27 +195,37 @@
 }
 
 .code-block-view .mermaid-error {
-  color: #b3261e;
-  background: #fdf0ef;
-  border-radius: 4px;
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+  border-radius: var(--radius);
   padding: 0.5em 0.75em;
   font-size: 0.85em;
   text-align: left;
 }
 
 .code-block-view .mermaid-loading {
-  color: #888;
+  color: var(--color-ink-faint);
   font-size: 0.85em;
 }
 
 .ProseMirror table {
   border-collapse: collapse;
+  width: 100%;
+  font-size: var(--text-sm);
 }
 
-.ProseMirror th,
+.ProseMirror th {
+  background: var(--color-panel-2);
+  border: 1px solid var(--color-line);
+  padding: 0.5em 0.75em;
+  text-align: left;
+  color: var(--color-ink);
+}
+
 .ProseMirror td {
-  border: 1px solid #ccc;
-  padding: 0.25em 0.5em;
+  border: 1px solid var(--color-line);
+  padding: 0.5em 0.75em;
+  color: var(--color-ink-soft);
 }
 
 .ProseMirror ul[data-type='taskList'] {
@@ -130,13 +236,14 @@
 .ProseMirror ul[data-type='taskList'] li {
   display: flex;
   gap: 0.4em;
+  color: var(--color-ink-soft);
 }
 
 .ProseMirror .obsidian-embed-image img,
 .ProseMirror .tiptap-image img {
   max-width: 100%;
   height: auto;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 /* wikilink入力補完のポップアップ(document.bodyへ直接追加される自作コンポーネント) */
@@ -146,10 +253,10 @@
   min-width: 180px;
   max-height: 240px;
   overflow-y: auto;
-  background: #fff;
-  border: 1px solid #dde4ee;
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
   padding: 0.25em 0;
 }
 
@@ -159,19 +266,22 @@
   text-align: left;
   padding: 0.35em 0.75em;
   font-size: 0.9em;
-  color: #333;
+  color: var(--color-ink-soft);
   background: none;
   border: none;
   cursor: pointer;
 }
 
-.wikilink-suggestion-item.is-selected,
+.wikilink-suggestion-item.is-selected {
+  background: var(--color-active);
+}
+
 .wikilink-suggestion-item:hover {
-  background: #f0f4fa;
+  background: var(--color-hoverbg);
 }
 
 .wikilink-suggestion-empty {
   padding: 0.35em 0.75em;
   font-size: 0.85em;
-  color: #999;
+  color: var(--color-ink-faint);
 }

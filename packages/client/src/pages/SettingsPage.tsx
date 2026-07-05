@@ -4,7 +4,7 @@ import { ApiRequestError } from '../api/client';
 import { changeMyPassword } from '../api/users';
 import { useToastStore } from '../stores/toast';
 
-// 個人設定画面(SC-06)。アカウント情報表示とパスワード変更
+// 個人設定画面(SC-06・デザインhandoff components.md)。アカウント情報表示とパスワード変更
 
 export function SettingsPage() {
   const { data: currentUser } = useMe();
@@ -39,64 +39,64 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-bold text-gray-800">個人設定</h1>
+    <div className="mx-auto max-w-[760px] p-8">
+      <h1 className="text-h1 font-bold text-ink">個人設定</h1>
 
       {currentUser && (
-        <div className="mt-4 max-w-sm rounded border border-gray-200 p-4 text-sm">
+        <div className="mt-4 max-w-sm rounded border border-line bg-panel p-4 text-sm">
           <dl className="space-y-1">
             <div className="flex gap-2">
-              <dt className="w-20 flex-shrink-0 text-gray-500">ユーザーID</dt>
-              <dd className="text-gray-800">{currentUser.username}</dd>
+              <dt className="w-20 flex-shrink-0 text-ink-faint">ユーザーID</dt>
+              <dd className="text-ink">{currentUser.username}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="w-20 flex-shrink-0 text-gray-500">表示名</dt>
-              <dd className="text-gray-800">{currentUser.displayName}</dd>
+              <dt className="w-20 flex-shrink-0 text-ink-faint">表示名</dt>
+              <dd className="text-ink">{currentUser.displayName}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="w-20 flex-shrink-0 text-gray-500">ロール</dt>
-              <dd className="text-gray-800">{currentUser.role === 'admin' ? '管理者' : '一般'}</dd>
+              <dt className="w-20 flex-shrink-0 text-ink-faint">ロール</dt>
+              <dd className="text-ink">{currentUser.role === 'admin' ? '管理者' : '一般'}</dd>
             </div>
           </dl>
         </div>
       )}
 
       <form onSubmit={handleSubmit} className="mt-6 max-w-sm space-y-3">
-        <h2 className="text-sm font-bold text-gray-700">パスワード変更</h2>
+        <h2 className="text-sm font-bold text-ink">パスワード変更</h2>
 
-        <label className="block text-sm text-gray-700">
+        <label className="block text-sm text-ink-soft">
           現在のパスワード
           <input
             type="password"
             autoComplete="current-password"
             value={currentPassword}
             onChange={(e) => setCurrentPassword(e.target.value)}
-            className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm"
+            className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
           />
         </label>
-        <label className="block text-sm text-gray-700">
+        <label className="block text-sm text-ink-soft">
           新しいパスワード
           <input
             type="password"
             autoComplete="new-password"
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
-            className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm"
+            className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
           />
         </label>
-        <label className="block text-sm text-gray-700">
+        <label className="block text-sm text-ink-soft">
           新しいパスワード(確認)
           <input
             type="password"
             autoComplete="new-password"
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
-            className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm"
+            className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
           />
         </label>
 
         {error && (
-          <p data-testid="password-error" className="text-sm text-red-600">
+          <p data-testid="password-error" className="text-sm text-danger">
             {error}
           </p>
         )}
@@ -104,7 +104,7 @@ export function SettingsPage() {
         <button
           type="submit"
           disabled={submitting}
-          className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-60"
+          className="rounded bg-accent px-4 py-2 text-sm text-white hover:bg-accent-hover disabled:opacity-60"
         >
           変更する
         </button>

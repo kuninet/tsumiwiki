@@ -15,12 +15,16 @@ interface UIState {
   sidebarTab: SidebarTab;
   expandedFolders: Set<string>;
   selectedTags: string[];
+  // AppShellのサイドバーフッター「+ 新規文書」から FolderTree の新規文書ダイアログを
+  // 開かせるためのnonce(FolderTreeマウント側がuseEffectで拾ってダイアログを開く)
+  createDocRequestNonce: number;
   setSidebarWidth: (width: number) => void;
   toggleSidebarCollapsed: () => void;
   setSidebarTab: (tab: SidebarTab) => void;
   toggleFolderExpanded: (path: string) => void;
   toggleTag: (tag: string) => void;
   clearTags: () => void;
+  requestCreateDoc: () => void;
 }
 
 function clampSidebarWidth(width: number): number {
@@ -33,6 +37,7 @@ export const useUIStore = create<UIState>((set) => ({
   sidebarTab: 'folder',
   expandedFolders: new Set(),
   selectedTags: [],
+  createDocRequestNonce: 0,
   setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
@@ -53,4 +58,6 @@ export const useUIStore = create<UIState>((set) => ({
         : [...s.selectedTags, tag],
     })),
   clearTags: () => set({ selectedTags: [] }),
+  requestCreateDoc: () =>
+    set((s) => ({ sidebarTab: 'folder', createDocRequestNonce: s.createDocRequestNonce + 1 })),
 }));

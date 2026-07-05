@@ -10,13 +10,15 @@ import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
 import { docUrl } from '../lib/doc-path';
 import { resolveWikilink } from '../lib/resolve-wikilink';
+import { saveBadge } from '../lib/save-badge';
+import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
 import { ConfirmDialog } from './ConfirmDialog';
 import { EditorToolbar } from './EditorToolbar';
 import { HistoryPanel } from './HistoryPanel';
 import { PromptDialog } from './PromptDialog';
 
-// 文書閲覧・編集画面(SC-02のMainPane。設計04章4.2/4.4・05章5.3〜5.5)
+// 文書閲覧・編集画面(SC-02のMainPane。設計04章4.2/4.4・05章5.3〜5.5・デザインhandoff components.md)
 // 閲覧・編集は同じTiptapインスタンスのeditable切り替えで実現し、表示を完全一致させる
 
 interface DocViewProps {
@@ -34,6 +36,12 @@ function folderOfPath(path: string): string {
   return idx === -1 ? '' : path.slice(0, idx);
 }
 
+// パンくず用: フォルダ階層のセグメント一覧(ファイル名は含まない)
+function breadcrumbFromPath(path: string): string[] {
+  const folder = folderOfPath(path);
+  return folder ? folder.split('/') : [];
+}
+
 function parseTagsInput(input: string): string[] {
   return [...new Set(input.split(',').map((t) => t.trim()).filter(Boolean))];
 }
@@ -48,6 +56,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
 
   const navigate = useNavigate();
   const showToast = useToastStore((s) => s.show);
+  const setLockedByOtherName = useEditStore((s) => s.setLockedByOtherName);
   const { data: tree } = useTree();
 
   const wikilinkDocsRef = useRef<DocSummary[]>([]);
@@ -138,6 +147,12 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   }, []);
 
   const lockedByOther = doc.lock && doc.lock.userId !== currentUser.id ? doc.lock : null;
+
+  // StatusBar(AppShell)に他者ロック状況を伝える
+  useEffect(() => {
+    setLockedByOtherName(lockedByOther?.displayName ?? null);
+    return () => setLockedByOtherName(null);
+  }, [lockedByOther?.displayName, setLockedByOtherName]);
 
   function handleStartEdit() {
     setTagsInput(doc.tags.join(', '));
@@ -252,15 +267,29 @@ export function DocView({ doc, currentUser }: DocViewProps) {
     }
   }
 
+  const breadcrumb = breadcrumbFromPath(doc.path);
+  const badge = saveBadge(session.dirty, session.lastDraftSavedAt);
+
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-start justify-between border-b border-gray-200 px-6 py-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800">{titleFromPath(doc.path)}</h1>
-          <p className="mt-1 text-sm text-gray-500">
+    <div className="flex h-full flex-col bg-canvas">
+      <div className="flex items-start justify-between px-4 pb-4 pt-5 sm:px-6 lg:px-8">
+        <div className="min-w-0">
+          {breadcrumb.length > 0 && (
+            <nav className="truncate text-xs text-ink-faint">
+              {breadcrumb.map((segment, i) => (
+                <span key={i}>
+                  {i > 0 && <span className="mx-1">›</span>}
+                  {segment}
+                </span>
+              ))}
+            </nav>
+          )}
+          <h1 className="mt-1 truncate text-h1 text-ink">{titleFromPath(doc.path)}</h1>
+          <p className="mt-1 text-xs text-ink-faint">
             更新日時: {doc.updatedAt}
+            <span className={`ml-2 font-medium ${badge.className}`}>{badge.label}</span>
             {lockedByOther && (
-              <span className="ml-2 text-amber-600">{lockedByOther.displayName}さんが編集中</span>
+              <span className="ml-2 text-warning">{lockedByOther.displayName}さんが編集中</span>
             )}
           </p>
         </div>
@@ -270,34 +299,35 @@ export function DocView({ doc, currentUser }: DocViewProps) {
             onClick={() => setHistoryVisible(true)}
             disabled={session.mode === 'edit'}
             title={session.mode === 'edit' ? '編集中は使用できません' : undefined}
-            className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-[30px] rounded border border-line px-3 text-sm text-ink-soft hover:bg-hoverbg disabled:cursor-not-allowed disabled:opacity-50"
           >
-            履歴
+            <span aria-hidden="true">⟲</span> 履歴
           </button>
           {session.mode === 'view' ? (
             <button
               type="button"
               onClick={handleStartEdit}
               disabled={!!lockedByOther}
-              className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              title={lockedByOther ? `${lockedByOther.displayName}さんが編集中です` : undefined}
+              className="h-8 rounded bg-accent px-3 text-sm text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
-              編集
+              <span aria-hidden="true">✎</span> 編集
             </button>
           ) : (
             <>
               <button
                 type="button"
                 onClick={handleCancelClick}
-                className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                className="h-[30px] rounded border border-line px-3 text-sm text-ink-soft hover:bg-hoverbg"
               >
                 キャンセル
               </button>
               <button
                 type="button"
                 onClick={handleSave}
-                className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+                className="h-8 rounded bg-success px-3 text-sm text-white hover:bg-success-hover"
               >
-                保存
+                <span aria-hidden="true">✓</span> 保存
               </button>
             </>
           )}
@@ -313,20 +343,24 @@ export function DocView({ doc, currentUser }: DocViewProps) {
       )}
 
       {session.mode === 'edit' && (
-        <div className="border-b border-gray-200 px-6 py-2">
-          <label className="block text-xs text-gray-500">
+        <div className="border-b border-line px-4 py-2 sm:px-6 lg:px-8">
+          <label className="block text-xs text-ink-faint">
             タグ(カンマ区切り)
             <input
               value={tagsInput}
               onChange={(e) => handleTagsInputChange(e.target.value)}
-              className="mt-1 block w-full rounded border border-gray-300 px-2 py-1 text-sm text-gray-800"
+              className="mt-1 block w-full rounded border border-line bg-panel-2 px-2 py-1 text-sm text-ink"
             />
           </label>
         </div>
       )}
 
-      <div className="flex-1 overflow-auto px-6 py-4" onClick={handleContainerClick}>
-        <EditorContent editor={editor} />
+      <div className="flex-1 overflow-auto" onClick={handleContainerClick}>
+        {/* コンテンツ幅は最大760pxで、狭くなるにつれ padding→本文ブロック順に自動追従する。
+            記事幅がビューポート幅を超えないよう `max-w-full` を保険で入れる */}
+        <div className="mx-auto max-w-[min(760px,100%)] px-4 py-4 sm:px-6 lg:px-8">
+          <EditorContent editor={editor} />
+        </div>
       </div>
 
       {session.draftPrompt && (
@@ -335,6 +369,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
           message="未保存の下書きがあります。復元しますか?"
           confirmLabel="復元"
           cancelLabel="破棄"
+          variant="primary"
           onConfirm={handleRestoreDraft}
           onCancel={() => void session.discardDraftPrompt()}
         />

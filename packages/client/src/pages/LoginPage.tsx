@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ApiRequestError } from '../api/client';
 import { useLogin } from '../api/auth';
 
-// ログイン画面(SC-01・設計04章4.2)
+// ログイン画面(SC-01・設計04章4.2・デザインhandoff components.md)
 
 export function LoginPage() {
   const usernameId = useId();
@@ -32,16 +32,25 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50">
+    <div className="flex min-h-screen items-center justify-center bg-canvas font-sans">
       <form
         onSubmit={handleSubmit}
-        className="w-80 rounded-lg border border-gray-200 bg-white p-8 shadow-sm"
+        className="w-80 rounded-lg border border-line bg-panel p-8 shadow"
       >
-        <h1 className="mb-6 text-center text-2xl font-bold text-gray-800">TsumiWiki</h1>
+        <div className="mb-6 flex flex-col items-center gap-2">
+          <span
+            aria-hidden="true"
+            style={{ background: 'var(--tw-accent-gradient)' }}
+            className="flex h-[26px] w-[26px] items-center justify-center rounded text-sm font-bold text-white"
+          >
+            積
+          </span>
+          <h1 className="text-h1 font-bold text-ink">TsumiWiki</h1>
+        </div>
 
         <div className="space-y-4">
           <div>
-            <label htmlFor={usernameId} className="block text-sm font-medium text-gray-700">
+            <label htmlFor={usernameId} className="block text-sm font-medium text-ink-soft">
               ユーザーID
             </label>
             <input
@@ -50,11 +59,11 @@ export function LoginPage() {
               autoComplete="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
             />
           </div>
           <div>
-            <label htmlFor={passwordId} className="block text-sm font-medium text-gray-700">
+            <label htmlFor={passwordId} className="block text-sm font-medium text-ink-soft">
               パスワード
             </label>
             <input
@@ -63,13 +72,13 @@ export function LoginPage() {
               autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
             />
           </div>
         </div>
 
         {errorMessage && (
-          <p data-testid="login-error" className="mt-4 text-sm text-red-600">
+          <p data-testid="login-error" className="mt-4 text-sm text-danger">
             {errorMessage}
           </p>
         )}
@@ -77,7 +86,7 @@ export function LoginPage() {
         <button
           type="submit"
           disabled={login.isPending}
-          className="mt-6 w-full rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+          className="mt-6 w-full rounded bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-60"
         >
           ログイン
         </button>

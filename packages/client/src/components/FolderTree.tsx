@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { type MouseEvent, useState } from 'react';
+import { type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   docQueryKey,
@@ -20,8 +20,8 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { PromptDialog } from './PromptDialog';
 
 
-// フォルダツリー(設計04章4.2)。ルート・フォルダ・文書の右クリックメニューから
-// 新規作成・リネーム・削除を行う
+// フォルダツリー(設計04章4.2・デザインhandoff components.md)。ルート・フォルダ・文書の
+// 右クリックメニューから新規作成・リネーム・削除を行う。キーボード操作にも対応する
 
 type MenuTarget =
   | { type: 'root' }
@@ -40,6 +40,28 @@ type ConfirmState =
   | { kind: 'deleteFolder'; path: string; name: string }
   | null;
 
+interface FlatEntry {
+  node: TreeNode;
+  depth: number;
+  parentPath: string | null;
+}
+
+function flattenVisible(
+  nodes: TreeNode[],
+  expandedFolders: Set<string>,
+  depth = 0,
+  parentPath: string | null = null,
+): FlatEntry[] {
+  const result: FlatEntry[] = [];
+  for (const node of nodes) {
+    result.push({ node, depth, parentPath });
+    if (node.type === 'folder' && expandedFolders.has(node.path)) {
+      result.push(...flattenVisible(node.children, expandedFolders, depth + 1, node.path));
+    }
+  }
+  return result;
+}
+
 export function FolderTree() {
   const { data: tree } = useTree();
   const navigate = useNavigate();
@@ -49,6 +71,15 @@ export function FolderTree() {
 
   const expandedFolders = useUIStore((s) => s.expandedFolders);
   const toggleFolderExpanded = useUIStore((s) => s.toggleFolderExpanded);
+  const createDocRequestNonce = useUIStore((s) => s.createDocRequestNonce);
+
+  // AppShellのサイドバーフッター「+ 新規文書」の要求を拾ってルート直下の新規文書ダイアログを開く
+  useEffect(() => {
+    if (createDocRequestNonce > 0) {
+      setDialog({ kind: 'createDoc', folder: '' });
+    }
+    // 初期nonce=0では発火しない。以降は変化のたびにダイアログを再表示する
+  }, [createDocRequestNonce]);
 
   const createDoc = useCreateDoc();
   const createFolder = useCreateFolder();
@@ -60,8 +91,22 @@ export function FolderTree() {
   const [menu, setMenu] = useState<{ x: number; y: number; target: MenuTarget } | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
+  const [focusedPath, setFocusedPath] = useState<string | null>(null);
+
+  const rowRefs = useRef(new Map<string, HTMLButtonElement>());
 
   const nodes = tree ? buildTree(tree) : [];
+  const flat = useMemo(() => flattenVisible(nodes, expandedFolders), [nodes, expandedFolders]);
+
+  function registerRow(path: string, el: HTMLButtonElement | null) {
+    if (el) rowRefs.current.set(path, el);
+    else rowRefs.current.delete(path);
+  }
+
+  function focusEntry(path: string) {
+    setFocusedPath(path);
+    rowRefs.current.get(path)?.focus();
+  }
 
   function openMenu(e: MouseEvent, target: MenuTarget) {
     e.preventDefault();
@@ -154,39 +199,112 @@ export function FolderTree() {
     navigate(docUrl(path));
   }
 
+  // キーボード操作(デザインhandoff components.md): ↑/↓移動・→展開・←折りたたみ・
+  // Enter開く・F2リネーム・Deleteごみ箱
+  function handleRowKeyDown(e: KeyboardEvent, entry: FlatEntry) {
+    const idx = flat.findIndex((f) => f.node.path === entry.node.path);
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const next = flat[idx + 1];
+      if (next) focusEntry(next.node.path);
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const prev = flat[idx - 1];
+      if (prev) focusEntry(prev.node.path);
+      return;
+    }
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      if (entry.node.type !== 'folder') return;
+      if (!expandedFolders.has(entry.node.path)) {
+        toggleFolderExpanded(entry.node.path);
+      } else {
+        const next = flat[idx + 1];
+        if (next && next.parentPath === entry.node.path) focusEntry(next.node.path);
+      }
+      return;
+    }
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      if (entry.node.type === 'folder' && expandedFolders.has(entry.node.path)) {
+        toggleFolderExpanded(entry.node.path);
+      } else if (entry.parentPath) {
+        focusEntry(entry.parentPath);
+      }
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (entry.node.type === 'doc') {
+        handleNavigateToDoc(entry.node.path);
+      } else {
+        toggleFolderExpanded(entry.node.path);
+      }
+      return;
+    }
+    if (e.key === 'F2') {
+      e.preventDefault();
+      if (entry.node.type === 'folder') {
+        setDialog({ kind: 'renameFolder', path: entry.node.path, name: entry.node.name });
+      } else {
+        setDialog({
+          kind: 'renameDoc',
+          path: entry.node.path,
+          folder: parentOf(entry.node.path),
+          title: entry.node.title,
+        });
+      }
+      return;
+    }
+    if (e.key === 'Delete') {
+      e.preventDefault();
+      if (entry.node.type === 'folder') {
+        setConfirm({ kind: 'deleteFolder', path: entry.node.path, name: entry.node.name });
+      } else {
+        setConfirm({ kind: 'deleteDoc', path: entry.node.path, title: entry.node.title });
+      }
+    }
+  }
+
+  const activeFocusPath = focusedPath ?? flat[0]?.node.path ?? null;
+
   return (
-    <div
-      className="min-h-full p-2"
-      onContextMenu={(e) => openMenu(e, { type: 'root' })}
-    >
+    <div className="min-h-full p-2" onContextMenu={(e) => openMenu(e, { type: 'root' })}>
       <div className="mb-2 flex gap-2">
         <button
           type="button"
           onClick={() => setDialog({ kind: 'createDoc', folder: '' })}
-          className="flex-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100"
+          className="flex-1 rounded border border-line px-2 py-1 text-xs text-ink-soft hover:bg-hoverbg"
         >
           +文書
         </button>
         <button
           type="button"
           onClick={() => setDialog({ kind: 'createFolder', parent: '' })}
-          className="flex-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100"
+          className="flex-1 rounded border border-line px-2 py-1 text-xs text-ink-soft hover:bg-hoverbg"
         >
           +フォルダ
         </button>
       </div>
 
-      <ul>
+      <ul role="tree">
         {nodes.map((node) => (
           <TreeItem
             key={node.path}
             node={node}
             depth={0}
+            parentPath={null}
             currentPath={currentPath}
             expandedFolders={expandedFolders}
+            activeFocusPath={activeFocusPath}
             onToggle={toggleFolderExpanded}
             onNavigate={handleNavigateToDoc}
             onContextMenu={openMenu}
+            onKeyDown={handleRowKeyDown}
+            registerRow={registerRow}
           />
         ))}
       </ul>
@@ -262,50 +380,70 @@ export function FolderTree() {
 interface TreeItemProps {
   node: TreeNode;
   depth: number;
+  parentPath: string | null;
   currentPath: string | undefined;
   expandedFolders: Set<string>;
+  activeFocusPath: string | null;
   onToggle: (path: string) => void;
   onNavigate: (path: string) => void;
   onContextMenu: (e: MouseEvent, target: MenuTarget) => void;
+  onKeyDown: (e: KeyboardEvent, entry: FlatEntry) => void;
+  registerRow: (path: string, el: HTMLButtonElement | null) => void;
 }
 
 function TreeItem({
   node,
   depth,
+  parentPath,
   currentPath,
   expandedFolders,
+  activeFocusPath,
   onToggle,
   onNavigate,
   onContextMenu,
+  onKeyDown,
+  registerRow,
 }: TreeItemProps) {
   const indent = { paddingLeft: `${depth * 16 + 8}px` };
+  const entry: FlatEntry = { node, depth, parentPath };
+  const isFocusTarget = node.path === activeFocusPath;
 
   if (node.type === 'folder') {
     const expanded = expandedFolders.has(node.path);
     return (
-      <li>
+      <li role="none">
         <button
           type="button"
+          role="treeitem"
+          aria-expanded={expanded}
+          tabIndex={isFocusTarget ? 0 : -1}
+          ref={(el) => registerRow(node.path, el)}
           style={indent}
           onClick={() => onToggle(node.path)}
+          onKeyDown={(e) => onKeyDown(e, entry)}
           onContextMenu={(e) => onContextMenu(e, { type: 'folder', path: node.path, name: node.name })}
-          className="flex w-full items-center gap-1 py-1 text-left text-sm text-gray-700 hover:bg-gray-100"
+          className="flex h-[30px] w-full items-center gap-1 px-2 text-left text-sm text-ink-soft hover:bg-hoverbg focus:outline-none focus-visible:bg-active"
         >
-          <span className="inline-block w-3">{expanded ? '▾' : '▸'}</span>
-          {node.name}
+          <span className="inline-block w-3 text-ink-faint">{expanded ? '▾' : '▸'}</span>
+          <span aria-hidden="true">📂</span>
+          <span className="truncate">{node.name}</span>
         </button>
         {expanded && (
-          <ul>
+          <ul role="group">
             {node.children.map((child) => (
               <TreeItem
                 key={child.path}
                 node={child}
                 depth={depth + 1}
+                parentPath={node.path}
                 currentPath={currentPath}
                 expandedFolders={expandedFolders}
+                activeFocusPath={activeFocusPath}
                 onToggle={onToggle}
                 onNavigate={onNavigate}
                 onContextMenu={onContextMenu}
+                onKeyDown={onKeyDown}
+                registerRow={registerRow}
               />
             ))}
           </ul>
@@ -316,20 +454,26 @@ function TreeItem({
 
   const isCurrent = currentPath === node.path;
   return (
-    <li>
+    <li role="none">
       <button
         type="button"
+        role="treeitem"
+        tabIndex={isFocusTarget ? 0 : -1}
+        ref={(el) => registerRow(node.path, el)}
         style={indent}
         onClick={() => onNavigate(node.path)}
+        onKeyDown={(e) => onKeyDown(e, entry)}
         onContextMenu={(e) =>
           onContextMenu(e, { type: 'doc', path: node.path, folder: parentOf(node.path), title: node.title })
         }
         data-testid={`doc-${node.path}`}
-        className={`block w-full truncate py-1 text-left text-sm ${
-          isCurrent ? 'bg-blue-50 font-medium text-blue-700' : 'text-gray-700 hover:bg-gray-100'
+        className={`flex h-[30px] w-full items-center gap-1 px-2 text-left text-sm focus:outline-none focus-visible:bg-active ${
+          isCurrent ? 'bg-active font-semibold text-accent' : 'text-ink-soft hover:bg-hoverbg'
         }`}
       >
-        {node.title}
+        <span className="inline-block w-3" aria-hidden="true" />
+        <span aria-hidden="true">📄</span>
+        <span className="truncate">{node.title}</span>
       </button>
     </li>
   );

@@ -1,8 +1,10 @@
 import { create } from 'zustand';
 
-// 簡易トースト通知の状態(設計04章4.6)。成功/エラーの2種、3秒で自動消去する
+// トースト通知の状態(設計04章4.6・デザインhandoff components.md)。
+// success/info/warning/error(=danger表示)の4種。error以外は3秒で自動消去、
+// errorは手動クローズのみ(ユーザーが見逃さないよう)
 
-export type ToastKind = 'success' | 'error';
+export type ToastKind = 'success' | 'info' | 'warning' | 'error';
 
 interface ToastEntry {
   id: number;

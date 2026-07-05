@@ -26,19 +26,19 @@ export function TrashPage() {
   }
 
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-bold text-gray-800">ごみ箱</h1>
+    <div className="mx-auto max-w-[960px] p-8">
+      <h1 className="text-h1 font-bold text-ink">ごみ箱</h1>
 
-      {isLoading && <p className="mt-4 text-sm text-gray-500">読み込み中...</p>}
+      {isLoading && <p className="mt-4 text-sm text-ink-faint">読み込み中...</p>}
 
       {!isLoading && (entries ?? []).length === 0 && (
-        <p className="mt-4 text-sm text-gray-500">ごみ箱は空です</p>
+        <p className="mt-4 text-sm text-ink-faint">ごみ箱は空です</p>
       )}
 
       {!isLoading && (entries ?? []).length > 0 && (
         <table className="mt-4 w-full text-left text-sm">
           <thead>
-            <tr className="border-b border-gray-200 text-gray-500">
+            <tr className="border-b border-line text-ink-faint">
               <th className="py-2 font-medium">名前</th>
               <th className="py-2 font-medium">元のパス</th>
               <th className="py-2 font-medium">削除日時</th>
@@ -48,19 +48,19 @@ export function TrashPage() {
           </thead>
           <tbody>
             {(entries ?? []).map((entry) => (
-              <tr key={entry.trashPath} className="border-b border-gray-100">
-                <td className="py-2 text-gray-800">
+              <tr key={entry.trashPath} className="border-b border-line">
+                <td className="py-2 text-ink">
                   {entry.isFolder ? '📁 ' : ''}
                   {entry.name}
                 </td>
-                <td className="py-2 text-gray-500">{entry.originalPath ?? '不明'}</td>
-                <td className="py-2 text-gray-500">{formatDateTime(entry.deletedAt)}</td>
-                <td className="py-2 text-gray-500">{entry.deletedBy ?? '不明'}</td>
+                <td className="py-2 text-ink-faint">{entry.originalPath ?? '不明'}</td>
+                <td className="py-2 text-ink-faint">{formatDateTime(entry.deletedAt)}</td>
+                <td className="py-2 text-ink-faint">{entry.deletedBy ?? '不明'}</td>
                 <td className="py-2 text-right">
                   <button
                     type="button"
                     onClick={() => restoreTrash.mutate(entry.trashPath)}
-                    className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100"
+                    className="rounded border border-line px-2 py-1 text-xs text-ink-soft hover:bg-hoverbg"
                   >
                     復元
                   </button>
@@ -68,7 +68,7 @@ export function TrashPage() {
                     <button
                       type="button"
                       onClick={() => setPurgeTarget(entry)}
-                      className="ml-2 rounded border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                      className="ml-2 rounded border border-danger/40 px-2 py-1 text-xs text-danger hover:bg-danger/10"
                     >
                       完全削除
                     </button>

@@ -48,7 +48,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       ref={menuRef}
       role="menu"
       style={{ left: position.x, top: position.y }}
-      className="fixed z-50 min-w-[160px] rounded border border-gray-200 bg-white py-1 text-sm shadow-lg"
+      className="fixed z-[50] min-w-[160px] rounded border border-line bg-panel py-1 text-sm text-ink shadow-lg"
       onClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.stopPropagation()}
     >
@@ -61,8 +61,8 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
             item.onSelect();
             onClose();
           }}
-          className={`block w-full px-3 py-1.5 text-left hover:bg-gray-100 ${
-            item.danger ? 'text-red-600' : 'text-gray-700'
+          className={`block w-full px-3 py-1.5 text-left hover:bg-hoverbg ${
+            item.danger ? 'text-danger' : 'text-ink-soft'
           }`}
         >
           {item.label}

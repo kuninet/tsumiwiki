@@ -5,7 +5,8 @@ import { useCreateUser, useUpdateUser, useUsers } from '../api/users';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { PromptDialog } from '../components/PromptDialog';
 
-// ユーザー管理画面(SC-05・FR-AUTH-02)。adminのみアクセス可能(ルーティング側でガード済み)
+// ユーザー管理画面(SC-05・FR-AUTH-02・デザインhandoff components.md)。
+// adminのみアクセス可能(ルーティング側でガード済み)
 
 type PromptTarget =
   | { kind: 'displayName'; id: number; current: string }
@@ -34,42 +35,46 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-      <form onSubmit={handleSubmit} className="w-96 rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="mb-4 text-lg font-bold text-gray-800">ユーザー追加</h2>
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+    >
+      <form onSubmit={handleSubmit} className="w-96 rounded-lg border border-line bg-panel p-6 shadow-lg">
+        <h2 className="mb-4 text-base font-bold text-ink">ユーザー追加</h2>
 
-        <label className="block text-sm font-medium text-gray-700">
+        <label className="block text-sm font-medium text-ink-soft">
           ユーザーID
           <input
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm"
+            className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
           />
         </label>
-        <label className="mt-3 block text-sm font-medium text-gray-700">
+        <label className="mt-3 block text-sm font-medium text-ink-soft">
           表示名
           <input
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
-            className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm"
+            className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
           />
         </label>
-        <label className="mt-3 block text-sm font-medium text-gray-700">
+        <label className="mt-3 block text-sm font-medium text-ink-soft">
           パスワード
           <input
             type="password"
             autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm"
+            className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
           />
         </label>
-        <label className="mt-3 block text-sm font-medium text-gray-700">
+        <label className="mt-3 block text-sm font-medium text-ink-soft">
           ロール
           <select
             value={role}
             onChange={(e) => setRole(e.target.value as UserRole)}
-            className="mt-1 w-full rounded border border-gray-300 px-3 py-2 text-sm"
+            className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
           >
             <option value="user">一般</option>
             <option value="admin">管理者</option>
@@ -77,7 +82,7 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
         </label>
 
         {error && (
-          <p data-testid="create-user-error" className="mt-3 text-sm text-red-600">
+          <p data-testid="create-user-error" className="mt-3 text-sm text-danger">
             {error}
           </p>
         )}
@@ -86,13 +91,13 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+            className="rounded border border-line px-3 py-1.5 text-sm text-ink-soft hover:bg-hoverbg"
           >
             キャンセル
           </button>
           <button
             type="submit"
-            className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+            className="rounded bg-accent px-3 py-1.5 text-sm text-white hover:bg-accent-hover"
           >
             追加
           </button>
@@ -147,24 +152,24 @@ export function AdminUsersPage() {
   }
 
   return (
-    <div className="p-6">
+    <div className="mx-auto max-w-[960px] p-8">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-gray-800">ユーザー管理</h1>
+        <h1 className="text-h1 font-bold text-ink">ユーザー管理</h1>
         <button
           type="button"
           onClick={() => setCreateDialogVisible(true)}
-          className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+          className="rounded bg-accent px-3 py-1.5 text-sm text-white hover:bg-accent-hover"
         >
           ユーザー追加
         </button>
       </div>
 
-      {isLoading && <p className="mt-4 text-sm text-gray-500">読み込み中...</p>}
+      {isLoading && <p className="mt-4 text-sm text-ink-faint">読み込み中...</p>}
 
       {!isLoading && (
         <table className="mt-4 w-full text-left text-sm">
           <thead>
-            <tr className="border-b border-gray-200 text-gray-500">
+            <tr className="border-b border-line text-ink-faint">
               <th className="py-2 font-medium">ID</th>
               <th className="py-2 font-medium">ユーザーID</th>
               <th className="py-2 font-medium">表示名</th>
@@ -179,12 +184,12 @@ export function AdminUsersPage() {
               const disablingIsSelf = isSelf && !user.disabled;
               const demotingIsSelf = isSelf && user.role === 'admin';
               return (
-                <tr key={user.id} className="border-b border-gray-100">
-                  <td className="py-2 text-gray-500">{user.id}</td>
-                  <td className="py-2 text-gray-800">{user.username}</td>
-                  <td className="py-2 text-gray-800">{user.displayName}</td>
-                  <td className="py-2 text-gray-500">{user.role === 'admin' ? '管理者' : '一般'}</td>
-                  <td className="py-2 text-gray-500">{user.disabled ? '無効' : '有効'}</td>
+                <tr key={user.id} className="border-b border-line">
+                  <td className="py-2 text-ink-faint">{user.id}</td>
+                  <td className="py-2 text-ink">{user.username}</td>
+                  <td className="py-2 text-ink">{user.displayName}</td>
+                  <td className="py-2 text-ink-faint">{user.role === 'admin' ? '管理者' : '一般'}</td>
+                  <td className="py-2 text-ink-faint">{user.disabled ? '無効' : '有効'}</td>
                   <td className="py-2 text-right">
                     <div className="flex justify-end gap-1.5">
                       <button
@@ -192,7 +197,7 @@ export function AdminUsersPage() {
                         onClick={() =>
                           setPromptTarget({ kind: 'displayName', id: user.id, current: user.displayName })
                         }
-                        className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100"
+                        className="rounded border border-line px-2 py-1 text-xs text-ink-soft hover:bg-hoverbg"
                       >
                         表示名変更
                       </button>
@@ -201,7 +206,7 @@ export function AdminUsersPage() {
                         onClick={() => handleToggleRole(user)}
                         disabled={demotingIsSelf}
                         title={demotingIsSelf ? '自分自身は変更できません' : undefined}
-                        className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="rounded border border-line px-2 py-1 text-xs text-ink-soft hover:bg-hoverbg disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {user.role === 'admin' ? '降格' : '昇格'}
                       </button>
@@ -210,7 +215,7 @@ export function AdminUsersPage() {
                         onClick={() => handleToggleDisabled(user)}
                         disabled={disablingIsSelf}
                         title={disablingIsSelf ? '自分自身は変更できません' : undefined}
-                        className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="rounded border border-line px-2 py-1 text-xs text-ink-soft hover:bg-hoverbg disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {user.disabled ? '有効化' : '無効化'}
                       </button>
@@ -223,7 +228,7 @@ export function AdminUsersPage() {
                             ? '自分のパスワードは個人設定から変更してください(ここで変更すると全セッションが失効します)'
                             : undefined
                         }
-                        className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="rounded border border-line px-2 py-1 text-xs text-ink-soft hover:bg-hoverbg disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         パスワードリセット
                       </button>

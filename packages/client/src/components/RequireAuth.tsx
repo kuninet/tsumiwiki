@@ -37,7 +37,7 @@ export function RequireAuth() {
         <p>サーバーに接続できません</p>
         <button
           type="button"
-          className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+          className="rounded bg-accent px-4 py-2 text-sm text-white hover:bg-accent-hover"
           onClick={() => void refetch()}
         >
           再試行
