@@ -14,6 +14,7 @@ import { parseDiff } from '../lib/parse-diff';
 import { relativeTime } from '../lib/relative-time';
 import { useToastStore } from '../stores/toast';
 import { ConfirmDialog } from './ConfirmDialog';
+import { DiffView } from './DiffView';
 
 // 履歴パネル(SC-03。設計04章4.3・デザインhandoff components.md)。
 // DocViewの[履歴]ボタンから開く右スライドパネル
@@ -28,15 +29,6 @@ type Tab = 'diff' | 'content';
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString('ja-JP');
 }
-
-const DIFF_LINE_CLASS: Record<string, string> = {
-  add: 'bg-success/10 text-success',
-  // 削除行の背景は handoff 仕様の rgba(220,38,38,0.08) に合わせる
-  del: 'bg-danger/[0.08] text-danger',
-  hunk: 'bg-panel-2 text-ink-faint',
-  meta: 'text-ink-faint',
-  context: 'text-ink-soft',
-};
 
 function titleFromPath(path: string): string {
   const base = path.split('/').pop() ?? path;
@@ -181,15 +173,7 @@ export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
           {tab === 'content' && (
             <pre className="whitespace-pre-wrap text-xs text-ink">{content ?? ''}</pre>
           )}
-          {tab === 'diff' && (
-            <div className="font-mono text-xs">
-              {diffLines.map((line, i) => (
-                <div key={i} className={DIFF_LINE_CLASS[line.type]}>
-                  {line.text || ' '}
-                </div>
-              ))}
-            </div>
-          )}
+          {tab === 'diff' && <DiffView lines={diffLines} />}
         </div>
 
         <div className="flex-shrink-0 border-t border-line p-3">
