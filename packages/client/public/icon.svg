@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    TsumiWiki app icon.
+    Full-bleed background so iOS/Android masks (squircle等)へ綺麗にはまる。
+    「積」= 積み重ね(TsumiWiki の由来)を白で大きく置く。
+    背景は tokens.css のアクセントグラデーションと同じ2色。
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8a7bff"/>
+      <stop offset="1" stop-color="#5b4bd6"/>
+    </linearGradient>
+    <!-- 落ち着いた立体感を出す内側シャドウ -->
+    <linearGradient id="innerShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.10"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 背景(全面塗り) -->
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <rect width="512" height="512" fill="url(#innerShade)"/>
+
+  <!--
+    「積」の文字。iOS/Chrome/Firefox の環境フォントに関係なく同じ字体で見せる
+    ため、実フォントは指定せず path で描く手もあるが、まずは system font に
+    フォールバックしつつ font-weight: 900 で太く表示する。dominant-baseline
+    と text-anchor で中央配置。
+  -->
+  <text
+    x="256"
+    y="270"
+    text-anchor="middle"
+    dominant-baseline="central"
+    font-family="'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', system-ui, sans-serif"
+    font-weight="900"
+    font-size="360"
+    fill="#ffffff"
+    letter-spacing="-8"
+  >積</text>
+
+  <!-- 右下に薄いドットで「Wiki」を仄めかす3点(視認性は低め、装飾) -->
+  <g fill="#ffffff" opacity="0.28">
+    <circle cx="410" cy="440" r="10"/>
+    <circle cx="440" cy="440" r="10"/>
+    <circle cx="470" cy="440" r="10"/>
+  </g>
+</svg>
