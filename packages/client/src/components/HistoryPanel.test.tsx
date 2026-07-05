@@ -104,8 +104,9 @@ describe('HistoryPanel', () => {
 
     renderHistoryPanel();
 
-    expect(await screen.findByText('+新')).toBeTruthy();
-    expect(screen.getByText('-旧')).toBeTruthy();
+    // #64 で prefix (+/-) を剥がして本文の見た目に近づけたため、旧・新それぞれ prefix なしで表示
+    expect(await screen.findByText('新')).toBeTruthy();
+    expect(screen.getByText('旧')).toBeTruthy();
   });
 
   it('この版に戻すと、ロック取得→復元→ロック解放の順でAPIを呼ぶ', async () => {
