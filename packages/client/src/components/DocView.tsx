@@ -46,6 +46,28 @@ function parseTagsInput(input: string): string[] {
   return [...new Set(input.split(',').map((t) => t.trim()).filter(Boolean))];
 }
 
+// 更新日時をJSTの「日付」と「時刻」に分けて返す。
+// 想定入力: ISO 8601(サーバーはUTCで送出)。パース失敗時は原文をdateへ、timeは空
+function formatUpdatedAt(iso: string): { date: string; time: string } {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return { date: iso, time: '' };
+  const tz = 'Asia/Tokyo';
+  const date = new Intl.DateTimeFormat('ja-JP', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+  const time = new Intl.DateTimeFormat('ja-JP', {
+    timeZone: tz,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(d);
+  return { date, time };
+}
+
 const IMAGE_MIME_PREFIX = 'image/';
 
 export function DocView({ doc, currentUser }: DocViewProps) {
@@ -111,14 +133,23 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   }, [editor, doc.path]);
 
   useEffect(() => {
-    editor?.setEditable(session.mode === 'edit');
+    if (!editor) return;
+    // 第2引数 emitUpdate=false: setEditable の既定は true で、モード切替のたびに
+    // onUpdate → updateBody → dirty=true が誤発火する(初回マウントすら未保存扱いになる)
+    editor.setEditable(session.mode === 'edit', false);
+    // 編集モードに入ったら本文にカーソルを出す(入力位置が視認できるように)
+    if (session.mode === 'edit') {
+      editor.commands.focus();
+    }
   }, [editor, session.mode]);
 
   // 閲覧中に限り、外部要因(他者更新・定期refetch等)でdocが変わったら本文を追随させる。
-  // 編集中は絶対に上書きしない(編集内容が消えるため)
+  // 編集中は絶対に上書きしない(編集内容が消えるため)。
+  // 第2引数 emitUpdate=false: setContent の反映で onUpdate → updateBody → dirty=true と
+  // なってしまうのを防ぐ(保存直後にdocが更新されて未保存扱いになる不具合の対処)
   useEffect(() => {
     if (session.mode === 'view' && editor && !editor.isDestroyed) {
-      editor.commands.setContent(doc.body);
+      editor.commands.setContent(doc.body, false);
     }
   }, [editor, doc.body, session.mode]);
 
@@ -285,11 +316,13 @@ export function DocView({ doc, currentUser }: DocViewProps) {
             </nav>
           )}
           <h1 className="mt-1 truncate text-h1 text-ink">{titleFromPath(doc.path)}</h1>
-          <p className="mt-1 text-xs text-ink-faint">
-            更新日時: {doc.updatedAt}
-            <span className={`ml-2 font-medium ${badge.className}`}>{badge.label}</span>
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-ink-faint">
+            <span>更新</span>
+            <span>{formatUpdatedAt(doc.updatedAt).date}</span>
+            <span className="font-mono">{formatUpdatedAt(doc.updatedAt).time}</span>
+            <span className={`font-medium ${badge.className}`}>{badge.label}</span>
             {lockedByOther && (
-              <span className="ml-2 text-warning">{lockedByOther.displayName}さんが編集中</span>
+              <span className="text-warning">{lockedByOther.displayName}さんが編集中</span>
             )}
           </p>
         </div>
