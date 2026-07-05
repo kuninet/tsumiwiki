@@ -126,19 +126,25 @@ pnpm --filter @tsumiwiki/server create-admin -- --username admin --display-name 
 
 サーバーの手動起動には `scripts\windows\start.bat`(または `start.ps1`)を使う。
 中で `set` / `$env:` によって環境変数をスクリプト内スコープでのみ設定するため、
-親シェルや他アプリケーションと衝突しない:
+親シェルや他アプリケーションと衝突しない。
+
+雛形をそのまま編集すると `git pull` のたびに衝突するので、まず自分専用のコピーを
+作る(コピー名は `start-local.bat` / `start-local.ps1` で、これらは `.gitignore`
+で追跡対象外にしてある):
 
 ```powershell
-# バッチ版(コマンドプロンプト・PowerShellどちらでも可)
-scripts\windows\start.bat
+copy scripts\windows\start.bat scripts\windows\start-local.bat
+notepad scripts\windows\start-local.bat   # 自環境に合わせて編集
 
-# PowerShell版
-.\scripts\windows\start.ps1
+# 以降の起動はこちらを使う
+.\scripts\windows\start-local.bat
+
+# PowerShell版も同様
+Copy-Item scripts\windows\start.ps1 scripts\windows\start-local.ps1
+.\scripts\windows\start-local.ps1
 ```
 
-初回は `scripts\windows\start.bat` を開いて `LIBRARY_PATH` / `DB_PATH` / `PORT` /
-`BACKUP_REMOTE` などを自環境に合わせて書き換える。書き換えた start.bat はサービス
-化(6章)の環境変数構成の元ネタにもなる。
+書き換えた start-local.bat はサービス化(6章)の環境変数構成の元ネタにもなる。
 
 ブラウザで `http://localhost:<PORT>` にアクセスしてログインできればOK。
 
