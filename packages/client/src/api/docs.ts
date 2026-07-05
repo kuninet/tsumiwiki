@@ -91,6 +91,15 @@ export function useMoveDoc() {
   );
 }
 
+// 素の移動関数(#72 一括移動用)。個別トースト・invalidateを避けたい場面で使う
+export function moveDoc(body: MoveDocRequest): Promise<unknown> {
+  return api('POST', '/api/docs/move', body);
+}
+
+export function moveFolder(body: MoveFolderRequest): Promise<unknown> {
+  return api('POST', '/api/folders/move', body);
+}
+
 export function useCreateFolder() {
   return useLibraryMutation(
     (body: CreateFolderRequest) => api('POST', '/api/folders', body),

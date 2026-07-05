@@ -4,6 +4,10 @@ import { type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useSta
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   docQueryKey,
+  moveDoc as moveDocApi,
+  moveFolder as moveFolderApi,
+  TAGS_QUERY_KEY,
+  TREE_QUERY_KEY,
   useCreateDoc,
   useCreateFolder,
   useDeleteDoc,
@@ -12,9 +16,11 @@ import {
   useMoveFolder,
   useTree,
 } from '../api/docs';
+import { ApiRequestError } from '../api/client';
 import { buildTree, parentOf, type TreeNode } from '../lib/build-tree';
 import { docUrl } from '../lib/doc-path';
 import { confirmNavigationIfDirty } from '../lib/navigation-guard';
+import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
@@ -67,6 +73,7 @@ export function FolderTree() {
   const { data: tree } = useTree();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const showToast = useToastStore((s) => s.show);
   const params = useParams();
   const currentPath = params['*'];
 
@@ -99,6 +106,10 @@ export function FolderTree() {
     { path: string; kind: 'doc' | 'folder'; title?: string } | null
   >(null);
   const [dragOverPath, setDragOverPath] = useState<string | null>(null);
+  // 複数選択と一括移動(#72)。selectedPaths は選択された行のパス集合、
+  // lastClickedPath は Shift+クリックの起点として使う
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [lastClickedPath, setLastClickedPath] = useState<string | null>(null);
 
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
 
@@ -237,12 +248,78 @@ export function FolderTree() {
     if (canDropOn(targetFolderPath)) setDragOverPath(targetFolderPath);
   }
 
+  // ドロップ先が targetFolderPath のとき、対象パス群のうち移動しても意味のある/矛盾しないものだけを返す
+  function filterMovable(paths: string[], targetFolderPath: string): TreeNode[] {
+    const byPath = new Map<string, TreeNode>();
+    for (const f of flat) byPath.set(f.node.path, f.node);
+    return paths
+      .map((p) => byPath.get(p))
+      .filter((n): n is TreeNode => !!n)
+      .filter((node) => {
+        if (parentOf(node.path) === targetFolderPath) return false;
+        if (node.type === 'folder') {
+          if (targetFolderPath === node.path) return false;
+          if (targetFolderPath.startsWith(`${node.path}/`)) return false;
+        }
+        return true;
+      });
+  }
+
+  // 選択された複数アイテムを targetFolderPath へ移動する(#72)。
+  // useMoveDoc/useMoveFolder は個別トーストを出すため、生API + 一括サマリートーストで対応する
+  async function performBatchMove(nodes: TreeNode[], targetFolderPath: string) {
+    let succeeded = 0;
+    let failed = 0;
+    let lastError: string | null = null;
+    for (const node of nodes) {
+      try {
+        if (node.type === 'doc') {
+          await moveDocApi({
+            path: node.path,
+            newFolder: targetFolderPath,
+            newTitle: node.title,
+          });
+        } else {
+          const folderName = node.path.split('/').pop()!;
+          const newPath = targetFolderPath ? `${targetFolderPath}/${folderName}` : folderName;
+          await moveFolderApi({ path: node.path, newPath });
+        }
+        succeeded++;
+      } catch (err) {
+        failed++;
+        if (err instanceof ApiRequestError) lastError = err.message;
+      }
+    }
+    queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
+    queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+    if (failed === 0) {
+      showToast('success', succeeded === 1 ? '移動しました' : `${succeeded}件を移動しました`);
+    } else if (succeeded === 0) {
+      showToast('error', lastError ?? '移動に失敗しました');
+    } else {
+      showToast(
+        'warning',
+        `${succeeded}件を移動しました。${failed}件が失敗しました${lastError ? `: ${lastError}` : ''}`,
+      );
+    }
+  }
+
   function handleDropTarget(targetFolderPath: string) {
     const item = draggedItem;
     setDraggedItem(null);
     setDragOverPath(null);
     if (!item) return;
     if (!canDropOn(targetFolderPath)) return;
+
+    // ドラッグ元が選択中に含まれていて 2件以上あるときは、選択全体を一括移動する。
+    // それ以外(単独ドラッグ or 選択外のものをドラッグ)は従来通り単体移動
+    const isBatch = selectedPaths.has(item.path) && selectedPaths.size > 1;
+    if (isBatch) {
+      const nodes = filterMovable([...selectedPaths], targetFolderPath);
+      if (nodes.length === 0) return;
+      void performBatchMove(nodes, targetFolderPath).then(() => setSelectedPaths(new Set()));
+      return;
+    }
 
     if (item.kind === 'doc') {
       const title = item.title ?? item.path.split('/').pop()!.replace(/\.md$/i, '');
@@ -251,6 +328,47 @@ export function FolderTree() {
       const folderName = item.path.split('/').pop()!;
       const newPath = targetFolderPath ? `${targetFolderPath}/${folderName}` : folderName;
       moveFolder.mutate({ path: item.path, newPath });
+    }
+  }
+
+  // 行クリック処理(#72)。修飾キーの有無で単一選択 / 追加解除 / 範囲選択を切替
+  function handleRowClick(
+    e: React.MouseEvent<HTMLButtonElement>,
+    node: TreeNode,
+  ) {
+    const isModifier = e.metaKey || e.ctrlKey;
+    const isShift = e.shiftKey;
+
+    if (isShift && lastClickedPath) {
+      e.preventDefault();
+      const startIdx = flat.findIndex((f) => f.node.path === lastClickedPath);
+      const endIdx = flat.findIndex((f) => f.node.path === node.path);
+      if (startIdx !== -1 && endIdx !== -1) {
+        const [lo, hi] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+        setSelectedPaths(new Set(flat.slice(lo, hi + 1).map((f) => f.node.path)));
+      }
+      return;
+    }
+
+    if (isModifier) {
+      e.preventDefault();
+      setSelectedPaths((prev) => {
+        const next = new Set(prev);
+        if (next.has(node.path)) next.delete(node.path);
+        else next.add(node.path);
+        return next;
+      });
+      setLastClickedPath(node.path);
+      return;
+    }
+
+    // 通常クリック: 選択を単一化 + 従来の動作(フォルダ=展開、文書=遷移)
+    setSelectedPaths(new Set([node.path]));
+    setLastClickedPath(node.path);
+    if (node.type === 'folder') {
+      toggleFolderExpanded(node.path);
+    } else {
+      handleNavigateToDoc(node.path);
     }
   }
 
@@ -374,6 +492,20 @@ export function FolderTree() {
         </button>
       </div>
 
+      {selectedPaths.size > 1 && (
+        <div className="mb-2 flex items-center justify-between rounded border border-accent-border bg-accent-soft px-2 py-1 text-xs text-accent">
+          <span>{selectedPaths.size}件選択中</span>
+          <button
+            type="button"
+            onClick={() => setSelectedPaths(new Set())}
+            className="text-ink-faint hover:text-ink"
+            aria-label="選択解除"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <ul role="tree">
         {nodes.map((node) => (
           <TreeItem
@@ -384,8 +516,8 @@ export function FolderTree() {
             currentPath={currentPath}
             expandedFolders={expandedFolders}
             activeFocusPath={activeFocusPath}
-            onToggle={toggleFolderExpanded}
-            onNavigate={handleNavigateToDoc}
+            selectedPaths={selectedPaths}
+            onRowClick={handleRowClick}
             onContextMenu={openMenu}
             onKeyDown={handleRowKeyDown}
             registerRow={registerRow}
@@ -479,8 +611,8 @@ interface TreeItemProps {
   currentPath: string | undefined;
   expandedFolders: Set<string>;
   activeFocusPath: string | null;
-  onToggle: (path: string) => void;
-  onNavigate: (path: string) => void;
+  selectedPaths: Set<string>;
+  onRowClick: (e: React.MouseEvent<HTMLButtonElement>, node: TreeNode) => void;
   onContextMenu: (e: MouseEvent, target: MenuTarget) => void;
   onKeyDown: (e: KeyboardEvent, entry: FlatEntry) => void;
   registerRow: (path: string, el: HTMLButtonElement | null) => void;
@@ -494,8 +626,8 @@ function TreeItem({
   currentPath,
   expandedFolders,
   activeFocusPath,
-  onToggle,
-  onNavigate,
+  selectedPaths,
+  onRowClick,
   onContextMenu,
   onKeyDown,
   registerRow,
@@ -508,6 +640,9 @@ function TreeItem({
   const isDragging = dnd.draggedPath === node.path;
   const isDropTarget =
     node.type === 'folder' && dnd.dragOverPath === node.path && dnd.canDropOn(node.path);
+  const isSelected = selectedPaths.has(node.path);
+  // 選択行(かつ現在文書として色付けされていない)ときは accent-soft で塗る
+  const selectedBgClass = isSelected ? 'bg-accent-soft' : '';
 
   const dragHandlers = {
     draggable: true,
@@ -532,7 +667,7 @@ function TreeItem({
           tabIndex={isFocusTarget ? 0 : -1}
           ref={(el) => registerRow(node.path, el)}
           style={indent}
-          onClick={() => onToggle(node.path)}
+          onClick={(e) => onRowClick(e, node)}
           onKeyDown={(e) => onKeyDown(e, entry)}
           onContextMenu={(e) => onContextMenu(e, { type: 'folder', path: node.path, name: node.name })}
           {...dragHandlers}
@@ -550,7 +685,7 @@ function TreeItem({
           }}
           className={`flex h-[30px] w-full items-center gap-1 px-2 text-left text-sm text-ink-soft hover:bg-hoverbg focus:outline-none focus-visible:bg-active ${
             isDragging ? 'opacity-50' : ''
-          } ${isDropTarget ? 'bg-accent-soft ring-2 ring-accent' : ''}`}
+          } ${isDropTarget ? 'bg-accent-soft ring-2 ring-accent' : selectedBgClass}`}
         >
           <span className="inline-block w-3 text-ink-faint">{expanded ? '▾' : '▸'}</span>
           <span aria-hidden="true">📂</span>
@@ -567,8 +702,8 @@ function TreeItem({
                 currentPath={currentPath}
                 expandedFolders={expandedFolders}
                 activeFocusPath={activeFocusPath}
-                onToggle={onToggle}
-                onNavigate={onNavigate}
+                selectedPaths={selectedPaths}
+                onRowClick={onRowClick}
                 onContextMenu={onContextMenu}
                 onKeyDown={onKeyDown}
                 registerRow={registerRow}
@@ -590,7 +725,7 @@ function TreeItem({
         tabIndex={isFocusTarget ? 0 : -1}
         ref={(el) => registerRow(node.path, el)}
         style={indent}
-        onClick={() => onNavigate(node.path)}
+        onClick={(e) => onRowClick(e, node)}
         onKeyDown={(e) => onKeyDown(e, entry)}
         onContextMenu={(e) =>
           onContextMenu(e, { type: 'doc', path: node.path, folder: parentOf(node.path), title: node.title })
@@ -598,7 +733,7 @@ function TreeItem({
         {...dragHandlers}
         data-testid={`doc-${node.path}`}
         className={`flex h-[30px] w-full items-center gap-1 px-2 text-left text-sm focus:outline-none focus-visible:bg-active ${
-          isCurrent ? 'bg-active font-semibold text-accent' : 'text-ink-soft hover:bg-hoverbg'
+          isCurrent ? 'bg-active font-semibold text-accent' : `text-ink-soft hover:bg-hoverbg ${selectedBgClass}`
         } ${isDragging ? 'opacity-50' : ''}`}
       >
         <span className="inline-block w-3" aria-hidden="true" />

@@ -215,5 +215,33 @@ describe('FolderTree', () => {
       await new Promise((r) => setTimeout(r, 20));
       expect(calls.some((c) => c.method === 'POST' && c.path.startsWith('/api/'))).toBe(false);
     });
+
+    it('Ctrl+クリックで複数選択し、選択中の1つを別フォルダへドラッグすると全件が一括移動される(#72)', async () => {
+      const calls = stubFetchRecording();
+      renderRecording();
+      const doc1 = (await screen.findByText('ルート文書')).closest('button')!;
+      const doc2 = (await screen.findByText('見出し#1')).closest('button')!;
+      const folder = (await screen.findByText('フォルダA')).closest('button')!;
+
+      // Ctrl+クリックで2件選択(遷移せず選択のみ)
+      fireEvent.click(doc1, { ctrlKey: true });
+      fireEvent.click(doc2, { ctrlKey: true });
+
+      // 選択中の1つを掴んでフォルダAへドロップ
+      fireEvent.dragStart(doc1);
+      fireEvent.dragEnter(folder);
+      fireEvent.dragOver(folder);
+      fireEvent.drop(folder);
+      fireEvent.dragEnd(doc1);
+
+      await waitFor(() => {
+        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+        expect(moves.length).toBe(2);
+      });
+      const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+      const movedPaths = new Set(moves.map((m) => (m.body as { path: string }).path));
+      expect(movedPaths.has('ルート文書.md')).toBe(true);
+      expect(movedPaths.has('見出し#1.md')).toBe(true);
+    });
   });
 });
