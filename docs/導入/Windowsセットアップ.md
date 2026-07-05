@@ -8,14 +8,22 @@ TsumiWikiをWindows PCで本番運用するための手順(設計01章1.4)。
 |---|---|---|
 | Node.js | 20.19以上(22系推奨。Dockerイメージは22) | https://nodejs.org/ |
 | Git for Windows | 2.30以上 | https://gitforwindows.org/ 。履歴管理・バックアップに必須 |
+| pnpm | 10系(package.jsonでpin) | corepackで有効化。11系はNode 22必須で非採用 |
+| NSSM | 2.24以上 | https://nssm.cc/ 。Windowsサービス化(6章) |
 
 インストール後、PowerShellで確認:
 
 ```powershell
 node --version
 git --version
-corepack enable   # pnpmを有効化(初回のみ。管理者権限が必要な場合あり)
+corepack enable                     # pnpmを有効化(初回のみ。管理者権限が必要な場合あり)
+pnpm --version                      # 10.34.3 相当が出ればOK
 ```
+
+Git for Windowsは既定インストールで問題ないが、以下の点だけ確認する:
+
+- **PATH に `git.exe` が入っていること**(コマンドプロンプト・PowerShellから `git --version` が通ること)。サービス化した後もNSSMがgitを起動するため、システム環境変数のPATHに必要
+- 改行変換設定: `git config --global core.autocrlf false` を推奨(NFR-COMP-03。LF固定運用のため)
 
 ## 2. アプリケーションの配置とビルド
 
@@ -50,6 +58,34 @@ git init --bare \\fileserver\share\tsumiwiki.git
 
 `BACKUP_REMOTE` を設定して起動すると、定期的に(既定10分)自動pushされる。push状態は `GET /api/library/status`(要ログイン)で確認できる。
 
+### 4.1 UNCパス認証(必要な場合)
+
+ファイルサーバーがドメイン認証を要求する場合、Windowsサービスから見えるように**サービス実行ユーザーの資格情報**で覚えさせる:
+
+```powershell
+# サービス実行ユーザーに切り替えたコンテキストで実行するのが確実
+# (対話的セッションで登録した資格情報はサービスから参照できない)
+cmdkey /add:fileserver /user:DOMAIN\username /pass:PASSWORD
+```
+
+以下いずれかの構成が確実:
+
+- サービスの実行ユーザーを、ファイルサーバーの共有への書込権を持つドメインアカウントに変更(NSSMの `Log on` タブ、または `nssm set TsumiWiki ObjectName DOMAIN\username PASSWORD`)
+- 匿名アクセス可の共有にする(社内サーバーで運用ポリシー上許容できる場合のみ)
+
+### 4.2 バックアップpushの動作確認
+
+サービス起動後、以下で確認する:
+
+```powershell
+# API から実行状態を確認
+curl.exe http://localhost:3000/api/library/status -H "cookie: <ログイン後のセッション>"
+# → lastPushAt が更新されていて lastError が null であること
+
+# bareリポジトリ側でログ確認
+git --git-dir=\\fileserver\share\tsumiwiki.git log --oneline -5
+```
+
 ## 5. 初期管理者の作成と動作確認
 
 ```powershell
@@ -67,7 +103,16 @@ pnpm --filter @tsumiwiki/server start
 
 ## 6. Windowsサービス化(NSSM)
 
-常時稼働にはNSSM(https://nssm.cc/)でサービス登録する:
+常時稼働にはNSSM(https://nssm.cc/)でサービス登録する。
+
+### 6.1 NSSMの入手と配置
+
+- https://nssm.cc/download から nssm-2.24.zip をダウンロード
+- 展開して `win64\nssm.exe` を `C:\Windows\System32\` へ配置(または `C:\tsumiwiki\bin\` などPATHの通ったフォルダへ)
+
+### 6.2 サービス登録
+
+管理者権限のPowerShellで:
 
 ```powershell
 # --import tsx で単一プロセス起動にする(tsx CLI経由の二段プロセスだと
@@ -76,13 +121,48 @@ nssm install TsumiWiki "C:\Program Files\nodejs\node.exe"
 nssm set TsumiWiki AppParameters "--import tsx C:\tsumiwiki\packages\server\src\index.ts"
 nssm set TsumiWiki AppDirectory "C:\tsumiwiki\packages\server"
 nssm set TsumiWiki AppEnvironmentExtra LIBRARY_PATH=C:\tsumiwiki-library DB_PATH=C:\tsumiwiki-data\app.db PORT=3000 BACKUP_REMOTE=\\fileserver\share\tsumiwiki.git LOG_FILE=C:\tsumiwiki-data\app.log
+
+# 停止シグナル:  最終sync・バックアップpush・WAL checkpoint 完了を待つため猶予15秒
 nssm set TsumiWiki AppStopMethodSkip 0
 nssm set TsumiWiki AppStopMethodConsole 15000
+
+# ログの標準出力/標準エラーはNSSMのローテートに乗せる(LOG_FILEは追加の詳細ログ)
+nssm set TsumiWiki AppStdout C:\tsumiwiki-data\service-stdout.log
+nssm set TsumiWiki AppStderr C:\tsumiwiki-data\service-stderr.log
+nssm set TsumiWiki AppRotateFiles 1
+nssm set TsumiWiki AppRotateBytes 10485760   # 10MB でローテート
+
+# 障害復帰: プロセスが落ちたら10秒後に自動再起動
+nssm set TsumiWiki AppExit Default Restart
+nssm set TsumiWiki AppRestartDelay 10000
+
 nssm start TsumiWiki
+nssm status TsumiWiki                         # SERVICE_RUNNING と表示されればOK
 ```
 
 停止時は最終sync・バックアップpush・WALチェックポイントが実行される
 (実際に発火することを9章のチェックリストで必ず確認すること)。
+
+### 6.3 Windows Firewallの設定
+
+社内LANからアクセスさせる場合、受信規則を追加:
+
+```powershell
+New-NetFirewallRule -DisplayName "TsumiWiki" -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow -Profile Domain,Private
+```
+
+社外(パブリックプロファイル)からのアクセスは開けないこと。TsumiWikiは想定利用者数〜20名の社内向け設計(要件01章1.4)であり、CSRF・XSS対策は施しているものの外部公開の脅威モデルには合わせていない。
+
+### 6.4 起動時の自動開始とサービスユーザー
+
+- 既定でNSSMのStart typeは Automatic(自動)。サーバー再起動後にも起動する
+- 4.1 で UNC 認証をサービスユーザーで通したい場合は、Log Onを LocalSystem から専用アカウントに変更:
+
+```powershell
+nssm set TsumiWiki ObjectName DOMAIN\tsumiwiki-svc "パスワード"
+```
+
+そのアカウントには `C:\tsumiwiki` 配下および `LIBRARY_PATH`/`DB_PATH`/`LOG_FILE` への読み書き権限が必要。
 
 ## 7. 復旧手順(設計06章6.6)
 
@@ -101,11 +181,14 @@ docker run -d --name tsumiwiki -p 3000:3000 `
 
 ## 9. Windows実機検証チェックリスト
 
-初回導入時に以下を確認する(issue #12・#16):
+初回導入時に以下を確認する(issue #16。IME関連はフェーズ1テストで確認済み):
 
-- [ ] 日本語ファイル名の文書作成・編集・履歴表示(#16)
-- [ ] UNCパスのbareリポジトリへのバックアップpush成功(`/api/library/status`)(#16)
-- [ ] サーバーテスト一式のパス: `pnpm --filter @tsumiwiki/server test`(#16)
-- [ ] MS-IMEでの編集(変換確定・ショートカット・`[[`補完)— issue #6のチェックリストA〜D(#12)
-- [ ] サービス再起動後のロック・インデックス整合
-- [ ] **サービス停止時に最終バックアップpushが実行される**(停止→bareリポジトリのログに直前の変更が含まれること)(#16)
+- [ ] 日本語ファイル名の文書作成・編集・履歴表示
+- [ ] UNCパスのbareリポジトリへのバックアップpush成功(`/api/library/status` の `lastPushAt` 更新・`lastError` null)
+- [ ] Git for Windowsで `git log`・`git diff` の履歴取得が動作する
+- [ ] サーバーテスト一式のパス: `pnpm --filter @tsumiwiki/server test`
+- [ ] Windowsサービスの自動起動: 再起動 → ログイン画面が開く
+- [ ] サービス再起動後のロック・インデックス整合(誰かのロックが残らない・DB整合が取れている)
+- [ ] **サービス停止時に最終バックアップpushが実行される**(停止→bareリポジトリのログに直前の変更が含まれること)
+- [ ] サービスが異常終了した場合の自動再起動(`AppExit Default Restart`の動作)
+- [ ] Firewall越しに他PCから http://<サーバIP>:3000 でアクセスできる(社内LAN限定)
