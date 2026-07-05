@@ -69,7 +69,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await app.close();
-  await rm(lib, { recursive: true, force: true });
+  await rm(lib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
@@ -108,7 +108,7 @@ describe('添付アップロード', () => {
 
   it('サイズ上限を超えると413', async () => {
     await app.close();
-    await rm(lib, { recursive: true, force: true });
+    await rm(lib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     await setup({ MAX_UPLOAD_MB: '1' });
 
     const big = Buffer.alloc(2 * 1024 * 1024, 1);
@@ -124,7 +124,7 @@ describe('添付アップロード', () => {
 
   it('ATTACHMENT_DIR_MODE指定時はそのフォルダへ保存される', async () => {
     await app.close();
-    await rm(lib, { recursive: true, force: true });
+    await rm(lib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     await setup({ ATTACHMENT_DIR_MODE: 'attachments' });
 
     const mp = multipart({}, { name: 'a.png', content: PNG });
