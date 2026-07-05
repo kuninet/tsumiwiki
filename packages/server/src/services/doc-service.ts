@@ -736,10 +736,10 @@ export class DocService {
     newRelPath: string,
     userId: number,
     author: GitAuthor,
-  ): Promise<void> {
+  ): Promise<{ path: string }> {
     const oldNorm = this.validateFolderPath(relPath);
     const newNorm = this.validateFolderPath(newRelPath);
-    if (newNorm === oldNorm) return;
+    if (newNorm === oldNorm) return { path: oldNorm };
     this.locks.assertFolderNotLockedByOther(oldNorm, userId);
     // 自分自身の配下への移動は不可(existsより先に判定する)
     if (newNorm.startsWith(`${oldNorm}/`)) {
@@ -761,6 +761,7 @@ export class DocService {
     await this.indexer.scanAll();
     this.locks.repathFolder(oldNorm, newNorm);
     this.drafts.repathFolder(oldNorm, newNorm);
+    return { path: newNorm };
   }
 
   async deleteFolder(relPath: string, userId: number, author: GitAuthor): Promise<void> {
