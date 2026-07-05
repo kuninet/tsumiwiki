@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
+import type React from 'react';
 import { type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
@@ -92,6 +93,12 @@ export function FolderTree() {
   const [dialog, setDialog] = useState<DialogState>(null);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
   const [focusedPath, setFocusedPath] = useState<string | null>(null);
+  // D&D 移動用の状態(#71)。draggedItem はドラッグ元・dragOverPath はハイライト対象。
+  // dragOverPath は '' = ルート、'foo/bar' = 特定フォルダ、null = ハイライトなし
+  const [draggedItem, setDraggedItem] = useState<
+    { path: string; kind: 'doc' | 'folder'; title?: string } | null
+  >(null);
+  const [dragOverPath, setDragOverPath] = useState<string | null>(null);
 
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
 
@@ -199,6 +206,54 @@ export function FolderTree() {
     navigate(docUrl(path));
   }
 
+  // D&D: 現在ドラッグ中のアイテムを targetFolderPath("" = ルート)へ落とせるか
+  function canDropOn(targetFolderPath: string): boolean {
+    if (!draggedItem) return false;
+    const currentParent = parentOf(draggedItem.path);
+    // 同じ親フォルダへの移動は無意味
+    if (currentParent === targetFolderPath) return false;
+    // フォルダを自分自身または自分の子孫へ落とすことはできない
+    if (draggedItem.kind === 'folder') {
+      if (targetFolderPath === draggedItem.path) return false;
+      if (targetFolderPath.startsWith(`${draggedItem.path}/`)) return false;
+    }
+    return true;
+  }
+
+  function handleDragStartItem(
+    path: string,
+    kind: 'doc' | 'folder',
+    title: string | undefined,
+  ) {
+    setDraggedItem({ path, kind, title });
+  }
+
+  function handleDragEndItem() {
+    setDraggedItem(null);
+    setDragOverPath(null);
+  }
+
+  function handleDragEnterTarget(targetFolderPath: string) {
+    if (canDropOn(targetFolderPath)) setDragOverPath(targetFolderPath);
+  }
+
+  function handleDropTarget(targetFolderPath: string) {
+    const item = draggedItem;
+    setDraggedItem(null);
+    setDragOverPath(null);
+    if (!item) return;
+    if (!canDropOn(targetFolderPath)) return;
+
+    if (item.kind === 'doc') {
+      const title = item.title ?? item.path.split('/').pop()!.replace(/\.md$/i, '');
+      moveDoc.mutate({ path: item.path, newFolder: targetFolderPath, newTitle: title });
+    } else {
+      const folderName = item.path.split('/').pop()!;
+      const newPath = targetFolderPath ? `${targetFolderPath}/${folderName}` : folderName;
+      moveFolder.mutate({ path: item.path, newPath });
+    }
+  }
+
   // キーボード操作(デザインhandoff components.md): ↑/↓移動・→展開・←折りたたみ・
   // Enter開く・F2リネーム・Deleteごみ箱
   function handleRowKeyDown(e: KeyboardEvent, entry: FlatEntry) {
@@ -271,8 +326,37 @@ export function FolderTree() {
 
   const activeFocusPath = focusedPath ?? flat[0]?.node.path ?? null;
 
+  const dnd: TreeDndHandlers = {
+    draggedPath: draggedItem?.path ?? null,
+    dragOverPath,
+    onDragStart: handleDragStartItem,
+    onDragEnd: handleDragEndItem,
+    onDragEnter: handleDragEnterTarget,
+    onDrop: handleDropTarget,
+    canDropOn,
+  };
+
+  const rootCanAccept = draggedItem !== null && canDropOn('');
+  const rootIsDropTarget = dragOverPath === '' && rootCanAccept;
+
   return (
-    <div className="min-h-full p-2" onContextMenu={(e) => openMenu(e, { type: 'root' })}>
+    <div
+      className={`min-h-full p-2 ${
+        rootIsDropTarget ? 'ring-2 ring-inset ring-accent bg-accent-soft/50' : ''
+      }`}
+      onContextMenu={(e) => openMenu(e, { type: 'root' })}
+      onDragEnter={(e) => {
+        // フォルダ行が stopPropagation しているので、ここに来るのは空白領域上のときだけ
+        if (e.target === e.currentTarget) handleDragEnterTarget('');
+      }}
+      onDragOver={(e) => {
+        if (rootCanAccept) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        handleDropTarget('');
+      }}
+    >
       <div className="mb-2 flex gap-2">
         <button
           type="button"
@@ -305,6 +389,7 @@ export function FolderTree() {
             onContextMenu={openMenu}
             onKeyDown={handleRowKeyDown}
             registerRow={registerRow}
+            dnd={dnd}
           />
         ))}
       </ul>
@@ -377,6 +462,16 @@ export function FolderTree() {
   );
 }
 
+export interface TreeDndHandlers {
+  draggedPath: string | null;
+  dragOverPath: string | null;
+  onDragStart: (path: string, kind: 'doc' | 'folder', title: string | undefined) => void;
+  onDragEnd: () => void;
+  onDragEnter: (targetPath: string) => void;
+  onDrop: (targetPath: string) => void;
+  canDropOn: (targetPath: string) => boolean;
+}
+
 interface TreeItemProps {
   node: TreeNode;
   depth: number;
@@ -389,6 +484,7 @@ interface TreeItemProps {
   onContextMenu: (e: MouseEvent, target: MenuTarget) => void;
   onKeyDown: (e: KeyboardEvent, entry: FlatEntry) => void;
   registerRow: (path: string, el: HTMLButtonElement | null) => void;
+  dnd: TreeDndHandlers;
 }
 
 function TreeItem({
@@ -403,13 +499,30 @@ function TreeItem({
   onContextMenu,
   onKeyDown,
   registerRow,
+  dnd,
 }: TreeItemProps) {
   const indent = { paddingLeft: `${depth * 16 + 8}px` };
   const entry: FlatEntry = { node, depth, parentPath };
   const isFocusTarget = node.path === activeFocusPath;
 
+  const isDragging = dnd.draggedPath === node.path;
+  const isDropTarget =
+    node.type === 'folder' && dnd.dragOverPath === node.path && dnd.canDropOn(node.path);
+
+  const dragHandlers = {
+    draggable: true,
+    onDragStart: (e: React.DragEvent<HTMLElement>) => {
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+      const title = node.type === 'doc' ? node.title : undefined;
+      dnd.onDragStart(node.path, node.type, title);
+    },
+    onDragEnd: () => dnd.onDragEnd(),
+  };
+
   if (node.type === 'folder') {
     const expanded = expandedFolders.has(node.path);
+    const canAcceptHere = dnd.draggedPath !== null && dnd.canDropOn(node.path);
     return (
       <li role="none">
         <button
@@ -422,7 +535,22 @@ function TreeItem({
           onClick={() => onToggle(node.path)}
           onKeyDown={(e) => onKeyDown(e, entry)}
           onContextMenu={(e) => onContextMenu(e, { type: 'folder', path: node.path, name: node.name })}
-          className="flex h-[30px] w-full items-center gap-1 px-2 text-left text-sm text-ink-soft hover:bg-hoverbg focus:outline-none focus-visible:bg-active"
+          {...dragHandlers}
+          onDragEnter={(e) => {
+            e.stopPropagation();
+            dnd.onDragEnter(node.path);
+          }}
+          onDragOver={(e) => {
+            if (canAcceptHere) e.preventDefault();
+          }}
+          onDrop={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            dnd.onDrop(node.path);
+          }}
+          className={`flex h-[30px] w-full items-center gap-1 px-2 text-left text-sm text-ink-soft hover:bg-hoverbg focus:outline-none focus-visible:bg-active ${
+            isDragging ? 'opacity-50' : ''
+          } ${isDropTarget ? 'bg-accent-soft ring-2 ring-accent' : ''}`}
         >
           <span className="inline-block w-3 text-ink-faint">{expanded ? '▾' : '▸'}</span>
           <span aria-hidden="true">📂</span>
@@ -444,6 +572,7 @@ function TreeItem({
                 onContextMenu={onContextMenu}
                 onKeyDown={onKeyDown}
                 registerRow={registerRow}
+                dnd={dnd}
               />
             ))}
           </ul>
@@ -466,10 +595,11 @@ function TreeItem({
         onContextMenu={(e) =>
           onContextMenu(e, { type: 'doc', path: node.path, folder: parentOf(node.path), title: node.title })
         }
+        {...dragHandlers}
         data-testid={`doc-${node.path}`}
         className={`flex h-[30px] w-full items-center gap-1 px-2 text-left text-sm focus:outline-none focus-visible:bg-active ${
           isCurrent ? 'bg-active font-semibold text-accent' : 'text-ink-soft hover:bg-hoverbg'
-        }`}
+        } ${isDragging ? 'opacity-50' : ''}`}
       >
         <span className="inline-block w-3" aria-hidden="true" />
         <span aria-hidden="true">📄</span>

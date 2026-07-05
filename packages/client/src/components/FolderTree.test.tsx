@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useEditStore } from '../stores/edit';
@@ -134,5 +134,86 @@ describe('FolderTree', () => {
     fireEvent.keyDown(docRow, { key: 'Delete' });
 
     expect(await screen.findByText('文書の削除')).toBeTruthy();
+  });
+
+  describe('ドラッグ&ドロップ移動(#71)', () => {
+    interface Call {
+      method: string;
+      path: string;
+      body: unknown;
+    }
+
+    function stubFetchRecording(): Call[] {
+      const calls: Call[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init?: RequestInit) => {
+          const method = (init?.method ?? 'GET').toUpperCase();
+          const [reqPath] = url.split('?');
+          const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+          calls.push({ method, path: reqPath, body });
+          // GET /api/docs (ツリー)は TREE を返す。他は成功
+          if (method === 'GET') {
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(TREE) });
+          }
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+        }),
+      );
+      return calls;
+    }
+
+    function renderRecording() {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      return render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <FolderTree />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    }
+
+    it('文書をフォルダ行にドロップすると moveDoc が呼ばれる', async () => {
+      const calls = stubFetchRecording();
+      renderRecording();
+      const folderRow = (await screen.findByText('フォルダA')).closest('button')!;
+      const docRow = (await screen.findByText('ルート文書')).closest('button')!;
+
+      fireEvent.dragStart(docRow);
+      fireEvent.dragEnter(folderRow);
+      fireEvent.dragOver(folderRow);
+      fireEvent.drop(folderRow);
+      fireEvent.dragEnd(docRow);
+
+      await waitFor(() => {
+        expect(calls.some((c) => c.method === 'POST' && c.path === '/api/docs/move')).toBe(true);
+      });
+      const move = calls.find((c) => c.method === 'POST' && c.path === '/api/docs/move')!;
+      expect(move.body).toEqual({
+        path: 'ルート文書.md',
+        newFolder: 'フォルダA',
+        newTitle: 'ルート文書',
+      });
+    });
+
+    it('同じ親フォルダへのドロップは移動APIを呼ばない(no-op)', async () => {
+      const calls = stubFetchRecording();
+      renderRecording();
+      // フォルダA を開いて子文書を出す
+      fireEvent.click(await screen.findByText('フォルダA'));
+      const folderRow = (await screen.findByText('フォルダA')).closest('button')!;
+      const childRow = (await screen.findByText('子文書')).closest('button')!;
+
+      // 子文書 → 親フォルダA へドロップ = 元の親フォルダと同じなので no-op
+      fireEvent.dragStart(childRow);
+      fireEvent.dragEnter(folderRow);
+      fireEvent.dragOver(folderRow);
+      fireEvent.drop(folderRow);
+      fireEvent.dragEnd(childRow);
+
+      // 移動APIが叩かれないこと(ちょっと待って確認)
+      await new Promise((r) => setTimeout(r, 20));
+      expect(calls.some((c) => c.method === 'POST' && c.path.startsWith('/api/'))).toBe(false);
+    });
   });
 });
