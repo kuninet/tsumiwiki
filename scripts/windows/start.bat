@@ -5,9 +5,12 @@ REM All env vars are set inside a setlocal block so they never leak to the
 REM parent shell or the system environment.
 REM
 REM Usage:
-REM   1. Edit the SET lines below to match your environment.
-REM   2. Open Command Prompt or PowerShell.
-REM   3. cd C:\tsumiwiki and run this file: scripts\windows\start.bat
+REM   1. Copy this file to start-local.bat (gitignored) and edit that copy so
+REM      your local tweaks are not disturbed by future git pulls:
+REM          copy scripts\windows\start.bat scripts\windows\start-local.bat
+REM   2. Edit the SET lines below (or in start-local.bat) to match your env.
+REM   3. Open Command Prompt or PowerShell.
+REM   4. cd C:\tsumiwiki and run: scripts\windows\start-local.bat
 REM
 REM Note: comments are ASCII-only on purpose. Legacy Windows cmd.exe reads
 REM .bat files with the system code page (Shift-JIS on Japanese Windows) and

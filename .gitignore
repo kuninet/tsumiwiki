@@ -6,3 +6,7 @@ coverage/
 Thumbs.db
 .env
 .env.local
+
+# Windows起動スクリプトの個人カスタム版(実サーバー固有のパスやポートを含む)
+scripts/windows/start-local.bat
+scripts/windows/start-local.ps1
