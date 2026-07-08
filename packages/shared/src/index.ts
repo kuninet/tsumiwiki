@@ -247,6 +247,61 @@ export const LIBRARY_SETTINGS_DEFAULTS: LibrarySettings = {
   dailyNotes: { folder: '日記', template: '', filenamePattern: 'YYYY-MM-DD' },
 };
 
+// ---- #84 Phase B: テンプレート API ----
+
+export const templateSummarySchema = z.object({
+  // ライブラリ相対パス(例: `_templates/日誌.md`)
+  path: z.string(),
+  // ファイル名から `.md` を除いた表示名
+  name: z.string(),
+  // frontmatter.target_folder(なければ null)。新規作成の既定フォルダとして使う
+  targetFolder: z.string().nullable(),
+  // frontmatter.description(あれば選択UIで補助表示)
+  description: z.string().optional(),
+});
+export type TemplateSummary = z.infer<typeof templateSummarySchema>;
+
+export const listTemplatesResponseSchema = z.object({
+  templates: z.array(templateSummarySchema),
+});
+export type ListTemplatesResponse = z.infer<typeof listTemplatesResponseSchema>;
+
+// テンプレを適用して新規文書を作成する。target_folder は body で上書き可能
+export const applyTemplateRequestSchema = z.object({
+  templatePath: z.string().min(1),
+  title: z.string().min(1),
+  // 未指定なら frontmatter.target_folder を、それも無ければライブラリ直下を使う
+  targetFolder: z.string().optional(),
+});
+export type ApplyTemplateRequest = z.infer<typeof applyTemplateRequestSchema>;
+
+export const applyTemplateResponseSchema = z.object({
+  path: z.string(),
+});
+export type ApplyTemplateResponse = z.infer<typeof applyTemplateResponseSchema>;
+
+// ---- #84 Phase C: 既存文書へのテンプレ適用 API ----
+
+// 選択したテンプレの変数を展開して Markdown 本文を返す(新規文書は作らない)。
+// クライアントはこの Markdown を Tiptap で挿入/追記する。`{{cursor}}` はマーカー文字列として
+// レスポンスに残るので、クライアント側で split してカーソル位置を決める
+export const expandTemplateRequestSchema = z.object({
+  templatePath: z.string().min(1),
+  // 展開時の `{{title}}` に使う値。編集中文書のタイトルをクライアントが渡す
+  title: z.string().min(1),
+});
+export type ExpandTemplateRequest = z.infer<typeof expandTemplateRequestSchema>;
+
+export const expandTemplateResponseSchema = z.object({
+  markdown: z.string(),
+});
+export type ExpandTemplateResponse = z.infer<typeof expandTemplateResponseSchema>;
+
+// カーソル位置マーカーは template-vars.ts の内部定数と同一。二重定義を避けるため
+// template-vars.ts 側を単一のソースオブトゥルースにして、こちらから re-export する
+// (中#3 対応: shared/index.ts と template-vars.ts で独立に持っていた `'{{cursor}}'`
+// 値が食い違うと server↔client 契約が黙って壊れるため)。
+
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({
   error: z.object({
