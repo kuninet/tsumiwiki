@@ -66,4 +66,18 @@ describe('EditorToolbar', () => {
 
     editor.destroy();
   });
+
+  it('ツールバーコンテナは折返しせず横スクロールする', () => {
+    const editor = createTestEditor('');
+
+    render(<EditorToolbar editor={editor} onOpenLinkDialog={vi.fn()} onPickImage={vi.fn()} />);
+    const container = screen.getByTestId('editor-toolbar');
+
+    // 狭幅時に多段折返しではなく横スクロールで対応する
+    expect(container.className).toContain('flex-nowrap');
+    expect(container.className).toContain('overflow-x-auto');
+    expect(container.className).not.toContain('flex-wrap');
+
+    editor.destroy();
+  });
 });
