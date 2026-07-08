@@ -38,7 +38,7 @@ export function formatDate(d: Date, fmt: string): string {
 
 // {{cursor}} は特別なマーカーとして本文中に残す(クライアント側で位置決めに使う)。
 // サーバー側でファイル名パターンを展開する時は cursor を空文字に(ファイル名にマーカー不要)。
-const CURSOR_MARKER = '{{cursor}}';
+export const CURSOR_MARKER = '{{cursor}}';
 
 export interface ExpandOptions {
   // trueにするとcursorも空文字へ展開する(ファイル名など、cursor が意味を持たない箇所用)

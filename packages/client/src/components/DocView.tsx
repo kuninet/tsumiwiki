@@ -1,11 +1,13 @@
 import { EditorContent, useEditor } from '@tiptap/react';
-import type { DocResponse, DocSummary, User } from '@tsumiwiki/shared';
+import { CURSOR_MARKER, type DocResponse, type DocSummary, type User } from '@tsumiwiki/shared';
 import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { uploadAttachment } from '../api/attachments';
 import { isAllowedLinkUrl } from '../lib/allowed-link';
 import { useTree } from '../api/docs';
+import { useExpandTemplate } from '../api/templates';
 import { createEditorExtensions } from '../editor/markdown';
+import { parseMarkdownFragment } from '../editor/parse-fragment';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
 import { docUrl } from '../lib/doc-path';
@@ -18,6 +20,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { EditorToolbar } from './EditorToolbar';
 import { HistoryPanel } from './HistoryPanel';
 import { PromptDialog } from './PromptDialog';
+import { TemplatePickerDialog } from './TemplatePickerDialog';
 
 // 文書閲覧・編集画面(SC-02のMainPane。設計04章4.2/4.4・05章5.3〜5.5・デザインhandoff components.md)
 // 閲覧・編集は同じTiptapインスタンスのeditable切り替えで実現し、表示を完全一致させる
@@ -76,9 +79,11 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   const [cancelConfirmVisible, setCancelConfirmVisible] = useState(false);
   const [linkDialogVisible, setLinkDialogVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
+  const [templateApplyOpen, setTemplateApplyOpen] = useState(false);
 
   const navigate = useNavigate();
   const showToast = useToastStore((s) => s.show);
+  const expandTemplate = useExpandTemplate();
   const setLockedByOtherName = useEditStore((s) => s.setLockedByOtherName);
   const setSidebarTab = useUIStore((s) => s.setSidebarTab);
   const toggleTag = useUIStore((s) => s.toggleTag);
@@ -264,6 +269,66 @@ export function DocView({ doc, currentUser }: DocViewProps) {
     await handleUploadImages([file]);
   }
 
+  // #84 Phase C: 選択されたテンプレを展開して現在のエディタに流し込む。
+  // - applyMode='insert': カーソル位置に挿入
+  // - applyMode='append': 文末に追記
+  // どちらも `{{cursor}}` があれば挿入後のカーソル位置をマーカーの場所へ戻す。
+  //
+  // 挿入は 1 chain / 1 transaction にまとめて 1 回の undo で完全に取り消せるようにする
+  // (中#5/#6/#12 対応)。境目位置は「挿入開始 + pre.size」で計算する。
+  //
+  // 既知の制限(重大#2): テンプレ本文の *行内* に `{{cursor}}` があると、
+  // 前半・後半それぞれが独立ブロックとしてパースされるため段落境界が生じる。
+  // 行頭・行末に置けば期待通りに動く。テンプレ設計上の注意点。
+  async function applyTemplateToEditor(
+    templatePath: string,
+    applyMode: 'insert' | 'append',
+  ): Promise<void> {
+    if (!editor) return;
+    let expanded: string;
+    try {
+      const res = await expandTemplate.mutateAsync({
+        templatePath,
+        title: titleFromPath(doc.path),
+      });
+      expanded = res.markdown;
+    } catch {
+      // useExpandTemplate 内で toast は出しているので握りつぶす
+      return;
+    }
+
+    // 中#4: await 中にキャンセル(mode=view)された可能性があるので再確認して抜ける
+    if (sessionRef.current.mode !== 'edit' || !editor.isEditable) return;
+
+    // 重大#1: `String.split(sep, 2)` は 2 個目以降のマーカー右側を捨ててしまう。
+    // indexOf + slice で「最初のマーカーで分割し、残り本文は post 側に保持する」
+    const cursorIdx = expanded.indexOf(CURSOR_MARKER);
+    const preRaw = cursorIdx === -1 ? expanded : expanded.slice(0, cursorIdx);
+    const postRaw =
+      cursorIdx === -1 ? '' : expanded.slice(cursorIdx + CURSOR_MARKER.length);
+
+    const pre = parseMarkdownFragment(preRaw);
+    const post = parseMarkdownFragment(postRaw);
+    if (pre.content.length === 0 && post.content.length === 0) return;
+
+    // 挿入位置。append は文末、insert は現在のカーソル位置
+    const insertAt =
+      applyMode === 'append' ? editor.state.doc.content.size : editor.state.selection.from;
+    // pre と post の境目のカーソル位置(cursor マーカーがなければ挿入末尾)
+    const cursorAt = insertAt + pre.size;
+
+    // 1 chain / 1 transaction にまとめる(中#5 / #12: undo 1 回で完全 revert)
+    const combined = [...pre.content, ...post.content];
+    editor
+      .chain()
+      .focus()
+      .insertContentAt(insertAt, combined)
+      .setTextSelection(cursorAt)
+      .run();
+
+    showToast('success', 'テンプレートを適用しました');
+  }
+
   // wikilinkクリックでの遷移(FR-OBS-02)とfile://・UNCリンクの「パスをコピー」(FR-LINK-02)
   function handleContainerClick(e: ReactMouseEvent<HTMLDivElement>) {
     // 編集モード中のクリックはカーソル移動として扱い、遷移・コピーはしない
@@ -395,6 +460,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
           editor={editor}
           onOpenLinkDialog={() => setLinkDialogVisible(true)}
           onPickImage={(file) => void handleUploadImage(file)}
+          onOpenTemplateApply={() => setTemplateApplyOpen(true)}
         />
       )}
 
@@ -465,6 +531,18 @@ export function DocView({ doc, currentUser }: DocViewProps) {
       )}
 
       {historyVisible && <HistoryPanel path={doc.path} onClose={() => setHistoryVisible(false)} />}
+
+      {templateApplyOpen && (
+        <TemplatePickerDialog
+          mode="apply"
+          onCancel={() => setTemplateApplyOpen(false)}
+          onSubmit={(result) => {
+            if (result.mode !== 'apply') return;
+            setTemplateApplyOpen(false);
+            void applyTemplateToEditor(result.templatePath, result.applyMode);
+          }}
+        />
+      )}
     </div>
   );
 }

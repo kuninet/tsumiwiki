@@ -390,3 +390,147 @@ describe('POST /api/templates/apply', () => {
     expect(doc.json().body).toContain('# 空FM');
   }, 30_000);
 });
+
+describe('POST /api/templates/expand (#84 Phase C)', () => {
+  it('未認証は401', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/templates/expand',
+      headers: CSRF,
+      payload: { templatePath: '_templates/x.md', title: 'x' },
+    });
+    expect(res.statusCode).toBe(401);
+  }, 20_000);
+
+  it('必須パラメータ欠落は400', async () => {
+    const r1 = await apiAs(yamada, 'POST', '/api/templates/expand', {
+      templatePath: '_templates/x.md',
+    });
+    expect(r1.statusCode).toBe(400);
+    const r2 = await apiAs(yamada, 'POST', '/api/templates/expand', { title: 'x' });
+    expect(r2.statusCode).toBe(400);
+  }, 20_000);
+
+  it('frontmatter は完全に落ちて本文だけが返る。変数は展開され、{{cursor}} は残る', async () => {
+    await writeTemplate(
+      '_templates/insert.md',
+      '---\ntarget_folder: 落ちる\ncategory: メモ\n---\n\n## {{title}}\n\n担当: {{user}}\n{{cursor}}\n本日:\n',
+    );
+    const res = await apiAs(yamada, 'POST', '/api/templates/expand', {
+      templatePath: '_templates/insert.md',
+      title: '現行文書',
+    });
+    expect(res.statusCode).toBe(200);
+    const md = res.json().markdown as string;
+    // frontmatter は残らない
+    expect(md).not.toContain('---');
+    expect(md).not.toContain('target_folder');
+    expect(md).not.toContain('category: メモ');
+    // 変数は展開される
+    expect(md).toContain('## 現行文書');
+    expect(md).toContain('担当: 山田');
+    // cursor はマーカーとして残る(クライアントが split する)
+    expect(md).toContain('{{cursor}}');
+  }, 30_000);
+
+  it('frontmatter を持たないテンプレでも本文をそのまま返す', async () => {
+    await writeTemplate('_templates/plain.md', '- 項目1: {{date}}\n- 項目2\n');
+    const res = await apiAs(yamada, 'POST', '/api/templates/expand', {
+      templatePath: '_templates/plain.md',
+      title: '文書',
+    });
+    expect(res.statusCode).toBe(200);
+    const md = res.json().markdown as string;
+    expect(md.startsWith('- 項目1: ')).toBe(true);
+    expect(md).toContain('- 項目2');
+  }, 30_000);
+
+  it('BOM 付きテンプレでも frontmatter を認識して展開する', async () => {
+    await writeTemplate(
+      '_templates/bom-exp.md',
+      '﻿---\ncategory: log\n---\n\n本文 {{title}}\n',
+    );
+    const res = await apiAs(yamada, 'POST', '/api/templates/expand', {
+      templatePath: '_templates/bom-exp.md',
+      title: 'X',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().markdown).toBe('本文 X\n');
+  }, 30_000);
+
+  it('保護パス / トラバーサル / 非 .md は 400', async () => {
+    for (const bad of ['.git/config', '../etc/passwd', '_templates/x.txt', '']) {
+      const res = await apiAs(yamada, 'POST', '/api/templates/expand', {
+        templatePath: bad,
+        title: 'x',
+      });
+      expect(res.statusCode).toBe(400);
+    }
+  }, 30_000);
+
+  it('存在しないテンプレは 404', async () => {
+    const res = await apiAs(yamada, 'POST', '/api/templates/expand', {
+      templatePath: '_templates/none.md',
+      title: 'x',
+    });
+    expect(res.statusCode).toBe(404);
+  }, 20_000);
+
+  it('複数の {{cursor}} があっても 2 番目以降のマーカーとその後のテキストは本文に保全される', async () => {
+    // 重大#1 の回帰: split(sep, 2) は 2 番目以降のマーカー右側を捨ててしまう
+    await writeTemplate('_templates/multi.md', '# {{title}}\n\nA{{cursor}}B{{cursor}}C\n');
+    const res = await apiAs(yamada, 'POST', '/api/templates/expand', {
+      templatePath: '_templates/multi.md',
+      title: '複数',
+    });
+    expect(res.statusCode).toBe(200);
+    const md = res.json().markdown as string;
+    // マーカー総数 2 個は全て残す(client 側で最初のマーカーで split する)。
+    // A/B/C いずれも消えていないことが重要
+    expect(md).toContain('A');
+    expect(md).toContain('B');
+    expect(md).toContain('C');
+    const markerCount = md.split('{{cursor}}').length - 1;
+    expect(markerCount).toBe(2);
+  }, 30_000);
+
+  it('テンプレフォルダ外の md を expand しようとすると 400(通常文書を勝手にテンプレ扱いさせない)', async () => {
+    await writeTemplate('_templates/ok.md', '# {{title}}\n');
+    await writeTemplate('通常/文書.md', '## 見出し {{title}}\n');
+    const outOfScope = await apiAs(yamada, 'POST', '/api/templates/expand', {
+      templatePath: '通常/文書.md',
+      title: 'X',
+    });
+    expect(outOfScope.statusCode).toBe(400);
+    // 対照: scope 内の md は通る
+    const inScope = await apiAs(yamada, 'POST', '/api/templates/expand', {
+      templatePath: '_templates/ok.md',
+      title: 'X',
+    });
+    expect(inScope.statusCode).toBe(200);
+  }, 30_000);
+
+  it('templates.folder が空文字ならテンプレ機能無効として expand も 400', async () => {
+    await writeTemplate('_templates/x.md', '# {{title}}\n');
+    await apiAs(admin, 'PUT', '/api/library/settings', {
+      templates: { folder: '' },
+      dailyNotes: { folder: '日記', template: '', filenamePattern: 'YYYY-MM-DD' },
+    });
+    const res = await apiAs(yamada, 'POST', '/api/templates/expand', {
+      templatePath: '_templates/x.md',
+      title: 'X',
+    });
+    expect(res.statusCode).toBe(400);
+  }, 20_000);
+});
+
+describe('POST /api/templates/apply (#84 Phase C 追加分)', () => {
+  it('テンプレフォルダ外の md は apply でも 400', async () => {
+    await writeTemplate('通常/文書.md', '# 通常\n');
+    const res = await apiAs(yamada, 'POST', '/api/templates/apply', {
+      templatePath: '通常/文書.md',
+      title: 'X',
+    });
+    expect(res.statusCode).toBe(400);
+  }, 20_000);
+});

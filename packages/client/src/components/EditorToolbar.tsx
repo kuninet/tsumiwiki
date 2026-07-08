@@ -8,6 +8,8 @@ interface EditorToolbarProps {
   editor: Editor;
   onOpenLinkDialog: () => void;
   onPickImage: (file: File) => void;
+  // #84 Phase C: テンプレート適用モーダルを開く(null なら非表示)
+  onOpenTemplateApply?: () => void;
 }
 
 interface ToolbarButtonProps {
@@ -40,7 +42,12 @@ function Separator() {
   return <span className="mx-1 h-4 w-px bg-line" aria-hidden="true" />;
 }
 
-export function EditorToolbar({ editor, onOpenLinkDialog, onPickImage }: EditorToolbarProps) {
+export function EditorToolbar({
+  editor,
+  onOpenLinkDialog,
+  onPickImage,
+  onOpenTemplateApply,
+}: EditorToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 選択範囲の変化(見出し/太字等のトグル状態)にツールバーの表示を追随させる
@@ -168,6 +175,13 @@ export function EditorToolbar({ editor, onOpenLinkDialog, onPickImage }: EditorT
           editor.chain().focus().insertContent({ type: 'codeBlock', attrs: { language: 'mermaid' } }).run()
         }
       />
+      {onOpenTemplateApply && (
+        <ToolbarButton
+          label="テンプレ適用"
+          title="テンプレート適用(挿入/追記)"
+          onClick={onOpenTemplateApply}
+        />
+      )}
     </div>
   );
 }

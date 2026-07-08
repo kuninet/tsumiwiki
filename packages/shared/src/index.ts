@@ -280,6 +280,28 @@ export const applyTemplateResponseSchema = z.object({
 });
 export type ApplyTemplateResponse = z.infer<typeof applyTemplateResponseSchema>;
 
+// ---- #84 Phase C: 既存文書へのテンプレ適用 API ----
+
+// 選択したテンプレの変数を展開して Markdown 本文を返す(新規文書は作らない)。
+// クライアントはこの Markdown を Tiptap で挿入/追記する。`{{cursor}}` はマーカー文字列として
+// レスポンスに残るので、クライアント側で split してカーソル位置を決める
+export const expandTemplateRequestSchema = z.object({
+  templatePath: z.string().min(1),
+  // 展開時の `{{title}}` に使う値。編集中文書のタイトルをクライアントが渡す
+  title: z.string().min(1),
+});
+export type ExpandTemplateRequest = z.infer<typeof expandTemplateRequestSchema>;
+
+export const expandTemplateResponseSchema = z.object({
+  markdown: z.string(),
+});
+export type ExpandTemplateResponse = z.infer<typeof expandTemplateResponseSchema>;
+
+// カーソル位置マーカーは template-vars.ts の内部定数と同一。二重定義を避けるため
+// template-vars.ts 側を単一のソースオブトゥルースにして、こちらから re-export する
+// (中#3 対応: shared/index.ts と template-vars.ts で独立に持っていた `'{{cursor}}'`
+// 値が食い違うと server↔client 契約が黙って壊れるため)。
+
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({
   error: z.object({
