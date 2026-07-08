@@ -88,23 +88,20 @@ describe('DocView', () => {
     expect(editButton.disabled).toBe(true);
   });
 
-  it('編集モード中は履歴ボタンが無効化される', async () => {
+  it('文書を開くと自動で編集モードに入り、履歴ボタンが無効化される(#51)', async () => {
     stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
       'GET /api/drafts': { draft: null },
     });
     renderDocView();
 
-    const historyButton = (await screen.findByRole('button', { name: '履歴' })) as HTMLButtonElement;
-    expect(historyButton.disabled).toBe(false);
-
-    fireEvent.click(screen.getByRole('button', { name: '編集' }));
-    await screen.findByRole('button', { name: '保存' });
-
+    // #51: 開いた瞬間に auto-startEditing が走るので、保存ボタンが表示されるまで待つ
+    await screen.findByRole('button', { name: /保存/ });
+    const historyButton = screen.getByRole('button', { name: '履歴' }) as HTMLButtonElement;
     expect(historyButton.disabled).toBe(true);
   });
 
-  it('編集を開始して保存すると、baseUpdatedAtを含めてPUT /api/docsを呼び出す', async () => {
+  it('自動編集モードで内容を変更して保存すると、baseUpdatedAtを含めてPUT /api/docsを呼び出す(#51)', async () => {
     const calls = stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
       'GET /api/drafts': { draft: null },
@@ -112,10 +109,20 @@ describe('DocView', () => {
     });
     renderDocView();
 
-    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
-    await screen.findByRole('button', { name: '保存' });
+    // 自動で編集モードに入る → 保存ボタン(disabled)を確認
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: /保存/ }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
 
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    // タグチップの × ボタンで dirty=true にしてから保存(入力レースを避けるため削除経路を使う)
+    fireEvent.click(screen.getByRole('button', { name: 'タグ #設計 を削除' }));
+
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: /保存/ }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
 
     await waitFor(() => {
       expect(calls.some((c) => c.method === 'PUT' && c.path === '/api/docs')).toBe(true);
@@ -125,7 +132,7 @@ describe('DocView', () => {
     expect(saveCall.body).toMatchObject({
       path: 'メモ.md',
       baseUpdatedAt: '2026-07-01T00:00:00+09:00',
-      tags: ['設計'],
+      tags: [],
     });
   });
 
@@ -136,8 +143,7 @@ describe('DocView', () => {
     });
     renderDocView();
 
-    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
-
+    // #51: auto-startEditing で編集モードに入ると下書き取得ダイアログが自動で開く
     expect(await screen.findByText('未保存の下書きがあります。復元しますか?')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '復元' }));
 
@@ -153,7 +159,7 @@ describe('DocView', () => {
     });
     renderDocView();
 
-    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
+    // #51: auto-startEditing で編集モードに入ると下書き取得ダイアログが自動で開く
     await screen.findByText('未保存の下書きがあります。復元しますか?');
 
     fireEvent.click(screen.getByRole('button', { name: '破棄' }));
@@ -163,7 +169,61 @@ describe('DocView', () => {
     });
   });
 
-  it('タグ入力を変更してCtrl+Sで保存すると、ボタン経由でなくても新しいタグが送られる', async () => {
+  it('タグを2回連続で削除しても pending 状態が積み上がる(#51 Opus C1)', async () => {
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'PUT /api/docs': { updatedAt: '2026-07-02T00:00:00+09:00' },
+    });
+    const docWithMultipleTags: DocResponse = { ...DOC, tags: ['A', 'B', 'C'] };
+    renderDocView(docWithMultipleTags);
+
+    await screen.findByRole('button', { name: /保存/ });
+
+    // 連続削除: A → C(残り: B のみ)
+    fireEvent.click(screen.getByRole('button', { name: 'タグ #A を削除' }));
+    await waitFor(() =>
+      expect((screen.queryByRole('button', { name: 'タグ #A を削除' }))).toBeNull(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'タグ #C を削除' }));
+    await waitFor(() =>
+      expect((screen.queryByRole('button', { name: 'タグ #C を削除' }))).toBeNull(),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+
+    await waitFor(() => {
+      expect(calls.some((c) => c.method === 'PUT' && c.path === '/api/docs')).toBe(true);
+    });
+    const saveCall = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs')!;
+    expect(saveCall.body).toMatchObject({ tags: ['B'] });
+  });
+
+  it('編集中に「破棄」ボタンで編集内容をキャンセルできる(#51 Opus H2)', async () => {
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+    });
+    renderDocView();
+
+    await screen.findByRole('button', { name: /保存/ });
+    // dirty にする
+    fireEvent.click(screen.getByRole('button', { name: 'タグ #設計 を削除' }));
+    // 破棄ボタンが現れるまで待つ(dirty=true 連動)
+    const discardBtn = await screen.findByRole('button', { name: '破棄' });
+    fireEvent.click(discardBtn);
+    // 確認ダイアログの「破棄」を押す
+    const confirmBtns = await screen.findAllByRole('button', { name: '破棄' });
+    // 最後の一つ(ConfirmDialog 側)を押す
+    fireEvent.click(confirmBtns[confirmBtns.length - 1]);
+
+    // cancelEditing でロック解放とドラフト削除の DELETE が飛ぶ
+    await waitFor(() => {
+      expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/locks')).toBe(true);
+    });
+  });
+
+  it('タグチップ操作で発生した dirty 状態を Ctrl+S で保存できる(#51)', async () => {
     const calls = stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
       'GET /api/drafts': { draft: null },
@@ -171,9 +231,17 @@ describe('DocView', () => {
     });
     renderDocView();
 
-    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
-    const tagsInput = await screen.findByLabelText('タグ(カンマ区切り)');
-    fireEvent.change(tagsInput, { target: { value: '設計, 新タグ' } });
+    // 自動編集モードに入るまで待つ
+    await screen.findByRole('button', { name: /保存/ });
+
+    // タグチップ削除で dirty=true にする(入力レースを避ける)
+    fireEvent.click(screen.getByRole('button', { name: 'タグ #設計 を削除' }));
+
+    // dirty=true が反映されて保存ボタンが活性化するのを待つ
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: /保存/ }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+    });
 
     fireEvent.keyDown(window, { key: 's', ctrlKey: true });
 
@@ -182,23 +250,25 @@ describe('DocView', () => {
     });
 
     const saveCall = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs')!;
-    expect(saveCall.body).toMatchObject({ tags: ['設計', '新タグ'] });
+    expect(saveCall.body).toMatchObject({ tags: [] });
   });
 
   it('閲覧モードでdocの本文が変わるとエディタの表示が追随する', async () => {
     stubFetch();
+    // #51: 他者ロック中(閲覧モード)なら auto-startEditing がスキップされる
+    const lockedDoc: DocResponse = { ...DOC, lock: { userId: 2, displayName: '次郎' } };
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { rerender } = render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter>
-          <DocView doc={DOC} currentUser={CURRENT_USER} />
+          <DocView doc={lockedDoc} currentUser={CURRENT_USER} />
         </MemoryRouter>
       </QueryClientProvider>,
     );
 
     await waitFor(() => expect(screen.getByText('本文です')).toBeTruthy());
 
-    const updatedDoc: DocResponse = { ...DOC, body: '更新後の本文' };
+    const updatedDoc: DocResponse = { ...lockedDoc, body: '更新後の本文' };
     rerender(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter>
@@ -224,8 +294,8 @@ describe('DocView', () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '編集' }));
-    await screen.findByRole('button', { name: '保存' });
+    // #51: auto-startEditing で編集モードに入るまで待つ(保存ボタンの出現で判定)
+    await screen.findByRole('button', { name: /保存/ });
 
     const updatedDoc: DocResponse = { ...DOC, body: '外部で更新された本文' };
     rerender(

@@ -166,7 +166,7 @@ describe('useEditingSession', () => {
     expect(result.current.lastDraftSavedAt).not.toBeNull();
   });
 
-  it('保存に成功するとロックを解放して閲覧モードへ戻る', async () => {
+  it('保存に成功しても編集モードを継続し、dirty はクリアされる(#51)', async () => {
     const calls = stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
       'GET /api/drafts': { draft: null },
@@ -187,9 +187,34 @@ describe('useEditingSession', () => {
       await result.current.save();
     });
 
-    expect(result.current.mode).toBe('view');
+    // #51 シームレスUX: 保存後もロックは保持したまま編集モードを継続
+    expect(result.current.mode).toBe('edit');
+    expect(result.current.dirty).toBe(false);
     expect(calls.some((c) => c.method === 'PUT' && c.path === '/api/docs')).toBe(true);
-    expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/locks')).toBe(true);
+    expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/locks')).toBe(false);
+  });
+
+  it('未変更(dirty=false)で save() を呼んでも PUT /api/docs は飛ばない', async () => {
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'PUT /api/docs': { updatedAt: '2026-07-02T00:00:00+09:00' },
+    });
+
+    const { result } = renderHook(
+      () => useEditingSession({ path: 'a.md', baseUpdatedAt: '2026-07-01T00:00:00+09:00' }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.startEditing('本文', []);
+    });
+
+    await act(async () => {
+      await result.current.save();
+    });
+
+    expect(calls.some((c) => c.method === 'PUT' && c.path === '/api/docs')).toBe(false);
   });
 
   it('保存中に連続で呼び出しても多重送信しない', async () => {
@@ -247,7 +272,7 @@ describe('useEditingSession', () => {
     expect(useToastStore.getState().toast).toMatchObject({ kind: 'error' });
   });
 
-  it('競合解消(上書き保存)は最新のupdatedAtを取得し直して再保存し、閲覧モードへ戻る', async () => {
+  it('競合解消(上書き保存)は最新のupdatedAtを取得し直して再保存し、編集モードを継続する(#51)', async () => {
     const calls = stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
       'GET /api/drafts': { draft: null },
@@ -272,7 +297,9 @@ describe('useEditingSession', () => {
     expect(calls.some((c) => c.method === 'GET' && c.path === '/api/docs')).toBe(true);
     const saveCall = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs')!;
     expect((saveCall.body as { baseUpdatedAt: string }).baseUpdatedAt).toBe('2026-07-01T05:00:00+09:00');
-    expect(result.current.mode).toBe('view');
+    // #51 シームレスUX: 保存後もロックは保持したまま編集モードを継続
+    expect(result.current.mode).toBe('edit');
+    expect(result.current.dirty).toBe(false);
     expect(result.current.conflict).toBe(false);
   });
 
