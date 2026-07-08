@@ -1,8 +1,23 @@
 import type { Editor } from '@tiptap/core';
 import { useEditorState } from '@tiptap/react';
+import {
+  Code2,
+  FileText,
+  Image as ImageIcon,
+  Link as LinkIcon,
+  List,
+  ListOrdered,
+  ListTodo,
+  Minus,
+  Quote,
+  Table,
+  Workflow,
+} from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useRef } from 'react';
 
-// エディタツールバー(FR-EDIT-03・設計05章5.3)。編集モード時のみDocView上部に表示する
+// エディタツールバー(FR-EDIT-03・設計05章5.3)。編集モード時のみDocView上部に表示する。
+// 狭幅時: `sm` 未満はアイコンのみ、`sm` 以上はアイコン+ラベル。折返しはせず横スクロール。
 
 interface EditorToolbarProps {
   editor: Editor;
@@ -17,9 +32,10 @@ interface ToolbarButtonProps {
   title?: string;
   active?: boolean;
   onClick: () => void;
+  icon?: ReactNode;
 }
 
-function ToolbarButton({ label, title, active, onClick }: ToolbarButtonProps) {
+function ToolbarButton({ label, title, active, onClick, icon }: ToolbarButtonProps) {
   return (
     <button
       type="button"
@@ -29,18 +45,21 @@ function ToolbarButton({ label, title, active, onClick }: ToolbarButtonProps) {
       // mousedownでpreventDefaultし、クリックしてもエディタの選択状態を失わないようにする
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      className={`h-7 min-w-7 whitespace-nowrap rounded px-1.5 text-sm ${
+      className={`flex h-7 min-w-7 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 text-sm ${
         active ? 'bg-active text-accent' : 'text-ink-soft hover:bg-hoverbg'
       }`}
     >
-      {label}
+      {icon}
+      {icon ? <span className="hidden sm:inline">{label}</span> : <span>{label}</span>}
     </button>
   );
 }
 
 function Separator() {
-  return <span className="mx-1 h-4 w-px bg-line" aria-hidden="true" />;
+  return <span className="mx-1 h-4 w-px flex-shrink-0 bg-line" aria-hidden="true" />;
 }
+
+const ICON_SIZE = 14;
 
 export function EditorToolbar({
   editor,
@@ -78,7 +97,7 @@ export function EditorToolbar({
   return (
     <div
       data-testid="editor-toolbar"
-      className="flex h-10 flex-wrap items-center gap-1 border-y border-line bg-panel px-4 sm:px-6 lg:px-8"
+      className="flex h-10 flex-nowrap items-center gap-1 overflow-x-auto overscroll-x-contain border-y border-line bg-panel px-4 sm:px-6 lg:px-8"
     >
       <ToolbarButton
         label="H1"
@@ -116,18 +135,21 @@ export function EditorToolbar({
       />
       <Separator />
       <ToolbarButton
-        label="•"
+        icon={<List size={ICON_SIZE} aria-hidden="true" />}
+        label="箇条書き"
         title="箇条書き"
         active={active.bulletList}
         onClick={() => editor.chain().focus().toggleBulletList().run()}
       />
       <ToolbarButton
-        label="1."
+        icon={<ListOrdered size={ICON_SIZE} aria-hidden="true" />}
+        label="番号"
         title="番号付きリスト"
         active={active.orderedList}
         onClick={() => editor.chain().focus().toggleOrderedList().run()}
       />
       <ToolbarButton
+        icon={<ListTodo size={ICON_SIZE} aria-hidden="true" />}
         label="チェック"
         title="チェックリスト"
         active={active.taskList}
@@ -135,33 +157,45 @@ export function EditorToolbar({
       />
       <Separator />
       <ToolbarButton
+        icon={<Table size={ICON_SIZE} aria-hidden="true" />}
         label="表"
         title="表を挿入(3x3)"
         onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
       />
       <ToolbarButton
+        icon={<Code2 size={ICON_SIZE} aria-hidden="true" />}
         label="コード"
         title="コードブロック"
         active={active.codeBlock}
         onClick={() => editor.chain().focus().toggleCodeBlock().run()}
       />
       <ToolbarButton
+        icon={<Quote size={ICON_SIZE} aria-hidden="true" />}
         label="引用"
+        title="引用"
         active={active.blockquote}
         onClick={() => editor.chain().focus().toggleBlockquote().run()}
       />
       <ToolbarButton
+        icon={<Minus size={ICON_SIZE} aria-hidden="true" />}
         label="区切り線"
+        title="区切り線"
         onClick={() => editor.chain().focus().setHorizontalRule().run()}
       />
       <Separator />
       <ToolbarButton
+        icon={<LinkIcon size={ICON_SIZE} aria-hidden="true" />}
         label="リンク"
         title="リンク(Ctrl/Cmd+K)"
         active={active.link}
         onClick={onOpenLinkDialog}
       />
-      <ToolbarButton label="画像" onClick={() => fileInputRef.current?.click()} />
+      <ToolbarButton
+        icon={<ImageIcon size={ICON_SIZE} aria-hidden="true" />}
+        label="画像"
+        title="画像"
+        onClick={() => fileInputRef.current?.click()}
+      />
       <input
         ref={fileInputRef}
         type="file"
@@ -170,13 +204,16 @@ export function EditorToolbar({
         className="hidden"
       />
       <ToolbarButton
+        icon={<Workflow size={ICON_SIZE} aria-hidden="true" />}
         label="Mermaid"
+        title="Mermaid"
         onClick={() =>
           editor.chain().focus().insertContent({ type: 'codeBlock', attrs: { language: 'mermaid' } }).run()
         }
       />
       {onOpenTemplateApply && (
         <ToolbarButton
+          icon={<FileText size={ICON_SIZE} aria-hidden="true" />}
           label="テンプレ適用"
           title="テンプレート適用(挿入/追記)"
           onClick={onOpenTemplateApply}
