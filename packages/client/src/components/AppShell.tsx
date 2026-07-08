@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, Outlet, useNavigate } from 'react-router-dom';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useCreateOrOpenTodayNote } from '../api/daily-notes';
 import { useApplyTemplate } from '../api/templates';
 import { useMediaQuery } from '../hooks/use-media-query';
@@ -65,14 +65,24 @@ export function AppShell() {
 
   // モバイル判定(Tailwind md=768px に合わせる)。狭幅端末ではサイドバーをドロワー化する
   const isMobile = useMediaQuery('(max-width: 767px)');
-  // デスクトップ→モバイル遷移の一度きりで自動折畳。ユーザーがモバイル中に開いた状態を保ちたいので毎回は畳まない
-  const prevIsMobileRef = useRef(isMobile);
+  // 初回モバイル判定 or デスクトップ→モバイル遷移で自動折畳。
+  // prev の初期値を false にすることで、iPhone等での初回接続時にも「false→true」エッジが発火する
+  const prevIsMobileRef = useRef(false);
   useEffect(() => {
     if (isMobile && !prevIsMobileRef.current) {
       useUIStore.setState({ sidebarCollapsed: true });
     }
     prevIsMobileRef.current = isMobile;
   }, [isMobile]);
+
+  // モバイル時にルート変化(文書選択など)があればドロワーを閉じる。
+  // ドロワー内でフォルダ/タグを開くだけならURLは変わらないので閉じない
+  const location = useLocation();
+  useEffect(() => {
+    if (isMobile) {
+      useUIStore.setState({ sidebarCollapsed: true });
+    }
+  }, [isMobile, location.pathname]);
 
   return (
     <div className="flex h-screen flex-col bg-canvas font-sans text-ink">
@@ -93,7 +103,7 @@ export function AppShell() {
             style={isMobile ? undefined : { width: sidebarWidth }}
             className={
               isMobile
-                ? `fixed left-0 top-[52px] bottom-[38px] z-40 flex w-[280px] flex-col border-r border-line bg-panel transition-transform duration-200 ${
+                ? `fixed inset-y-0 left-0 z-40 flex w-[300px] max-w-[85vw] flex-col border-r border-line bg-panel shadow-xl transition-transform duration-200 ${
                     sidebarCollapsed ? '-translate-x-full' : 'translate-x-0'
                   }`
                 : 'relative flex flex-shrink-0 flex-col border-r border-line bg-panel'
