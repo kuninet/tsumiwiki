@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, Outlet, useNavigate } from 'react-router-dom';
 import { useCreateOrOpenTodayNote } from '../api/daily-notes';
+import { useApplyTemplate } from '../api/templates';
 import { docUrl } from '../lib/doc-path';
 import { confirmNavigationIfDirty } from '../lib/navigation-guard';
 import { useUIStore } from '../stores/ui';
@@ -8,6 +9,7 @@ import { FolderTree } from './FolderTree';
 import { Header } from './Header';
 import { StatusBar } from './StatusBar';
 import { TagPane } from './TagPane';
+import { TemplatePickerDialog } from './TemplatePickerDialog';
 import { Toast } from './Toast';
 
 // 認証済みレイアウト(SC-02の骨格・設計04章4.2・デザインhandoff components.md)
@@ -23,12 +25,20 @@ export function AppShell() {
 
   const navigate = useNavigate();
   const createOrOpenTodayNote = useCreateOrOpenTodayNote();
+  const applyTemplate = useApplyTemplate();
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
 
   function handleOpenTodayNote() {
     if (!confirmNavigationIfDirty()) return;
     createOrOpenTodayNote.mutate(undefined, {
       onSuccess: (res) => navigate(docUrl(res.path)),
     });
+  }
+
+  function handleOpenTemplatePicker() {
+    // 未保存変更があるときは、作成後に強制遷移するのでここで確認しておく
+    if (!confirmNavigationIfDirty()) return;
+    setTemplatePickerOpen(true);
   }
 
   const draggingRef = useRef(false);
@@ -103,6 +113,16 @@ export function AppShell() {
               </button>
               <button
                 type="button"
+                onClick={handleOpenTemplatePicker}
+                disabled={applyTemplate.isPending}
+                aria-busy={applyTemplate.isPending}
+                className="flex flex-1 items-center justify-center gap-1 border-l border-line hover:bg-hoverbg disabled:cursor-progress disabled:opacity-50"
+                title="テンプレートから新規作成"
+              >
+                <span aria-hidden="true">📄</span> テンプレから新規
+              </button>
+              <button
+                type="button"
                 onClick={requestCreateDoc}
                 className="flex flex-1 items-center justify-center gap-1 border-l border-line hover:bg-hoverbg"
               >
@@ -140,6 +160,25 @@ export function AppShell() {
       </div>
 
       <StatusBar />
+
+      {templatePickerOpen && (
+        <TemplatePickerDialog
+          onCancel={() => setTemplatePickerOpen(false)}
+          onSubmit={(result) => {
+            setTemplatePickerOpen(false);
+            applyTemplate.mutate(
+              {
+                templatePath: result.templatePath,
+                title: result.title,
+                targetFolder: result.targetFolder || undefined,
+              },
+              {
+                onSuccess: (res) => navigate(docUrl(res.path)),
+              },
+            );
+          }}
+        />
+      )}
 
       <Toast />
     </div>
