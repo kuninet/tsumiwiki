@@ -247,6 +247,39 @@ export const LIBRARY_SETTINGS_DEFAULTS: LibrarySettings = {
   dailyNotes: { folder: '日記', template: '', filenamePattern: 'YYYY-MM-DD' },
 };
 
+// ---- #84 Phase B: テンプレート API ----
+
+export const templateSummarySchema = z.object({
+  // ライブラリ相対パス(例: `_templates/日誌.md`)
+  path: z.string(),
+  // ファイル名から `.md` を除いた表示名
+  name: z.string(),
+  // frontmatter.target_folder(なければ null)。新規作成の既定フォルダとして使う
+  targetFolder: z.string().nullable(),
+  // frontmatter.description(あれば選択UIで補助表示)
+  description: z.string().optional(),
+});
+export type TemplateSummary = z.infer<typeof templateSummarySchema>;
+
+export const listTemplatesResponseSchema = z.object({
+  templates: z.array(templateSummarySchema),
+});
+export type ListTemplatesResponse = z.infer<typeof listTemplatesResponseSchema>;
+
+// テンプレを適用して新規文書を作成する。target_folder は body で上書き可能
+export const applyTemplateRequestSchema = z.object({
+  templatePath: z.string().min(1),
+  title: z.string().min(1),
+  // 未指定なら frontmatter.target_folder を、それも無ければライブラリ直下を使う
+  targetFolder: z.string().optional(),
+});
+export type ApplyTemplateRequest = z.infer<typeof applyTemplateRequestSchema>;
+
+export const applyTemplateResponseSchema = z.object({
+  path: z.string(),
+});
+export type ApplyTemplateResponse = z.infer<typeof applyTemplateResponseSchema>;
+
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({
   error: z.object({
