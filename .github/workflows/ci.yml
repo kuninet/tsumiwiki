@@ -11,25 +11,54 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # docs-only PR の判定。`code` は「docs/ ・ .md ・ LICENSE 以外の変更が
+      # 一つでもあれば true」。push:main では実行せず、常にフルCIを回す。
+      - name: パス変更の判定
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            code:
+              - '**/*'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!LICENSE'
+
+      # docs-only の場合はここで早期成功。必須ステータスチェック `check` は
+      # そのまま緑になるため Branch protection の設定は変更不要。
+      - name: docs-only の場合はスキップ
+        if: github.event_name == 'pull_request' && steps.filter.outputs.code != 'true'
+        run: |
+          echo "::notice::docs-only PR — skipping lint/typecheck/test/build"
+          echo "SKIP=1" >> "$GITHUB_ENV"
+
       - uses: pnpm/action-setup@v4
+        if: env.SKIP != '1'
         # バージョンはpackage.jsonのpackageManagerを参照
 
       - uses: actions/setup-node@v4
+        if: env.SKIP != '1'
         with:
           node-version: 20
           cache: pnpm
 
       - name: 依存関係のインストール
+        if: env.SKIP != '1'
         run: pnpm install --frozen-lockfile
 
       - name: Lint
+        if: env.SKIP != '1'
         run: pnpm lint
 
       - name: 型チェック
+        if: env.SKIP != '1'
         run: pnpm typecheck
 
       - name: テスト
+        if: env.SKIP != '1'
         run: pnpm test
 
       - name: クライアントビルド
+        if: env.SKIP != '1'
         run: pnpm --filter @tsumiwiki/client build
