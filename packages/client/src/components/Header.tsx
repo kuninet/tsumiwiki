@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { Menu } from 'lucide-react';
+import { Menu, RefreshCw } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
@@ -45,7 +45,7 @@ export function Header() {
   }
 
   return (
-    <header className="flex h-[52px] flex-shrink-0 items-center gap-4 border-b border-line bg-panel px-4">
+    <header className="flex h-[52px] flex-shrink-0 items-center gap-2 border-b border-line bg-panel px-2 md:gap-4 md:px-4">
       {isMobile && (
         <button
           type="button"
@@ -56,7 +56,7 @@ export function Header() {
           <Menu size={18} aria-hidden="true" />
         </button>
       )}
-      <Link to="/" className="flex flex-shrink-0 items-center gap-2">
+      <Link to="/" aria-label="TsumiWiki (ホーム)" className="flex flex-shrink-0 items-center gap-2">
         <span
           aria-hidden="true"
           style={{ background: 'var(--tw-accent-gradient)' }}
@@ -64,21 +64,24 @@ export function Header() {
         >
           積
         </span>
-        <span className="text-base font-bold text-ink">TsumiWiki</span>
+        {/* 狭幅ではロゴマークのみ表示。md 以上で "TsumiWiki" テキストを追加(md=768pxはハンバーガーの閾値と一致) */}
+        <span className="hidden text-base font-bold text-ink md:inline">TsumiWiki</span>
       </Link>
 
-      <div className="mx-auto flex flex-1 justify-center">
+      <div className="mx-auto flex min-w-0 flex-1 justify-center">
         <SearchBox ref={searchInputRef} />
       </div>
 
-      <div className="flex flex-shrink-0 items-center gap-2">
+      <div className="flex flex-shrink-0 items-center gap-1 md:gap-2">
         <button
           type="button"
           onClick={handleRescan}
-          className="flex items-center gap-1.5 rounded border border-line px-3 py-1.5 text-sm text-ink-soft hover:bg-hoverbg"
+          aria-label="更新確認"
+          title="更新確認"
+          className="flex h-8 items-center gap-1.5 rounded border border-line px-2 text-sm text-ink-soft hover:bg-hoverbg md:px-3 md:py-1.5"
         >
-          <span aria-hidden="true">↻</span>
-          更新確認
+          <RefreshCw size={14} aria-hidden="true" />
+          <span className="hidden md:inline">更新確認</span>
         </button>
         <ThemeToggle />
         <UserMenu />
