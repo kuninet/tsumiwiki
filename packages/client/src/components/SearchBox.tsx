@@ -142,7 +142,8 @@ export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props,
           onKeyDown={handleKeyDown}
           className="w-full bg-transparent text-sm text-ink placeholder:text-ink-faint focus:outline-none"
         />
-        <span className="flex-shrink-0 rounded border border-line px-1.5 py-0.5 font-mono text-xs text-ink-faint">
+        {/* Ctrl+K ヒントは物理キーボードのないモバイルでは冗長なので md 未満で非表示(ハンバーガーの閾値 767px に揃える) */}
+        <span className="hidden flex-shrink-0 rounded border border-line px-1.5 py-0.5 font-mono text-xs text-ink-faint md:inline">
           Ctrl K
         </span>
       </div>
