@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
+import { useUIStore } from '../stores/ui';
 import { DocView } from './DocView';
 
 const DOC: DocResponse = {
@@ -67,6 +68,7 @@ describe('DocView', () => {
     vi.unstubAllGlobals();
     useEditStore.setState({ mode: 'view', dirty: false, lockedPath: null, lastDraftSavedAt: null });
     useToastStore.setState({ toast: null });
+    useUIStore.getState().resetEditorChrome();
   });
 
   it('閲覧モードでタイトルと更新日時を表示する', async () => {
@@ -327,6 +329,39 @@ describe('DocView', () => {
     );
 
     await waitFor(() => expect(screen.getByText('更新後の本文')).toBeTruthy());
+  });
+
+  it('自動編集モードに入っただけではツールバーは表示されない(疑似閲覧)', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+    });
+    renderDocView();
+
+    // 保存ボタン=編集モードには入っている
+    await screen.findByRole('button', { name: /保存/ });
+    // だがツールバーはまだ表示しない
+    expect(screen.queryByTestId('editor-toolbar')).toBeNull();
+  });
+
+  it('エディタ本文をクリックするとツールバーが表示される', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+    });
+    renderDocView();
+
+    await screen.findByRole('button', { name: /保存/ });
+    expect(screen.queryByTestId('editor-toolbar')).toBeNull();
+
+    // ProseMirror の editable な本文要素をクリックする
+    const proseMirror = document.querySelector('.ProseMirror') as HTMLElement | null;
+    expect(proseMirror).not.toBeNull();
+    fireEvent.click(proseMirror!);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('editor-toolbar')).toBeTruthy();
+    });
   });
 
   it('編集モード中はdocの本文が変わってもエディタの表示を上書きしない', async () => {
