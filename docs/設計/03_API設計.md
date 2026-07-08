@@ -12,7 +12,13 @@
 { "error": { "code": "DOC_LOCKED", "message": "この文書は山田さんが編集中です" } }
 ```
 
-主なエラーコード: `UNAUTHORIZED` `FORBIDDEN` `NOT_FOUND` `DOC_LOCKED` `LOCK_EXPIRED` `CONFLICT` `INVALID_PATH` `VALIDATION_ERROR`
+主なエラーコード: `UNAUTHORIZED` `FORBIDDEN` `NOT_FOUND` `DOC_LOCKED` `LOCK_EXPIRED` `CONFLICT` `INVALID_PATH` `VALIDATION_ERROR` `INVALID_SETTINGS`
+
+### ヘルスチェック(NFR-OPS-02)
+
+| メソッド | パス | 内容 |
+|---|---|---|
+| GET | `/api/health` | 稼働確認(認証不要)。バックアップpushの連続失敗などをここで警告表示する |
 
 ## 3.2 エンドポイント一覧
 
@@ -107,7 +113,39 @@
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| PUT | `/api/me/password` | `{currentPassword, newPassword}` |
+| PUT | `/api/me/password` | `{currentPassword, newPassword}`。成功時は **現行以外の全セッションを失効させる**(端末を選ばずリセット可能) |
+
+### テンプレート機能
+
+| メソッド | パス | 内容 |
+|---|---|---|
+| GET | `/api/templates` | ライブラリ設定 `templates.folder` 配下の `.md` を再帰列挙。`[{path, name, targetFolder?, description?}]`。frontmatter の `target_folder`/`description` を軽量パースして返す |
+| POST | `/api/templates/apply` | `{templatePath, title, targetFolder?}` → 変数展開+テンプレ専用メタキー除去 → **新規文書を作成**しパスを返す(`add:` コミット) |
+| POST | `/api/templates/expand` | `{templatePath}` → 変数展開後の Markdown 本文を返す(既存文書への挿入/追記用。frontmatter は落とし、`{{cursor}}` マーカーは残す) |
+
+### デイリーノート機能
+
+| メソッド | パス | 内容 |
+|---|---|---|
+| POST | `/api/daily-notes/today` | 「今日」のデイリーノートを取得または作成。`{path, created: boolean}` を返す。同時実行(二人同時押し)は `DocConflictError` を既存扱いに畳み込むため、二重作成しない |
+
+- 「今日」の判定は **サーバーローカルTZ** を使用。
+- ファイル名は `dailyNotes.filenamePattern`(素の日付書式。`{{...}}` 構文は禁止)を今日の日付で `formatDate` した文字列。
+- 作成時は `dailyNotes.template`(空欄で既定本文)の内容を変数展開して書き込む(`stripCursor:true`)。
+
+### ライブラリ設定
+
+| メソッド | パス | 内容 |
+|---|---|---|
+| GET | `/api/library/settings` | 現在のライブラリ設定(認証必須)。ファイル不在・パース失敗時はデフォルト値を返す |
+| PUT | `/api/library/settings` | **admin** 更新。`.tsumiwiki/settings.yaml` を書き `config: update library settings` でコミット |
+
+### ライブラリ運用
+
+| メソッド | パス | 内容 |
+|---|---|---|
+| GET | `/api/library/status` | バックアップの状態(直近push日時・連続失敗数など) |
+| POST | `/api/library/rescan` | 外部変更の手動取り込み(06章4)。ツリー/タグの再取得を促す |
 
 ## 3.3 CLI(FR-AUTH-06)
 
