@@ -22,6 +22,12 @@ import { DiffView } from './DiffView';
 interface HistoryPanelProps {
   path: string;
   onClose: () => void;
+  // #106: 編集中に「この版に戻す」が押された場合の整合処理。
+  // dirty=true なら確認ダイアログで未保存変更の破棄を警告する。
+  // beforeRestore は restoreRevision の前に呼ばれ、編集セッションを片付ける
+  // (session.cancelEditing 相当。ロック解放と閲覧モードへの復帰まで行う)
+  isDirty?: boolean;
+  beforeRestore?: () => Promise<void>;
 }
 
 type Tab = 'diff' | 'content';
@@ -35,7 +41,7 @@ function titleFromPath(path: string): string {
   return base.replace(/\.md$/i, '');
 }
 
-export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
+export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryPanelProps) {
   // Escapeキーでパネルを閉じる(操作性・a11y)
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -76,6 +82,22 @@ export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
   async function handleRestore() {
     setRestoreConfirmVisible(false);
     if (!selectedRev) return;
+    // #106: 編集セッションが動いていれば、まず片付けて閲覧モードへ戻す。
+    // 未保存の編集内容は破棄される(確認ダイアログで警告済み)。
+    // 自分のロックも解放されるので、次の acquireLock は競合しない
+    if (beforeRestore) {
+      try {
+        await beforeRestore();
+      } catch (err) {
+        // 実運用の session.cancelEditing は API エラーを内部で飲む設計のため通常ここには来ない。
+        // 将来 beforeRestore に他の関数が挿し変わっても安全側に落とすためのガード
+        showToast(
+          'error',
+          err instanceof ApiRequestError ? err.message : 'この版に戻す準備に失敗しました',
+        );
+        return;
+      }
+    }
     try {
       await acquireLock(path);
     } catch (err) {
@@ -191,7 +213,11 @@ export function HistoryPanel({ path, onClose }: HistoryPanelProps) {
       {restoreConfirmVisible && (
         <ConfirmDialog
           title="この版に戻す"
-          message="現在の内容を破棄してこの版に戻します。よろしいですか?"
+          message={
+            isDirty
+              ? '未保存の変更が失われます。この版に戻します。よろしいですか?'
+              : '現在の内容を破棄してこの版に戻します。よろしいですか?'
+          }
           confirmLabel="戻す"
           variant="primary"
           onConfirm={() => void handleRestore()}
