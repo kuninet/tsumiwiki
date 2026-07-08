@@ -87,6 +87,9 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   const setLockedByOtherName = useEditStore((s) => s.setLockedByOtherName);
   const setSidebarTab = useUIStore((s) => s.setSidebarTab);
   const toggleTag = useUIStore((s) => s.toggleTag);
+  const editorChromeVisible = useUIStore((s) => s.editorChromeVisible);
+  const showEditorChrome = useUIStore((s) => s.showEditorChrome);
+  const resetEditorChrome = useUIStore((s) => s.resetEditorChrome);
   const { data: tree } = useTree();
 
   const wikilinkDocsRef = useRef<DocSummary[]>([]);
@@ -151,6 +154,30 @@ export function DocView({ doc, currentUser }: DocViewProps) {
     }
   }, [editor, session.mode]);
 
+  // 文書オープン/切替時はツールバーを非表示にリセットする。
+  // その後ユーザーがエディタで実操作したら showEditorChrome で表示ONになる(下の useEffect)。
+  useEffect(() => {
+    resetEditorChrome();
+  }, [doc.path, resetEditorChrome]);
+
+  // editor.commands.focus('start') は自動発火なので focus イベントを条件にすると即出てしまう。
+  // 代わりに click / keydown / touchstart / paste を捕捉して、ユーザー起因の操作を検知する
+  useEffect(() => {
+    if (!editor || session.mode !== 'edit') return;
+    const dom = editor.view.dom;
+    const handler = () => showEditorChrome();
+    dom.addEventListener('click', handler);
+    dom.addEventListener('keydown', handler);
+    dom.addEventListener('touchstart', handler);
+    dom.addEventListener('paste', handler);
+    return () => {
+      dom.removeEventListener('click', handler);
+      dom.removeEventListener('keydown', handler);
+      dom.removeEventListener('touchstart', handler);
+      dom.removeEventListener('paste', handler);
+    };
+  }, [editor, session.mode, showEditorChrome]);
+
   // 閲覧中に限り、外部要因(他者更新・定期refetch等)でdocが変わったら本文を追随させる。
   // 編集中は絶対に上書きしない(編集内容が消えるため)。
   // 第2引数 emitUpdate=false: setContent の反映で onUpdate → updateBody → dirty=true と
@@ -173,17 +200,19 @@ export function DocView({ doc, currentUser }: DocViewProps) {
       const isMod = e.ctrlKey || e.metaKey;
       if (isMod && e.key.toLowerCase() === 's') {
         e.preventDefault();
+        showEditorChrome();
         void current.save();
         return;
       }
       if (isMod && e.key.toLowerCase() === 'k') {
         e.preventDefault();
+        showEditorChrome();
         setLinkDialogVisible(true);
       }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [showEditorChrome]);
 
   const lockedByOther = doc.lock && doc.lock.userId !== currentUser.id ? doc.lock : null;
 
@@ -513,7 +542,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
         </div>
       </div>
 
-      {session.mode === 'edit' && editor && (
+      {session.mode === 'edit' && editor && editorChromeVisible && (
         <EditorToolbar
           editor={editor}
           onOpenLinkDialog={() => setLinkDialogVisible(true)}

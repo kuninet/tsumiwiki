@@ -18,6 +18,10 @@ interface UIState {
   // AppShellのサイドバーフッター「+ 新規文書」から FolderTree の新規文書ダイアログを
   // 開かせるためのnonce(FolderTreeマウント側がuseEffectで拾ってダイアログを開く)
   createDocRequestNonce: number;
+  // 文書オープン直後(即編集モード時)は false。ユーザーが編集操作を始めた時点で true。
+  // DocView 側で本文への click/keydown/touchstart/paste を検知したら showEditorChrome を呼ぶ。
+  // 別文書へ遷移するときは resetEditorChrome で false に戻す。
+  editorChromeVisible: boolean;
   setSidebarWidth: (width: number) => void;
   toggleSidebarCollapsed: () => void;
   setSidebarTab: (tab: SidebarTab) => void;
@@ -25,6 +29,8 @@ interface UIState {
   toggleTag: (tag: string) => void;
   clearTags: () => void;
   requestCreateDoc: () => void;
+  showEditorChrome: () => void;
+  resetEditorChrome: () => void;
 }
 
 function clampSidebarWidth(width: number): number {
@@ -38,6 +44,7 @@ export const useUIStore = create<UIState>((set) => ({
   expandedFolders: new Set(),
   selectedTags: [],
   createDocRequestNonce: 0,
+  editorChromeVisible: false,
   setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
@@ -60,4 +67,6 @@ export const useUIStore = create<UIState>((set) => ({
   clearTags: () => set({ selectedTags: [] }),
   requestCreateDoc: () =>
     set((s) => ({ sidebarTab: 'folder', createDocRequestNonce: s.createDocRequestNonce + 1 })),
+  showEditorChrome: () => set({ editorChromeVisible: true }),
+  resetEditorChrome: () => set({ editorChromeVisible: false }),
 }));

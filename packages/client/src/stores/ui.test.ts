@@ -11,4 +11,13 @@ describe('uiストア', () => {
     setSidebarWidth(300);
     expect(useUIStore.getState().sidebarWidth).toBe(300);
   });
+
+  it('editorChromeVisibleは初期false、show/resetで切替可能', () => {
+    useUIStore.getState().resetEditorChrome();
+    expect(useUIStore.getState().editorChromeVisible).toBe(false);
+    useUIStore.getState().showEditorChrome();
+    expect(useUIStore.getState().editorChromeVisible).toBe(true);
+    useUIStore.getState().resetEditorChrome();
+    expect(useUIStore.getState().editorChromeVisible).toBe(false);
+  });
 });
