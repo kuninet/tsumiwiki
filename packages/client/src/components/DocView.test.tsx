@@ -88,7 +88,7 @@ describe('DocView', () => {
     expect(editButton.disabled).toBe(true);
   });
 
-  it('文書を開くと自動で編集モードに入り、履歴ボタンが無効化される(#51)', async () => {
+  it('文書を開くと自動で編集モードに入っても、履歴ボタンは常時押せる(#106)', async () => {
     stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
       'GET /api/drafts': { draft: null },
@@ -97,8 +97,57 @@ describe('DocView', () => {
 
     // #51: 開いた瞬間に auto-startEditing が走るので、保存ボタンが表示されるまで待つ
     await screen.findByRole('button', { name: /保存/ });
+    // #106: 編集中でも履歴ボタンは無効化しない(以前は #51 の副作用で常時 disabled になっていた)
     const historyButton = screen.getByRole('button', { name: '履歴' }) as HTMLButtonElement;
-    expect(historyButton.disabled).toBe(true);
+    expect(historyButton.disabled).toBe(false);
+  });
+
+  it('自動編集モード中に履歴→この版に戻す を実行すると、DELETE /api/locks が POST /api/history/restore より先に飛ぶ(#106)', async () => {
+    // #106: 編集中に復元されると、dirty な内容で上書き保存される事故が起きる。
+    // DocView 側の beforeRestore={session.cancelEditing} 配線が壊れると、
+    // 「先に自分のロックを解放して閲覧モードへ落とす」経路が失われるため、
+    // API 順序で配線の存在を固定する
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/history': {
+        history: [
+          { rev: 'abc1234', authorName: '太郎', date: '2026-07-01T00:00:00+09:00', message: '更新' },
+        ],
+      },
+      'GET /api/history/diff': { diff: '' },
+      'POST /api/history/restore': { updatedAt: '2026-07-03T00:00:00+09:00' },
+    });
+    renderDocView();
+
+    // 自動編集モードに入るのを待つ(履歴ボタンは #106 で常時有効化されている)
+    await screen.findByRole('button', { name: /保存/ });
+    fireEvent.click(screen.getByRole('button', { name: '履歴' }));
+
+    // 履歴一覧が描画され、先頭リビジョンが自動選択されるのを待つ
+    // (selectedRev が null の間は「この版に戻す」ボタンが disabled のためクリックが無視される)
+    await screen.findByText(/太郎/);
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: 'この版に戻す' }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'この版に戻す' }));
+    fireEvent.click(await screen.findByRole('button', { name: '戻す' }));
+
+    await waitFor(() => {
+      expect(calls.some((c) => c.method === 'POST' && c.path === '/api/history/restore')).toBe(true);
+    });
+
+    // 順序: cancelEditing の DELETE (=自分のロック解放) → 復元用の acquireLock (POST) → restore
+    // beforeRestore 配線が抜けると DELETE が先行しなくなる
+    const relevant = calls
+      .filter((c) => c.path === '/api/locks' || c.path === '/api/history/restore')
+      .map((c) => `${c.method} ${c.path}`);
+    const firstDelete = relevant.indexOf('DELETE /api/locks');
+    const firstRestore = relevant.indexOf('POST /api/history/restore');
+    expect(firstDelete).toBeGreaterThanOrEqual(0);
+    expect(firstRestore).toBeGreaterThanOrEqual(0);
+    expect(firstDelete).toBeLessThan(firstRestore);
   });
 
   it('自動編集モードで内容を変更して保存すると、baseUpdatedAtを含めてPUT /api/docsを呼び出す(#51)', async () => {

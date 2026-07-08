@@ -469,9 +469,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
           <button
             type="button"
             onClick={() => setHistoryVisible(true)}
-            disabled={session.mode === 'edit'}
-            title={session.mode === 'edit' ? '編集中は使用できません' : undefined}
-            className="h-[30px] rounded border border-line px-3 text-sm text-ink-soft hover:bg-hoverbg disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-[30px] rounded border border-line px-3 text-sm text-ink-soft hover:bg-hoverbg"
           >
             <span aria-hidden="true">⟲</span> 履歴
           </button>
@@ -575,7 +573,16 @@ export function DocView({ doc, currentUser }: DocViewProps) {
         />
       )}
 
-      {historyVisible && <HistoryPanel path={doc.path} onClose={() => setHistoryVisible(false)} />}
+      {historyVisible && (
+        <HistoryPanel
+          path={doc.path}
+          onClose={() => setHistoryVisible(false)}
+          // #106: 編集中に復元されると dirty な内容で上書き保存される事故を防ぐ。
+          // 復元前に編集セッションを片付け、閲覧モードへ戻してから restoreRevision を走らせる
+          isDirty={session.mode === 'edit' && session.dirty}
+          beforeRestore={session.mode === 'edit' ? session.cancelEditing : undefined}
+        />
+      )}
 
       {templateApplyOpen && (
         <TemplatePickerDialog
