@@ -37,9 +37,16 @@ function clampSidebarWidth(width: number): number {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
 }
 
+// 初回描画のちらつき(モバイルで開いた状態→畳んだ状態のアニメーションが走る)を避けるため、
+// ストア初期化時点で狭幅判定を済ませ、モバイルであれば初期状態から折畳とする
+function initialSidebarCollapsed(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia('(max-width: 767px)').matches;
+}
+
 export const useUIStore = create<UIState>((set) => ({
   sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
-  sidebarCollapsed: false,
+  sidebarCollapsed: initialSidebarCollapsed(),
   sidebarTab: 'folder',
   expandedFolders: new Set(),
   selectedTags: [],

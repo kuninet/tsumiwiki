@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUIStore } from '../stores/ui';
 import { AppShell } from './AppShell';
@@ -51,7 +51,16 @@ function renderAppShell() {
       <MemoryRouter initialEntries={['/']}>
         <Routes>
           <Route element={<AppShell />}>
-            <Route index element={<div>本文</div>} />
+            <Route
+              index
+              element={
+                <div>
+                  <Link to="/doc/foo.md">to-foo</Link>
+                  <div>本文</div>
+                </div>
+              }
+            />
+            <Route path="doc/*" element={<div>文書</div>} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -96,7 +105,8 @@ describe('AppShell (デスクトップ)', () => {
 describe('AppShell (モバイル)', () => {
   beforeEach(() => {
     stubMatchMedia(true); // 狭幅 = モバイル扱い
-    useUIStore.setState({ sidebarCollapsed: true });
+    // ストア初期値はモバイル判定で自動で true になる想定だが、テスト隔離のため明示的にセット
+    useUIStore.setState({ sidebarCollapsed: false });
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -104,13 +114,26 @@ describe('AppShell (モバイル)', () => {
     useUIStore.setState({ sidebarCollapsed: false });
   });
 
-  it('モバイルでは初期状態でサイドバーがドロワーとして画面外に配置される', async () => {
+  it('モバイル初回接続時は sidebarCollapsed=false であっても自動でドロワーが閉じる', async () => {
+    // 明示的に false を設定した状態でレンダ → useEffect で自動的に true になる
+    useUIStore.setState({ sidebarCollapsed: false });
     renderAppShell();
     await screen.findByRole('button', { name: 'ユーザーメニュー(太郎)' });
 
     const sidebar = screen.getByTestId('sidebar');
     expect(sidebar.className).toContain('-translate-x-full');
     expect(sidebar.className).toContain('fixed');
+    expect(useUIStore.getState().sidebarCollapsed).toBe(true);
+  });
+
+  it('ドロワーはビューポート全高で表示される(top-Header/bottom-StatusBarの隙間なし)', async () => {
+    renderAppShell();
+    await screen.findByRole('button', { name: 'ユーザーメニュー(太郎)' });
+    const sidebar = screen.getByTestId('sidebar');
+    // inset-y-0 で全高。以前の `top-[52px]` `bottom-[38px]` は含まない
+    expect(sidebar.className).toContain('inset-y-0');
+    expect(sidebar.className).not.toContain('top-[52px]');
+    expect(sidebar.className).not.toContain('bottom-[38px]');
   });
 
   it('モバイルではハンバーガーからドロワーを開き、オーバーレイクリックで閉じる', async () => {
@@ -135,5 +158,19 @@ describe('AppShell (モバイル)', () => {
     expect(screen.queryByTestId('sidebar-resize-handle')).toBeNull();
     expect(screen.queryByRole('button', { name: 'サイドバーを表示' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'サイドバーを折りたたむ' })).toBeNull();
+  });
+
+  it('モバイル時にルートが変化するとドロワーが自動で閉じる', async () => {
+    renderAppShell();
+    await screen.findByRole('button', { name: 'ユーザーメニュー(太郎)' });
+
+    // ハンバーガーで開く
+    fireEvent.click(screen.getByRole('button', { name: 'サイドバーを開く' }));
+    expect(screen.getByTestId('sidebar').className).toContain('translate-x-0');
+
+    // 文書リンクをクリック(ルート変化) → ドロワーが閉じる
+    fireEvent.click(screen.getByRole('link', { name: 'to-foo' }));
+    expect(screen.getByTestId('sidebar').className).toContain('-translate-x-full');
+    expect(useUIStore.getState().sidebarCollapsed).toBe(true);
   });
 });
