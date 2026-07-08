@@ -11,6 +11,7 @@ import { parseMarkdownFragment } from '../editor/parse-fragment';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
 import { docUrl } from '../lib/doc-path';
+import { removeInlineTag, renameInlineTag } from '../lib/inline-tag-rewrite';
 import { resolveWikilink } from '../lib/resolve-wikilink';
 import { saveBadge } from '../lib/save-badge';
 import { useEditStore } from '../stores/edit';
@@ -20,6 +21,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { EditorToolbar } from './EditorToolbar';
 import { HistoryPanel } from './HistoryPanel';
 import { PromptDialog } from './PromptDialog';
+import { TagChipEditor } from './TagChipEditor';
 import { TemplatePickerDialog } from './TemplatePickerDialog';
 
 // 文書閲覧・編集画面(SC-02のMainPane。設計04章4.2/4.4・05章5.3〜5.5・デザインhandoff components.md)
@@ -44,10 +46,6 @@ function folderOfPath(path: string): string {
 function breadcrumbFromPath(path: string): string[] {
   const folder = folderOfPath(path);
   return folder ? folder.split('/') : [];
-}
-
-function parseTagsInput(input: string): string[] {
-  return [...new Set(input.split(',').map((t) => t.trim()).filter(Boolean))];
 }
 
 // 更新日時をJSTの「日付」と「時刻」に分けて返す。
@@ -75,11 +73,13 @@ function formatUpdatedAt(iso: string): { date: string; time: string } {
 const IMAGE_MIME_PREFIX = 'image/';
 
 export function DocView({ doc, currentUser }: DocViewProps) {
-  const [tagsInput, setTagsInput] = useState(doc.tags.join(', '));
-  const [cancelConfirmVisible, setCancelConfirmVisible] = useState(false);
   const [linkDialogVisible, setLinkDialogVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
+  const [discardConfirmVisible, setDiscardConfirmVisible] = useState(false);
   const [templateApplyOpen, setTemplateApplyOpen] = useState(false);
+  // #51 Opus C1: タグの pending 状態を DocView 側に持ち、連続タグ操作でも
+  // stale な doc.tags を参照しないようにする。閲覧モード遷移で doc.tags 側へ揃える
+  const [pendingTags, setPendingTags] = useState<string[]>(doc.tags);
 
   const navigate = useNavigate();
   const showToast = useToastStore((s) => s.show);
@@ -145,9 +145,9 @@ export function DocView({ doc, currentUser }: DocViewProps) {
     // 第2引数 emitUpdate=false: setEditable の既定は true で、モード切替のたびに
     // onUpdate → updateBody → dirty=true が誤発火する(初回マウントすら未保存扱いになる)
     editor.setEditable(session.mode === 'edit', false);
-    // 編集モードに入ったら本文にカーソルを出す(入力位置が視認できるように)
+    // 編集モードに入ったら本文先頭にカーソルを出す(#51: 開いた瞬間から入力可能に)
     if (session.mode === 'edit') {
-      editor.commands.focus();
+      editor.commands.focus('start');
     }
   }, [editor, session.mode]);
 
@@ -193,32 +193,88 @@ export function DocView({ doc, currentUser }: DocViewProps) {
     return () => setLockedByOtherName(null);
   }, [lockedByOther?.displayName, setLockedByOtherName]);
 
-  function handleStartEdit() {
-    setTagsInput(doc.tags.join(', '));
-    void session.startEditing(doc.body, doc.tags);
-  }
+  // #51: 文書を開いた瞬間に編集モードに入る。他者ロック中は閲覧モードにフォールバック。
+  // 1つの doc.path に対しては1度だけ試行する(startEditing 失敗時のトースト連発を避ける)
+  const autoEditAttemptedRef = useRef<string | null>(null);
+  const docBodyRef = useRef(doc.body);
+  const docTagsRef = useRef(doc.tags);
+  docBodyRef.current = doc.body;
+  docTagsRef.current = doc.tags;
+  useEffect(() => {
+    if (!editor) return;
+    if (lockedByOther) return;
+    if (autoEditAttemptedRef.current === doc.path) return;
+    autoEditAttemptedRef.current = doc.path;
+    void sessionRef.current.startEditing(docBodyRef.current, docTagsRef.current);
+  }, [editor, lockedByOther, doc.path]);
 
-  function handleTagsInputChange(value: string) {
-    setTagsInput(value);
-    // 保存経路(ボタン/Ctrl+S)によらず常に最新のタグが送られるよう、入力の都度sessionへ反映する
-    session.updateTags(parseTagsInput(value));
+  // #51 Opus C1: 閲覧モードへ落ちたときは doc.tags(サーバ側の真値)へリセット。
+  // 編集中は pendingTags を独立に持ち、Rename/Remove/Add の連続操作でも stale 化しない
+  useEffect(() => {
+    if (session.mode === 'view') setPendingTags(doc.tags);
+  }, [session.mode, doc.tags]);
+
+  function handleStartEdit() {
+    // 手動で編集モードへ入り直すエントリ(閲覧モード落ち後のリトライ用)
+    autoEditAttemptedRef.current = doc.path;
+    setPendingTags(doc.tags);
+    void session.startEditing(doc.body, doc.tags);
   }
 
   function handleSave() {
     void session.save();
   }
 
-  function handleCancelClick() {
-    if (session.dirty) {
-      setCancelConfirmVisible(true);
-    } else {
-      void session.cancelEditing();
-    }
+  function handleDiscardClick() {
+    // #51 Opus H2: 編集破棄動線。dirty のときのみ確認ダイアログ、そうでなければ即キャンセル
+    if (session.dirty) setDiscardConfirmVisible(true);
+    else void session.cancelEditing();
   }
 
-  function handleConfirmCancel() {
-    setCancelConfirmVisible(false);
+  function handleConfirmDiscard() {
+    setDiscardConfirmVisible(false);
     void session.cancelEditing();
+  }
+
+  function handleTagNavigate(tag: string) {
+    setSidebarTab('tag');
+    toggleTag(tag);
+  }
+
+  function handleTagRename(oldName: string, newName: string) {
+    // frontmatter(session.updateTags)+本文中インライン#tag の両方を書き換える。
+    // editor.commands.setContent で emitUpdate=true にすることで onUpdate → session.updateBody が発火し、
+    // dirty=true と contentRef の更新が自動的に行われる
+    // 注意: setContent は undo history をリセットする既知の副作用がある(Tiptap)。タグ操作の頻度は低いため許容
+    if (!editor || editor.isDestroyed) return;
+    // 重複除去(名前衝突は TagChipEditor 側でも弾いているが二重防御)
+    const nextTags = [...new Set(pendingTags.map((t) => (t === oldName ? newName : t)))];
+    const currentBody = editor.storage.markdown.getMarkdown() as string;
+    const nextBody = renameInlineTag(currentBody, oldName, newName);
+    if (nextBody !== currentBody) {
+      editor.commands.setContent(nextBody, true);
+    }
+    setPendingTags(nextTags);
+    session.updateTags(nextTags);
+  }
+
+  function handleTagRemove(name: string) {
+    if (!editor || editor.isDestroyed) return;
+    const nextTags = pendingTags.filter((t) => t !== name);
+    const currentBody = editor.storage.markdown.getMarkdown() as string;
+    const nextBody = removeInlineTag(currentBody, name);
+    if (nextBody !== currentBody) {
+      editor.commands.setContent(nextBody, true);
+    }
+    setPendingTags(nextTags);
+    session.updateTags(nextTags);
+  }
+
+  function handleTagAdd(name: string) {
+    if (pendingTags.includes(name)) return;
+    const nextTags = [...pendingTags, name];
+    setPendingTags(nextTags);
+    session.updateTags(nextTags);
   }
 
   function handleRestoreDraft() {
@@ -389,30 +445,25 @@ export function DocView({ doc, currentUser }: DocViewProps) {
             <span>{formatUpdatedAt(doc.updatedAt).date}</span>
             <span className="font-mono">{formatUpdatedAt(doc.updatedAt).time}</span>
             <span className={`font-medium ${badge.className}`}>{badge.label}</span>
+            {/* #51: 即編集モードが基本のため、閲覧モードのときは明示バッジを出す。
+                 他者ロック中(lockedByOther)か、なんらかの理由でロック取得できていない場合に該当 */}
+            {session.mode === 'view' && (
+              <span className="rounded bg-panel-2 px-1.5 py-0.5 text-ink-faint">閲覧モード</span>
+            )}
             {lockedByOther && (
               <span className="text-warning">{lockedByOther.displayName}さんが編集中</span>
             )}
           </p>
-          {/* #77 Phase A: フロントマター+本文中の #タグ を合算したチップ列を閲覧・編集どちらでも表示。
-              クリックで TagPane のタグフィルタに反映して同じタグを持つ文書一覧を開く */}
-          {doc.tags.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {doc.tags.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  onClick={() => {
-                    setSidebarTab('tag');
-                    toggleTag(tag);
-                  }}
-                  className="rounded-full border border-accent-border bg-accent-soft px-2.5 py-0.5 text-xs text-accent hover:bg-accent-softer"
-                  title={`タグ #${tag} の文書一覧を開く`}
-                >
-                  #{tag}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* #77 Phase A / #51: フロントマター+本文中の #タグ を合算したチップ列。
+              閲覧モードでは TagPane フィルタ連動、編集モードでは各チップから改名/削除できる */}
+          <TagChipEditor
+            tags={session.mode === 'edit' ? pendingTags : doc.tags}
+            editable={session.mode === 'edit'}
+            onNavigate={handleTagNavigate}
+            onRename={handleTagRename}
+            onRemove={handleTagRemove}
+            onAdd={handleTagAdd}
+          />
         </div>
         <div className="flex flex-shrink-0 gap-2">
           <button
@@ -425,6 +476,7 @@ export function DocView({ doc, currentUser }: DocViewProps) {
             <span aria-hidden="true">⟲</span> 履歴
           </button>
           {session.mode === 'view' ? (
+            // 閲覧モード: ロック取得のリトライエントリ(他者編集終了後や取得失敗後の再試行)
             <button
               type="button"
               onClick={handleStartEdit}
@@ -435,18 +487,24 @@ export function DocView({ doc, currentUser }: DocViewProps) {
               <span aria-hidden="true">✎</span> 編集
             </button>
           ) : (
+            // 編集モード: dirty のときのみ「破棄」を表示、保存は変更ありの間だけ活性化(#51)
             <>
-              <button
-                type="button"
-                onClick={handleCancelClick}
-                className="h-[30px] rounded border border-line px-3 text-sm text-ink-soft hover:bg-hoverbg"
-              >
-                キャンセル
-              </button>
+              {session.dirty && (
+                <button
+                  type="button"
+                  onClick={handleDiscardClick}
+                  className="h-[30px] rounded border border-line px-3 text-sm text-ink-soft hover:bg-hoverbg"
+                  title="編集内容を破棄"
+                >
+                  破棄
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleSave}
-                className="h-8 rounded bg-success px-3 text-sm text-white hover:bg-success-hover"
+                disabled={!session.dirty}
+                title={!session.dirty ? '変更がありません' : undefined}
+                className="h-8 rounded bg-success px-3 text-sm text-white hover:bg-success-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <span aria-hidden="true">✓</span> 保存
               </button>
@@ -462,19 +520,6 @@ export function DocView({ doc, currentUser }: DocViewProps) {
           onPickImage={(file) => void handleUploadImage(file)}
           onOpenTemplateApply={() => setTemplateApplyOpen(true)}
         />
-      )}
-
-      {session.mode === 'edit' && (
-        <div className="border-b border-line px-4 py-2 sm:px-6 lg:px-8">
-          <label className="block text-xs text-ink-faint">
-            タグ(カンマ区切り)
-            <input
-              value={tagsInput}
-              onChange={(e) => handleTagsInputChange(e.target.value)}
-              className="mt-1 block w-full rounded border border-line bg-panel-2 px-2 py-1 text-sm text-ink"
-            />
-          </label>
-        </div>
       )}
 
       <div className="flex-1 overflow-auto" onClick={handleContainerClick}>
@@ -497,14 +542,14 @@ export function DocView({ doc, currentUser }: DocViewProps) {
         />
       )}
 
-      {cancelConfirmVisible && (
+      {discardConfirmVisible && (
         <ConfirmDialog
-          title="編集のキャンセル"
+          title="編集内容の破棄"
           message="編集内容を破棄しますか?"
           confirmLabel="破棄"
           cancelLabel="編集を続ける"
-          onConfirm={handleConfirmCancel}
-          onCancel={() => setCancelConfirmVisible(false)}
+          onConfirm={handleConfirmDiscard}
+          onCancel={() => setDiscardConfirmVisible(false)}
         />
       )}
 

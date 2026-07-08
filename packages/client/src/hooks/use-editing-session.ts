@@ -176,17 +176,9 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     });
   }, []);
 
-  const invalidateAfterSave = useCallback(
-    (path: string) => {
-      queryClient.invalidateQueries({ queryKey: docQueryKey(path) });
-      queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
-      queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
-    },
-    [queryClient],
-  );
-
   const save = useCallback(async () => {
     if (savingRef.current) return; // Ctrl+S連打等での多重送信を防ぐ
+    if (!dirtyRef.current) return; // 変更なしなら何もしない(Ctrl+Sの空打ちで無駄なリクエストを避ける)
     const path = optionsRef.current.path;
     const baseUpdatedAt = optionsRef.current.baseUpdatedAt;
     if (!path || !baseUpdatedAt) return;
@@ -200,14 +192,26 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
         tags: contentRef.current.tags,
         baseUpdatedAt,
       });
-      await releaseLock(path).catch(() => {});
-      // React Query の refetch を待たず、returnされたupdatedAtをキャッシュに即反映する。
-      // 待つと連続保存時に stale な baseUpdatedAt を送って409 CONFLICTになる
+      // React Query の refetch を待たず、送信した内容+returnされたupdatedAtでキャッシュを即更新する。
+      // 待つと連続保存時に stale な baseUpdatedAt を送って409 CONFLICTになる。
+      // body/tags もサーバに送った内容で置換することで、doc.tags を参照する側(タグチップ等)が
+      // 保存後も正しい値を見られるようにする(#51: 編集モードを継続するので refetch は行わない)
       queryClient.setQueryData<DocResponse | undefined>(docQueryKey(path), (old) =>
-        old ? { ...old, updatedAt } : old,
+        old
+          ? {
+              ...old,
+              updatedAt,
+              body: contentRef.current.body,
+              tags: contentRef.current.tags,
+            }
+          : old,
       );
-      invalidateAfterSave(path);
-      stopEditingLocally();
+      // 保存後も編集モードは継続する(シームレスUX。#51)。ロックは離脱時まで保持
+      setDirty(false);
+      setLastDraftSavedAt(null);
+      // tree/tags はタグ変化に追随させる
+      queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
       showToast('success', '保存しました');
       optionsRef.current.onSaved?.(updatedAt);
     } catch (err) {
@@ -227,7 +231,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     } finally {
       savingRef.current = false;
     }
-  }, [invalidateAfterSave, queryClient, showToast, stopEditingLocally, setStoreSaveError]);
+  }, [queryClient, showToast, stopEditingLocally, setStoreSaveError]);
 
   // 競合解消: 自分の編集内容を保持したまま、最新のupdatedAtを取得し直して再保存する
   const resolveConflictOverwrite = useCallback(async () => {
@@ -241,19 +245,29 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
         tags: contentRef.current.tags,
         baseUpdatedAt: latest.updatedAt,
       });
-      await releaseLock(path).catch(() => {});
       queryClient.setQueryData<DocResponse | undefined>(docQueryKey(path), (old) =>
-        old ? { ...old, updatedAt } : old,
+        old
+          ? {
+              ...old,
+              updatedAt,
+              body: contentRef.current.body,
+              tags: contentRef.current.tags,
+            }
+          : old,
       );
-      invalidateAfterSave(path);
-      stopEditingLocally();
+      // 保存後も編集モードを継続(#51)
+      setDirty(false);
+      setLastDraftSavedAt(null);
+      setConflict(false);
+      queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
       showToast('success', '保存しました');
       optionsRef.current.onSaved?.(updatedAt);
     } catch (err) {
       // 再度の競合等はダイアログを表示したまま再試行できるようにする
       showToast('error', err instanceof ApiRequestError ? err.message : '保存に失敗しました');
     }
-  }, [invalidateAfterSave, queryClient, showToast, stopEditingLocally]);
+  }, [queryClient, showToast]);
 
   // 競合解消: 自分の編集を破棄し、最新の内容を読み込み直す
   const resolveConflictDiscard = useCallback(async () => {
