@@ -1,10 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query';
+import { Menu } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { TAGS_QUERY_KEY, TREE_QUERY_KEY } from '../api/docs';
+import { useMediaQuery } from '../hooks/use-media-query';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
+import { useUIStore } from '../stores/ui';
 import { SearchBox } from './SearchBox';
 import { ThemeToggle } from './ThemeToggle';
 import { UserMenu } from './UserMenu';
@@ -15,6 +18,8 @@ export function Header() {
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const isMobile = useMediaQuery('(max-width: 767px)');
+  const toggleSidebarCollapsed = useUIStore((s) => s.toggleSidebarCollapsed);
 
   // Ctrl/Cmd+Kで検索ボックスへフォーカス(編集モード中はDocView側のリンクダイアログを優先する)
   useEffect(() => {
@@ -41,6 +46,16 @@ export function Header() {
 
   return (
     <header className="flex h-[52px] flex-shrink-0 items-center gap-4 border-b border-line bg-panel px-4">
+      {isMobile && (
+        <button
+          type="button"
+          onClick={toggleSidebarCollapsed}
+          aria-label="サイドバーを開く"
+          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded text-ink-soft hover:bg-hoverbg"
+        >
+          <Menu size={18} aria-hidden="true" />
+        </button>
+      )}
       <Link to="/" className="flex flex-shrink-0 items-center gap-2">
         <span
           aria-hidden="true"

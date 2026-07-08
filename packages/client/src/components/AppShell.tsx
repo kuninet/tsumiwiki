@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, Outlet, useNavigate } from 'react-router-dom';
 import { useCreateOrOpenTodayNote } from '../api/daily-notes';
 import { useApplyTemplate } from '../api/templates';
+import { useMediaQuery } from '../hooks/use-media-query';
 import { docUrl } from '../lib/doc-path';
 import { confirmNavigationIfDirty } from '../lib/navigation-guard';
 import { useUIStore } from '../stores/ui';
@@ -62,16 +63,41 @@ export function AppShell() {
     };
   }, [setSidebarWidth]);
 
+  // モバイル判定(Tailwind md=768px に合わせる)。狭幅端末ではサイドバーをドロワー化する
+  const isMobile = useMediaQuery('(max-width: 767px)');
+  // デスクトップ→モバイル遷移の一度きりで自動折畳。ユーザーがモバイル中に開いた状態を保ちたいので毎回は畳まない
+  const prevIsMobileRef = useRef(isMobile);
+  useEffect(() => {
+    if (isMobile && !prevIsMobileRef.current) {
+      useUIStore.setState({ sidebarCollapsed: true });
+    }
+    prevIsMobileRef.current = isMobile;
+  }, [isMobile]);
+
   return (
     <div className="flex h-screen flex-col bg-canvas font-sans text-ink">
       <Header />
 
-      <div className="flex min-h-0 flex-1">
-        {!sidebarCollapsed && (
+      <div className="relative flex min-h-0 flex-1">
+        {/* モバイル時のみ、開いているときに背景オーバーレイを表示。クリックで閉じる */}
+        {isMobile && !sidebarCollapsed && (
+          <div
+            data-testid="sidebar-overlay"
+            className="fixed inset-0 z-30 bg-black/40"
+            onClick={toggleSidebarCollapsed}
+          />
+        )}
+        {(!isMobile ? !sidebarCollapsed : true) && (
           <aside
             data-testid="sidebar"
-            style={{ width: sidebarWidth }}
-            className="relative flex flex-shrink-0 flex-col border-r border-line bg-panel"
+            style={isMobile ? undefined : { width: sidebarWidth }}
+            className={
+              isMobile
+                ? `fixed left-0 top-[52px] bottom-[38px] z-40 flex w-[280px] flex-col border-r border-line bg-panel transition-transform duration-200 ${
+                    sidebarCollapsed ? '-translate-x-full' : 'translate-x-0'
+                  }`
+                : 'relative flex flex-shrink-0 flex-col border-r border-line bg-panel'
+            }
           >
             <div className="flex flex-shrink-0 border-b border-line" role="tablist">
               <button
@@ -135,25 +161,30 @@ export function AppShell() {
                 🗑 ごみ箱
               </Link>
             </div>
-            <div
-              onMouseDown={(e) => {
-                e.preventDefault(); // ドラッグ中のテキスト選択を防ぐ
-                draggingRef.current = true;
-                document.body.style.userSelect = 'none';
-                document.body.style.cursor = 'col-resize';
-              }}
-              className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-accent-soft"
-            />
+            {!isMobile && (
+              <div
+                data-testid="sidebar-resize-handle"
+                onMouseDown={(e) => {
+                  e.preventDefault(); // ドラッグ中のテキスト選択を防ぐ
+                  draggingRef.current = true;
+                  document.body.style.userSelect = 'none';
+                  document.body.style.cursor = 'col-resize';
+                }}
+                className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-accent-soft"
+              />
+            )}
           </aside>
         )}
-        <button
-          type="button"
-          onClick={toggleSidebarCollapsed}
-          aria-label={sidebarCollapsed ? 'サイドバーを表示' : 'サイドバーを折りたたむ'}
-          className="w-4 flex-shrink-0 border-r border-line text-ink-faint hover:bg-hoverbg"
-        >
-          {sidebarCollapsed ? '›' : '‹'}
-        </button>
+        {!isMobile && (
+          <button
+            type="button"
+            onClick={toggleSidebarCollapsed}
+            aria-label={sidebarCollapsed ? 'サイドバーを表示' : 'サイドバーを折りたたむ'}
+            className="w-4 flex-shrink-0 border-r border-line text-ink-faint hover:bg-hoverbg"
+          >
+            {sidebarCollapsed ? '›' : '‹'}
+          </button>
+        )}
         <main className="min-w-0 flex-1 overflow-auto bg-canvas">
           <Outlet />
         </main>
