@@ -61,6 +61,11 @@ export function LibrarySettingsPage() {
               「今日の日誌」ボタンで作成されるノートの規約です。ファイル名パターンで
               <span className="mx-1 font-mono">YYYY-MM-DD</span>や
               <span className="mx-1 font-mono">YYYY-MM</span>等の日付書式が使えます。
+              曜日は<span className="mx-1 font-mono">aaa</span>(月/火/…)や
+              <span className="mx-1 font-mono">aaaa</span>(月曜日/…)、
+              英語なら<span className="mx-1 font-mono">ddd</span>(Mon)/
+              <span className="mx-1 font-mono">dddd</span>(Monday)で埋め込めます
+              (例: <span className="font-mono">YYYY-MM-DD(aaa)</span>)。
             </p>
             <label className="mt-3 block text-sm font-medium text-ink-soft">
               作成先フォルダ
