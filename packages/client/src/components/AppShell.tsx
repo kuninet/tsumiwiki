@@ -163,8 +163,11 @@ export function AppShell() {
 
       {templatePickerOpen && (
         <TemplatePickerDialog
+          mode="create"
           onCancel={() => setTemplatePickerOpen(false)}
           onSubmit={(result) => {
+            // AppShell からは 'create' でしか開かないので narrow
+            if (result.mode !== 'create') return;
             setTemplatePickerOpen(false);
             applyTemplate.mutate(
               {

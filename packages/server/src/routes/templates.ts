@@ -4,6 +4,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import { parseDocument as parseYamlDocument } from 'yaml';
 import {
   applyTemplateRequestSchema,
+  expandTemplateRequestSchema,
   expandTemplateVariables,
   type TemplateSummary,
 } from '@tsumiwiki/shared';
@@ -17,9 +18,11 @@ import { sendError } from '../plugins/auth.js';
 import { DocNotFoundError, sanitizeTitle } from '../services/doc-service.js';
 import { authorOf, handling } from './docs.js';
 
-// #84 Phase B: テンプレート機能。
+// #84 Phase B/C: テンプレート機能。
 // - GET  /api/templates       : `settings.templates.folder` 配下の `.md` を再帰列挙する
-// - POST /api/templates/apply : 選択したテンプレの変数を展開し、新規文書として作成する
+// - POST /api/templates/apply : 選択したテンプレの変数を展開し、新規文書として作成する(Phase B)
+// - POST /api/templates/expand: 選択したテンプレの変数を展開して Markdown を返す(Phase C。
+//                               既存文書への挿入/追記用。新規文書は作らない)
 //
 // テンプレのフロントマターには以下のメタキーを置ける(いずれも任意):
 //   target_folder: 新規作成先フォルダ(client から `targetFolder` で上書き可能)
@@ -161,6 +164,38 @@ async function listTemplatesUnder(
     .sort((a, b) => a.path.localeCompare(b.path));
 }
 
+// テンプレファイルの正規化+読み取り。BOM 剥がしと基本パス検証まで面倒を見る。
+// 見つからない/壊れた場合は DocNotFoundError / InvalidPathError を投げるので、
+// 呼び出し側は handling() でそのまま 404/400 に変換できる。
+async function readTemplate(
+  libAbs: string,
+  templatePath: string,
+  templatesFolder: string,
+): Promise<{ raw: string; norm: string }> {
+  const norm = normalizeRelPath(templatePath);
+  if (!norm || isProtectedPath(norm) || !norm.toLowerCase().endsWith('.md')) {
+    throw new InvalidPathError(templatePath);
+  }
+  // 中#8: `settings.templates.folder` 配下限定にする。任意 md をテンプレとして
+  // 扱うと通常文書に偶然含まれる `{{title}}` 等が黙って展開される事故につながる。
+  // templates.folder が空文字("テンプレ機能無効")のときは全パスを拒否する
+  const rootNorm = templatesFolder ? normalizeRelPath(templatesFolder) : '';
+  if (!rootNorm) {
+    throw new InvalidPathError(templatePath);
+  }
+  if (norm !== rootNorm && !norm.startsWith(rootNorm + '/')) {
+    throw new InvalidPathError(templatePath);
+  }
+  const abs = resolveInLibrary(libAbs, norm);
+  let raw: string;
+  try {
+    raw = stripBom(await readFile(abs, 'utf8'));
+  } catch {
+    throw new DocNotFoundError(norm);
+  }
+  return { raw, norm };
+}
+
 export const templatesRoutes: FastifyPluginCallback = (app, _opts, done) => {
   app.get('/api/templates', async (req, reply) => {
     if (!req.user) return sendError(reply, 401, 'UNAUTHORIZED', '認証が必要です');
@@ -189,20 +224,12 @@ export const templatesRoutes: FastifyPluginCallback = (app, _opts, done) => {
           ? parsed.data.targetFolder
           : undefined;
 
-      // テンプレパス検証: ライブラリ外 / 保護パス / 非 .md を拒否
-      const tmplNorm = normalizeRelPath(templatePath);
-      if (!tmplNorm || isProtectedPath(tmplNorm) || !tmplNorm.toLowerCase().endsWith('.md')) {
-        throw new InvalidPathError(templatePath);
-      }
-      const tmplAbs = resolveInLibrary(app.config.libraryPath, tmplNorm);
-
-      let raw: string;
-      try {
-        raw = stripBom(await readFile(tmplAbs, 'utf8'));
-      } catch {
-        // 軽微 B: 他ルートに合わせ throw で 4xx へ変換する(handling が 404)
-        throw new DocNotFoundError(tmplNorm);
-      }
+      const settings = await app.librarySettingsService.get();
+      const { raw } = await readTemplate(
+        app.config.libraryPath,
+        templatePath,
+        settings.templates.folder,
+      );
 
       // 中#3: frontmatter は yaml.Document 経由で外科的に「target_folder / description」だけ落とす。
       //       gray-matter + stringify だとコメント欠落・キー順変更・型変換(01→1 等)が起きる
@@ -232,6 +259,44 @@ export const templatesRoutes: FastifyPluginCallback = (app, _opts, done) => {
       // ユーザーが明示的にタイトルを付けるため、リトライは UI 側の役目)
       const created = await app.docService.createDocWithContent(relPath, body, authorOf(req));
       return reply.code(201).send({ path: created.path });
+    });
+  });
+
+  // Phase C: 既存文書へ流し込むために、テンプレを展開した Markdown 本文だけを返す。
+  // 新規作成しないので target_folder は無関係。frontmatter は「テンプレ設定」であり
+  // 適用先の frontmatter を汚すのは望ましくないので、frontmatter ブロック全体を落とす。
+  // `{{cursor}}` はマーカーとしてレスポンスに残す(クライアントで split してカーソル位置を決める)。
+  app.post('/api/templates/expand', async (req, reply) => {
+    if (!req.user) return sendError(reply, 401, 'UNAUTHORIZED', '認証が必要です');
+    const parsed = expandTemplateRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(
+        reply,
+        400,
+        'VALIDATION_ERROR',
+        parsed.error.issues[0]?.message ?? '入力内容を確認してください',
+      );
+    }
+    return handling(reply, async () => {
+      const { templatePath, title } = parsed.data;
+      const settings = await app.librarySettingsService.get();
+      const { raw } = await readTemplate(
+        app.config.libraryPath,
+        templatePath,
+        settings.templates.folder,
+      );
+
+      // frontmatter ブロック全体を落とす(既存文書に流し込む用途では meta 情報は不要)
+      const fmMatch = FM_BLOCK_RE.exec(raw);
+      const sourceBody = fmMatch ? raw.slice(fmMatch[0].length).replace(/^\r?\n/, '') : raw;
+
+      // stripCursor: false — マーカーはそのまま残してクライアントの分割に委ねる
+      const markdown = expandTemplateVariables(
+        sourceBody,
+        { date: new Date(), title, user: req.user!.displayName },
+        { stripCursor: false },
+      );
+      return { markdown };
     });
   });
 

@@ -22,10 +22,11 @@ function mockTemplates(templates: ListTemplatesResponse['templates']) {
 function renderPicker(props: Partial<React.ComponentProps<typeof TemplatePickerDialog>> = {}) {
   const onSubmit = props.onSubmit ?? vi.fn();
   const onCancel = props.onCancel ?? vi.fn();
+  const mode = props.mode;
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const result = render(
     <QueryClientProvider client={queryClient}>
-      <TemplatePickerDialog onSubmit={onSubmit} onCancel={onCancel} />
+      <TemplatePickerDialog mode={mode} onSubmit={onSubmit} onCancel={onCancel} />
     </QueryClientProvider>,
   );
   return { ...result, onSubmit, onCancel };
@@ -59,6 +60,7 @@ describe('TemplatePickerDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: '作成' }));
 
     expect(onSubmit).toHaveBeenCalledWith({
+      mode: 'create',
       templatePath: '_templates/日誌.md',
       title: '20260707',
       targetFolder: '日記',
@@ -146,5 +148,36 @@ describe('TemplatePickerDialog', () => {
     // タイトル欄にフォーカスが当たった状態で Esc
     fireEvent.keyDown(screen.getByLabelText('タイトル'), { key: 'Escape' });
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('mode=apply では Step2 に「挿入」「追記」の 2 ボタンが出て、それぞれ applyMode 付きで onSubmit を呼ぶ', async () => {
+    mockTemplates([{ path: '_templates/日誌.md', name: '日誌', targetFolder: '日記' }]);
+    const { onSubmit } = renderPicker({ mode: 'apply' });
+
+    fireEvent.click(await screen.findByRole('option', { name: /日誌/ }));
+
+    // create モード用の入力欄は出ない
+    expect(screen.queryByLabelText('タイトル')).toBeNull();
+    expect(screen.queryByLabelText('作成先フォルダ')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '挿入' }));
+    expect(onSubmit).toHaveBeenCalledWith({
+      mode: 'apply',
+      templatePath: '_templates/日誌.md',
+      applyMode: 'insert',
+    });
+  });
+
+  it('mode=apply の「追記」ボタンで applyMode=append の onSubmit', async () => {
+    mockTemplates([{ path: '_templates/日誌.md', name: '日誌', targetFolder: null }]);
+    const { onSubmit } = renderPicker({ mode: 'apply' });
+
+    fireEvent.click(await screen.findByRole('option', { name: /日誌/ }));
+    fireEvent.click(screen.getByRole('button', { name: '追記' }));
+    expect(onSubmit).toHaveBeenCalledWith({
+      mode: 'apply',
+      templatePath: '_templates/日誌.md',
+      applyMode: 'append',
+    });
   });
 });

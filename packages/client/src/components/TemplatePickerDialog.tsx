@@ -2,25 +2,39 @@ import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useStat
 import type { TemplateSummary } from '@tsumiwiki/shared';
 import { useTemplates } from '../api/templates';
 
-// #84 Phase B: テンプレート選択モーダル。
+// #84 Phase B/C: テンプレート選択モーダル。
 // 2 段階の UI:
 //   Step 1: テンプレ一覧 + インクリメンタル絞り込み(↑↓/Enter/Esc に対応)
-//   Step 2: 新規文書のタイトル + 作成先フォルダ(テンプレの target_folder が既定値)
+//   Step 2: mode='create' → 新規文書のタイトル + 作成先フォルダ(Phase B)
+//           mode='apply'  → 挿入 / 追記 の 2 ボタン(Phase C。既存文書へ流し込む)
 // フィルタは `name` / `path` の部分一致で緩めに拾う。IME 変換確定中の Enter は無視する。
 
-export interface TemplatePickerResult {
-  templatePath: string;
-  title: string;
-  // 空文字なら「未指定」= サーバー側で frontmatter → ライブラリ直下 の順にフォールバックする
-  targetFolder: string;
-}
+export type TemplatePickerResult =
+  | {
+      mode: 'create';
+      templatePath: string;
+      title: string;
+      // 空文字なら「未指定」= サーバー側で frontmatter → ライブラリ直下 の順にフォールバック
+      targetFolder: string;
+    }
+  | {
+      mode: 'apply';
+      templatePath: string;
+      applyMode: 'insert' | 'append';
+    };
 
 interface TemplatePickerDialogProps {
+  // 既定は 'create'(#84 Phase B の従来挙動)
+  mode?: 'create' | 'apply';
   onSubmit: (result: TemplatePickerResult) => void;
   onCancel: () => void;
 }
 
-export function TemplatePickerDialog({ onSubmit, onCancel }: TemplatePickerDialogProps) {
+export function TemplatePickerDialog({
+  mode = 'create',
+  onSubmit,
+  onCancel,
+}: TemplatePickerDialogProps) {
   const { data, isLoading, error } = useTemplates();
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
@@ -29,6 +43,7 @@ export function TemplatePickerDialog({ onSubmit, onCancel }: TemplatePickerDialo
   const [targetFolder, setTargetFolder] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+  const insertBtnRef = useRef<HTMLButtonElement>(null);
 
   const filtered = useMemo(() => {
     const list = data?.templates ?? [];
@@ -45,11 +60,16 @@ export function TemplatePickerDialog({ onSubmit, onCancel }: TemplatePickerDialo
 
   useEffect(() => {
     if (selected) {
-      titleRef.current?.focus();
+      // apply モードでは「挿入」ボタンに、create モードではタイトル欄にフォーカス
+      if (mode === 'apply') {
+        insertBtnRef.current?.focus();
+      } else {
+        titleRef.current?.focus();
+      }
     } else {
       searchRef.current?.focus();
     }
-  }, [selected]);
+  }, [selected, mode]);
 
   function pickTemplate(t: TemplateSummary) {
     setSelected(t);
@@ -80,10 +100,16 @@ export function TemplatePickerDialog({ onSubmit, onCancel }: TemplatePickerDialo
     const trimmedTitle = title.trim();
     if (!trimmedTitle) return;
     onSubmit({
+      mode: 'create',
       templatePath: selected.path,
       title: trimmedTitle,
       targetFolder: targetFolder.trim(),
     });
+  }
+
+  function submitApply(applyMode: 'insert' | 'append') {
+    if (!selected) return;
+    onSubmit({ mode: 'apply', templatePath: selected.path, applyMode });
   }
 
   // 中#2: Step 2 でも Escape でモーダルを閉じられるようにダイアログ全体で拾う
@@ -96,11 +122,13 @@ export function TemplatePickerDialog({ onSubmit, onCancel }: TemplatePickerDialo
     }
   }
 
+  const dialogLabel = mode === 'apply' ? 'テンプレートを適用' : 'テンプレートから新規作成';
+
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="テンプレートから新規作成"
+      aria-label={dialogLabel}
       className="fixed inset-0 z-[80] flex items-start justify-center bg-black/40 px-4 pt-24 backdrop-blur-sm"
       onClick={(e) => {
         if (e.target === e.currentTarget) onCancel();
@@ -158,7 +186,7 @@ export function TemplatePickerDialog({ onSubmit, onCancel }: TemplatePickerDialo
                     <span className="font-medium">{t.name}</span>
                     <span className="text-xs text-ink-faint">
                       {t.path}
-                      {t.targetFolder ? ` → ${t.targetFolder}/` : ''}
+                      {mode === 'create' && t.targetFolder ? ` → ${t.targetFolder}/` : ''}
                     </span>
                     {t.description && (
                       <span className="text-xs text-ink-soft">{t.description}</span>
@@ -174,6 +202,40 @@ export function TemplatePickerDialog({ onSubmit, onCancel }: TemplatePickerDialo
                 className="rounded border border-line px-3 py-1.5 text-sm text-ink-soft hover:bg-hoverbg"
               >
                 キャンセル
+              </button>
+            </div>
+          </div>
+        ) : mode === 'apply' ? (
+          <div className="p-6">
+            <h2 className="mb-1 text-base font-bold text-ink">テンプレートを適用</h2>
+            <p className="mb-4 text-xs text-ink-faint">{selected.path}</p>
+            <p className="mb-4 text-sm text-ink-soft">
+              現在の編集中文書のどこにテンプレートを流し込みますか?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setSelected(null)}
+                className="rounded border border-line px-3 py-1.5 text-sm text-ink-soft hover:bg-hoverbg"
+              >
+                戻る
+              </button>
+              <button
+                type="button"
+                onClick={() => submitApply('append')}
+                className="rounded border border-line px-3 py-1.5 text-sm text-ink-soft hover:bg-hoverbg"
+                title="文書の末尾に追記します"
+              >
+                追記
+              </button>
+              <button
+                ref={insertBtnRef}
+                type="button"
+                onClick={() => submitApply('insert')}
+                className="rounded bg-accent px-3 py-1.5 text-sm text-white hover:bg-accent-hover"
+                title="カーソル位置に挿入します"
+              >
+                挿入
               </button>
             </div>
           </div>

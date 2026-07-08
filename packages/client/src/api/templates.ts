@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   ApplyTemplateRequest,
   ApplyTemplateResponse,
+  ExpandTemplateRequest,
+  ExpandTemplateResponse,
   ListTemplatesResponse,
 } from '@tsumiwiki/shared';
 import { useToastStore } from '../stores/toast';
@@ -39,6 +41,22 @@ export function useApplyTemplate() {
       showToast(
         'error',
         err instanceof ApiRequestError ? err.message : 'テンプレートを適用できませんでした',
+      );
+    },
+  });
+}
+
+// #84 Phase C: テンプレの変数展開結果(Markdown 本文)を取得する。
+// 呼び出し側は editor に挿入/追記するだけ。ここで toast は出さず、成否は呼び出し側で判定する。
+export function useExpandTemplate() {
+  const showToast = useToastStore((s) => s.show);
+  return useMutation({
+    mutationFn: (body: ExpandTemplateRequest) =>
+      api<ExpandTemplateResponse>('POST', '/api/templates/expand', body),
+    onError: (err) => {
+      showToast(
+        'error',
+        err instanceof ApiRequestError ? err.message : 'テンプレートを展開できませんでした',
       );
     },
   });
