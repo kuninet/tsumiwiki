@@ -1,0 +1,322 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',system-ui,sans-serif" font-size="13">
+  <defs>
+    <linearGradient id="accentGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c6cf0"/>
+      <stop offset="1" stop-color="#5b4bd6"/>
+    </linearGradient>
+    <filter id="soft" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="1" stdDeviation="1" flood-color="#000" flood-opacity="0.06"/>
+    </filter>
+
+    <!-- ============ Icon library (all vector, no emoji) ============ -->
+    <!-- Icons are drawn in a 16x16 box, use `color` via currentColor -->
+    <symbol id="i-search" viewBox="0 0 16 16">
+      <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <line x1="10.5" y1="10.5" x2="14" y2="14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-folder" viewBox="0 0 16 16">
+      <path d="M1.5 4.5 A1 1 0 0 1 2.5 3.5 H6 L7.5 5 H13.5 A1 1 0 0 1 14.5 6 V12 A1 1 0 0 1 13.5 13 H2.5 A1 1 0 0 1 1.5 12 Z" fill="currentColor" fill-opacity="0.15" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-folder-open" viewBox="0 0 16 16">
+      <path d="M1.5 4.5 A1 1 0 0 1 2.5 3.5 H6 L7.5 5 H13.5 A1 1 0 0 1 14.5 6 V6.5 H3 L1.5 12 Z" fill="currentColor" fill-opacity="0.15" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M3 6.5 H14.5 L13 12.5 A0.8 0.8 0 0 1 12.3 13 H2.4 A0.8 0.8 0 0 1 1.6 12 Z" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-doc" viewBox="0 0 16 16">
+      <path d="M3.5 1.5 H10 L13 4.5 V14 A0.5 0.5 0 0 1 12.5 14.5 H3.5 A0.5 0.5 0 0 1 3 14 V2 A0.5 0.5 0 0 1 3.5 1.5 Z" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M10 1.5 V4.5 H13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+      <line x1="5" y1="8" x2="11" y2="8" stroke="currentColor" stroke-width="1.1"/>
+      <line x1="5" y1="10.5" x2="11" y2="10.5" stroke="currentColor" stroke-width="1.1"/>
+      <line x1="5" y1="13" x2="9" y2="13" stroke="currentColor" stroke-width="1.1"/>
+    </symbol>
+    <symbol id="i-notebook" viewBox="0 0 16 16">
+      <rect x="3" y="1.5" width="10" height="13" rx="1" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-width="1.3"/>
+      <line x1="5.5" y1="1.5" x2="5.5" y2="14.5" stroke="currentColor" stroke-width="1.1"/>
+      <line x1="7.5" y1="5" x2="11.5" y2="5" stroke="currentColor" stroke-width="1.1"/>
+      <line x1="7.5" y1="8" x2="11.5" y2="8" stroke="currentColor" stroke-width="1.1"/>
+      <line x1="7.5" y1="11" x2="10" y2="11" stroke="currentColor" stroke-width="1.1"/>
+    </symbol>
+    <symbol id="i-trash" viewBox="0 0 16 16">
+      <path d="M3 4.5 H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      <path d="M6 4.5 V3 A0.8 0.8 0 0 1 6.8 2.2 H9.2 A0.8 0.8 0 0 1 10 3 V4.5" fill="none" stroke="currentColor" stroke-width="1.3"/>
+      <path d="M4.2 4.5 L5 13.5 A0.8 0.8 0 0 0 5.8 14.2 H10.2 A0.8 0.8 0 0 0 11 13.5 L11.8 4.5" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+      <line x1="7" y1="7" x2="7" y2="12" stroke="currentColor" stroke-width="1.1"/>
+      <line x1="9" y1="7" x2="9" y2="12" stroke="currentColor" stroke-width="1.1"/>
+    </symbol>
+    <symbol id="i-tag" viewBox="0 0 16 16">
+      <line x1="4" y1="2" x2="4" y2="14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <line x1="10" y1="2" x2="10" y2="14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <line x1="2" y1="6" x2="14" y2="6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <line x1="2" y1="10" x2="14" y2="10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-refresh" viewBox="0 0 16 16">
+      <path d="M13 8 A5 5 0 1 1 11.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M13 2.5 V4.8 H10.7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-moon" viewBox="0 0 16 16">
+      <path d="M11.5 10.5 A5.5 5.5 0 1 1 6 3 A4.2 4.2 0 0 0 11.5 10.5 Z" fill="currentColor" fill-opacity="0.85"/>
+    </symbol>
+    <symbol id="i-history" viewBox="0 0 16 16">
+      <path d="M8 3 A5 5 0 1 1 3 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M3 5 V8 H6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+      <line x1="8" y1="6" x2="8" y2="9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="8" y1="9" x2="10.5" y2="9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 16 16">
+      <path d="M3 8.5 L6.5 12 L13 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16">
+      <line x1="8" y1="3" x2="8" y2="13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="3" y1="8" x2="13" y2="8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-hash" viewBox="0 0 16 16">
+      <line x1="6" y1="2.5" x2="4.5" y2="13.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="11.5" y1="2.5" x2="10" y2="13.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="2.5" y1="6" x2="13.5" y2="6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="2" y1="10" x2="13" y2="10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-list" viewBox="0 0 16 16">
+      <circle cx="3" cy="4" r="1.2" fill="currentColor"/>
+      <circle cx="3" cy="8" r="1.2" fill="currentColor"/>
+      <circle cx="3" cy="12" r="1.2" fill="currentColor"/>
+      <line x1="6" y1="4" x2="14" y2="4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="6" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="6" y1="12" x2="14" y2="12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-tasklist" viewBox="0 0 16 16">
+      <rect x="1.5" y="2.5" width="4" height="4" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <path d="M2.3 4.6 L3.2 5.5 L4.7 3.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="1.5" y="9.5" width="4" height="4" rx="0.8" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <line x1="7.5" y1="4.5" x2="14" y2="4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="7.5" y1="11.5" x2="14" y2="11.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-table" viewBox="0 0 16 16">
+      <rect x="1.5" y="2.5" width="13" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <line x1="1.5" y1="6" x2="14.5" y2="6" stroke="currentColor" stroke-width="1.4"/>
+      <line x1="1.5" y1="9.5" x2="14.5" y2="9.5" stroke="currentColor" stroke-width="1.4"/>
+      <line x1="6" y1="2.5" x2="6" y2="13.5" stroke="currentColor" stroke-width="1.4"/>
+      <line x1="10.5" y1="2.5" x2="10.5" y2="13.5" stroke="currentColor" stroke-width="1.4"/>
+    </symbol>
+    <symbol id="i-code" viewBox="0 0 16 16">
+      <path d="M6 4 L2 8 L6 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M10 4 L14 8 L10 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-quote" viewBox="0 0 16 16">
+      <path d="M3.5 3.5 H6 L4.5 8 H6.5 V12.5 H2 V8.5 Z" fill="currentColor" fill-opacity="0.7"/>
+      <path d="M9.5 3.5 H12 L10.5 8 H12.5 V12.5 H8 V8.5 Z" fill="currentColor" fill-opacity="0.7"/>
+    </symbol>
+    <symbol id="i-link" viewBox="0 0 16 16">
+      <path d="M6.5 9.5 A3 3 0 0 1 6.5 5.5 L8.5 3.5 A3 3 0 0 1 12.5 7.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M9.5 6.5 A3 3 0 0 1 9.5 10.5 L7.5 12.5 A3 3 0 0 1 3.5 8.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-image" viewBox="0 0 16 16">
+      <rect x="1.5" y="2.5" width="13" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <circle cx="5" cy="6" r="1.3" fill="currentColor"/>
+      <path d="M2 12 L6 7.5 L9 10 L11.5 8 L14.5 11.5 V13 H2 Z" fill="currentColor" fill-opacity="0.35"/>
+    </symbol>
+    <symbol id="i-chart" viewBox="0 0 16 16">
+      <line x1="2" y1="14" x2="14" y2="14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <rect x="3" y="8" width="2.4" height="5" fill="currentColor" fill-opacity="0.7"/>
+      <rect x="6.8" y="5" width="2.4" height="8" fill="currentColor" fill-opacity="0.7"/>
+      <rect x="10.6" y="10" width="2.4" height="3" fill="currentColor" fill-opacity="0.7"/>
+    </symbol>
+    <symbol id="i-template" viewBox="0 0 16 16">
+      <path d="M3.5 1.5 H10 L13 4.5 V14 A0.5 0.5 0 0 1 12.5 14.5 H3.5 A0.5 0.5 0 0 1 3 14 V2 A0.5 0.5 0 0 1 3.5 1.5 Z" fill="currentColor" fill-opacity="0.10" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M10 1.5 V4.5 H13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+      <line x1="5" y1="8" x2="11" y2="8" stroke="currentColor" stroke-width="1.1" stroke-dasharray="1.5 1"/>
+      <line x1="5" y1="10.5" x2="9.5" y2="10.5" stroke="currentColor" stroke-width="1.1" stroke-dasharray="1.5 1"/>
+      <line x1="5" y1="13" x2="8" y2="13" stroke="currentColor" stroke-width="1.1" stroke-dasharray="1.5 1"/>
+    </symbol>
+  </defs>
+
+  <!-- App background -->
+  <rect x="0" y="0" width="1280" height="720" fill="#ffffff"/>
+
+  <!-- =========================== Header =========================== -->
+  <rect x="0" y="0" width="1280" height="52" fill="#fbfbfa" stroke="#ececeb" stroke-width="1"/>
+
+  <!-- Logo -->
+  <rect x="20" y="14" width="24" height="24" rx="6" fill="url(#accentGrad)"/>
+  <text x="32" y="31" text-anchor="middle" fill="#fff" font-weight="700" font-size="13">積</text>
+  <text x="54" y="32" fill="#2b2b30" font-weight="600" font-size="15">TsumiWiki</text>
+
+  <!-- Search box -->
+  <rect x="360" y="12" width="560" height="28" rx="7" fill="#f4f4f2" stroke="#ececeb"/>
+  <g color="#9a9ba2" transform="translate(374,18)"><use href="#i-search" width="16" height="16"/></g>
+  <text x="398" y="30" fill="#9a9ba2">検索</text>
+  <rect x="856" y="18" width="52" height="16" rx="4" fill="#ffffff" stroke="#ececeb"/>
+  <text x="882" y="30" text-anchor="middle" fill="#9a9ba2" font-size="11">Ctrl K</text>
+
+  <!-- Right controls -->
+  <g transform="translate(1080,14)">
+    <rect x="0" y="0" width="100" height="24" rx="6" fill="#ffffff" stroke="#ececeb"/>
+    <g color="#4d4e55" transform="translate(10,4)"><use href="#i-refresh" width="16" height="16"/></g>
+    <text x="60" y="16" text-anchor="middle" fill="#4d4e55" font-size="12">更新確認</text>
+  </g>
+  <g color="#4d4e55">
+    <circle cx="1204" cy="26" r="12" fill="#f4f4f2" stroke="#ececeb"/>
+    <g transform="translate(1196,18)"><use href="#i-moon" width="16" height="16"/></g>
+  </g>
+  <circle cx="1244" cy="26" r="14" fill="url(#accentGrad)"/>
+  <text x="1244" y="31" text-anchor="middle" fill="#fff" font-weight="600" font-size="12">K</text>
+
+  <!-- Header bottom divider -->
+  <line x1="0" y1="52" x2="1280" y2="52" stroke="#ececeb"/>
+
+  <!-- =========================== Sidebar =========================== -->
+  <rect x="0" y="52" width="260" height="640" fill="#fbfbfa"/>
+  <line x1="260" y1="52" x2="260" y2="692" stroke="#ececeb"/>
+
+  <!-- Sidebar tabs -->
+  <rect x="12" y="66" width="236" height="30" rx="6" fill="#ffffff" stroke="#ececeb"/>
+  <rect x="14" y="68" width="115" height="26" rx="5" fill="rgba(124,108,240,0.10)"/>
+  <g color="#7c6cf0" transform="translate(38,73)"><use href="#i-folder" width="16" height="16"/></g>
+  <text x="82" y="85" fill="#7c6cf0" font-weight="600">フォルダ</text>
+  <g color="#9a9ba2" transform="translate(158,73)"><use href="#i-tag" width="16" height="16"/></g>
+  <text x="200" y="85" fill="#9a9ba2">タグ</text>
+
+  <!-- Folder tree -->
+  <g font-size="13" fill="#2b2b30">
+    <g color="#4d4e55" transform="translate(20,108)"><use href="#i-folder-open" width="16" height="16"/></g>
+    <text x="42" y="120">議事録</text>
+
+    <g color="#4d4e55" transform="translate(42,152)"><use href="#i-doc" width="16" height="16"/></g>
+    <text x="64" y="164">2026-07-01 定例</text>
+
+    <g color="#4d4e55" transform="translate(20,176)"><use href="#i-folder" width="16" height="16"/></g>
+    <text x="42" y="188">マニュアル</text>
+
+    <g color="#4d4e55" transform="translate(42,198)"><use href="#i-doc" width="16" height="16"/></g>
+    <text x="64" y="210">導入手順</text>
+
+    <g color="#4d4e55" transform="translate(42,220)"><use href="#i-doc" width="16" height="16"/></g>
+    <text x="64" y="232">運用ルール</text>
+
+    <g color="#4d4e55" transform="translate(20,244)"><use href="#i-folder" width="16" height="16"/></g>
+    <text x="42" y="256">仕様書</text>
+
+    <g color="#4d4e55" transform="translate(20,266)"><use href="#i-folder" width="16" height="16"/></g>
+    <text x="42" y="278">議事メモ</text>
+  </g>
+
+  <!-- Currently selected doc (drawn above so it highlights the row) -->
+  <rect x="12" y="126" width="236" height="22" rx="5" fill="rgba(124,108,240,0.10)"/>
+  <g color="#5b4bd6" transform="translate(42,130)"><use href="#i-doc" width="16" height="16"/></g>
+  <text x="64" y="142" fill="#5b4bd6" font-weight="600" font-size="13">2026-07-08 定例</text>
+
+  <!-- Sidebar footer (4 buttons) -->
+  <g transform="translate(12,606)">
+    <!-- 今日の日誌 -->
+    <rect x="0" y="0" width="116" height="32" rx="6" fill="#ffffff" stroke="#ececeb"/>
+    <g color="#4d4e55" transform="translate(10,8)"><use href="#i-notebook" width="16" height="16"/></g>
+    <text x="68" y="20" text-anchor="middle" fill="#4d4e55" font-size="12">今日の日誌</text>
+    <!-- テンプレから -->
+    <rect x="120" y="0" width="116" height="32" rx="6" fill="#ffffff" stroke="#ececeb"/>
+    <g color="#4d4e55" transform="translate(130,8)"><use href="#i-template" width="16" height="16"/></g>
+    <text x="186" y="20" text-anchor="middle" fill="#4d4e55" font-size="12">テンプレから</text>
+    <!-- 新規文書 (primary) -->
+    <rect x="0" y="38" width="116" height="32" rx="6" fill="url(#accentGrad)"/>
+    <g color="#ffffff" transform="translate(16,46)"><use href="#i-plus" width="16" height="16"/></g>
+    <text x="70" y="58" text-anchor="middle" fill="#fff" font-weight="600" font-size="12">新規文書</text>
+    <!-- ごみ箱 -->
+    <rect x="120" y="38" width="116" height="32" rx="6" fill="#ffffff" stroke="#ececeb"/>
+    <g color="#4d4e55" transform="translate(136,46)"><use href="#i-trash" width="16" height="16"/></g>
+    <text x="188" y="58" text-anchor="middle" fill="#4d4e55" font-size="12">ごみ箱</text>
+  </g>
+
+  <!-- =========================== Main pane =========================== -->
+  <!-- Breadcrumb -->
+  <text x="284" y="82" fill="#9a9ba2" font-size="12">議事録 › 2026-07-08 定例.md</text>
+
+  <!-- Title + right buttons -->
+  <text x="284" y="118" fill="#2b2b30" font-weight="700" font-size="24">2026-07-08 定例</text>
+  <g transform="translate(1080,96)">
+    <rect x="0" y="0" width="80" height="28" rx="6" fill="#ffffff" stroke="#ececeb"/>
+    <g color="#4d4e55" transform="translate(12,6)"><use href="#i-history" width="16" height="16"/></g>
+    <text x="50" y="18" text-anchor="middle" fill="#4d4e55" font-size="12">履歴</text>
+
+    <rect x="88" y="0" width="80" height="28" rx="6" fill="url(#accentGrad)"/>
+    <g color="#ffffff" transform="translate(100,6)"><use href="#i-check" width="16" height="16"/></g>
+    <text x="138" y="18" text-anchor="middle" fill="#fff" font-weight="600" font-size="12">保存</text>
+  </g>
+
+  <!-- Tag chips -->
+  <g transform="translate(284,138)">
+    <rect x="0" y="0" width="78" height="22" rx="11" fill="rgba(124,108,240,0.10)" stroke="rgba(124,108,240,0.33)"/>
+    <g color="#5b4bd6" transform="translate(6,3)"><use href="#i-hash" width="16" height="16"/></g>
+    <text x="48" y="16" text-anchor="middle" fill="#5b4bd6" font-size="12">議事録</text>
+
+    <rect x="86" y="0" width="60" height="22" rx="11" fill="rgba(124,108,240,0.10)" stroke="rgba(124,108,240,0.33)"/>
+    <g color="#5b4bd6" transform="translate(92,3)"><use href="#i-hash" width="16" height="16"/></g>
+    <text x="122" y="16" text-anchor="middle" fill="#5b4bd6" font-size="12">定例</text>
+
+    <rect x="154" y="0" width="86" height="22" rx="11" fill="#ffffff" stroke="#ececeb" stroke-dasharray="3 2"/>
+    <g color="#9a9ba2" transform="translate(160,3)"><use href="#i-plus" width="16" height="16"/></g>
+    <text x="204" y="16" text-anchor="middle" fill="#9a9ba2" font-size="12">タグ追加</text>
+  </g>
+
+  <!-- Editor toolbar -->
+  <rect x="284" y="180" width="980" height="36" rx="7" fill="#fbfbfa" stroke="#ececeb"/>
+  <g fill="#4d4e55" font-weight="600" font-size="12">
+    <text x="304" y="203">H1</text>
+    <text x="332" y="203">H2</text>
+    <text x="360" y="203">H3</text>
+    <line x1="382" y1="190" x2="382" y2="208" stroke="#ececeb"/>
+    <text x="398" y="203" font-weight="700">B</text>
+    <text x="420" y="203" font-style="italic">I</text>
+    <text x="440" y="203" text-decoration="line-through">S</text>
+    <line x1="462" y1="190" x2="462" y2="208" stroke="#ececeb"/>
+    <g color="#4d4e55" transform="translate(478,190)"><use href="#i-list" width="16" height="16"/></g>
+    <text x="500" y="203">リスト</text>
+    <text x="546" y="203">1. 番号</text>
+    <g color="#4d4e55" transform="translate(600,190)"><use href="#i-tasklist" width="16" height="16"/></g>
+    <text x="622" y="203">タスク</text>
+    <line x1="670" y1="190" x2="670" y2="208" stroke="#ececeb"/>
+    <g color="#4d4e55" transform="translate(686,190)"><use href="#i-table" width="16" height="16"/></g>
+    <text x="708" y="203">表</text>
+    <g color="#4d4e55" transform="translate(738,190)"><use href="#i-code" width="16" height="16"/></g>
+    <text x="760" y="203">コード</text>
+    <g color="#4d4e55" transform="translate(806,190)"><use href="#i-quote" width="16" height="16"/></g>
+    <text x="828" y="203">引用</text>
+    <line x1="866" y1="190" x2="866" y2="208" stroke="#ececeb"/>
+    <g color="#4d4e55" transform="translate(882,190)"><use href="#i-link" width="16" height="16"/></g>
+    <text x="904" y="203">リンク</text>
+    <g color="#4d4e55" transform="translate(950,190)"><use href="#i-image" width="16" height="16"/></g>
+    <text x="972" y="203">画像</text>
+    <g color="#4d4e55" transform="translate(1010,190)"><use href="#i-chart" width="16" height="16"/></g>
+    <text x="1032" y="203">Mermaid</text>
+    <line x1="1090" y1="190" x2="1090" y2="208" stroke="#ececeb"/>
+    <g color="#7c6cf0" transform="translate(1106,190)"><use href="#i-template" width="16" height="16"/></g>
+    <text x="1128" y="203" fill="#7c6cf0">テンプレ適用</text>
+  </g>
+
+  <!-- Editor content -->
+  <rect x="284" y="232" width="980" height="440" rx="7" fill="#ffffff"/>
+  <g fill="#2b2b30">
+    <text x="312" y="270" font-weight="700" font-size="22"># 定例ミーティング</text>
+    <text x="312" y="308" fill="#4d4e55">日時: 2026-07-08 (水) 10:00 / 場所: 会議室A</text>
+    <text x="312" y="342" font-weight="700" font-size="18">## 議題</text>
+    <text x="330" y="374" fill="#4d4e55">1. Phase 1 の実装完了報告</text>
+    <text x="330" y="400" fill="#4d4e55">2. マニュアル整備の進捗</text>
+    <text x="330" y="426" fill="#4d4e55">3. 次スプリントの優先度</text>
+    <text x="312" y="464" font-weight="700" font-size="18">## 参考</text>
+    <text x="330" y="494" fill="#7c6cf0" text-decoration="underline">[[Phase1_実装完了メモ]]</text>
+    <text x="330" y="520" fill="#7c6cf0" text-decoration="underline">[[マニュアル/README]]</text>
+  </g>
+  <!-- Cursor blink -->
+  <rect x="330" y="544" width="2" height="18" fill="#7c6cf0"/>
+
+  <!-- =========================== Status bar =========================== -->
+  <rect x="0" y="692" width="1280" height="28" fill="#fbfbfa" stroke="#ececeb" stroke-width="1"/>
+  <circle cx="16" cy="706" r="4" fill="#22a06b"/>
+  <text x="28" y="710" fill="#4d4e55" font-size="12">編集中 ・ ロック取得済み(あなた)</text>
+  <text x="1268" y="710" text-anchor="end" fill="#9a9ba2" font-family="'JetBrains Mono',monospace" font-size="12">議事録/2026-07-08 定例.md</text>
+
+  <!-- Toast -->
+  <g transform="translate(1064,624)" filter="url(#soft)">
+    <rect x="0" y="0" width="196" height="46" rx="8" fill="#ffffff" stroke="#22a06b"/>
+    <rect x="0" y="0" width="4" height="46" fill="#22a06b" rx="2"/>
+    <g color="#22a06b" transform="translate(14,15)"><use href="#i-check" width="16" height="16"/></g>
+    <text x="38" y="20" fill="#2b2b30" font-weight="600" font-size="12">保存しました</text>
+    <text x="38" y="36" fill="#9a9ba2" font-size="11">2026-07-08 10:23:41</text>
+  </g>
+</svg>

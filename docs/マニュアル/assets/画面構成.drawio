@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" agent="TsumiWiki-manual" version="24.0.0">
+  <diagram name="TsumiWiki メイン画面" id="tw-main">
+    <mxGraphModel dx="1280" dy="720" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1280" pageHeight="720" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- App background -->
+        <mxCell id="app" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#dcdcda;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="0" y="0" width="1280" height="720" as="geometry"/>
+        </mxCell>
+
+        <!-- Header -->
+        <mxCell id="header" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fbfbfa;strokeColor=#ececeb;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="0" y="0" width="1280" height="52" as="geometry"/>
+        </mxCell>
+        <mxCell id="logo" value="積" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#7c6cf0;strokeColor=#5b4bd6;fontColor=#ffffff;fontStyle=1;fontSize=14;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="20" y="14" width="24" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="brand" value="TsumiWiki" style="text;html=1;align=left;verticalAlign=middle;fontSize=15;fontStyle=1;fontColor=#2b2b30;" vertex="1" parent="1">
+          <mxGeometry x="52" y="14" width="90" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="search" value="🔍  検索                                                                                                                                                                Ctrl K" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f4f4f2;strokeColor=#ececeb;align=left;spacingLeft=16;fontColor=#9a9ba2;fontSize=12;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="360" y="12" width="560" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="refresh" value="↻ 更新確認" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ececeb;fontColor=#4d4e55;fontSize=12;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="14" width="88" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="theme" value="☾" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f4f4f2;strokeColor=#ececeb;fontColor=#4d4e55;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="14" width="24" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="user" value="K" style="ellipse;whiteSpace=wrap;html=1;fillColor=#7c6cf0;strokeColor=#5b4bd6;fontColor=#ffffff;fontStyle=1;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1216" y="12" width="28" height="28" as="geometry"/>
+        </mxCell>
+
+        <!-- Sidebar -->
+        <mxCell id="sidebar" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fbfbfa;strokeColor=#ececeb;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="0" y="52" width="260" height="640" as="geometry"/>
+        </mxCell>
+        <mxCell id="tabs" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ececeb;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="12" y="66" width="236" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="tab-folder" value="📁 フォルダ" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eee9fe;strokeColor=none;fontColor=#5b4bd6;fontStyle=1;fontSize=12;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="14" y="68" width="115" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="tab-tag" value="# タグ" style="text;html=1;align=center;verticalAlign=middle;fontColor=#9a9ba2;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="130" y="68" width="115" height="26" as="geometry"/>
+        </mxCell>
+
+        <!-- Folder tree items -->
+        <mxCell id="tree-1" value="📂 議事録" style="text;html=1;align=left;verticalAlign=middle;fontColor=#2b2b30;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="20" y="108" width="220" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="tree-1-1-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eee9fe;strokeColor=none;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="12" y="132" width="236" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="tree-1-1" value="📄 2026-07-08 定例" style="text;html=1;align=left;verticalAlign=middle;fontColor=#5b4bd6;fontStyle=1;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="42" y="132" width="200" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="tree-1-2" value="📄 2026-07-01 定例" style="text;html=1;align=left;verticalAlign=middle;fontColor=#4d4e55;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="42" y="156" width="200" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="tree-2" value="📂 マニュアル" style="text;html=1;align=left;verticalAlign=middle;fontColor=#2b2b30;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="20" y="180" width="220" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="tree-2-1" value="📄 導入手順" style="text;html=1;align=left;verticalAlign=middle;fontColor=#4d4e55;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="42" y="204" width="200" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="tree-2-2" value="📄 運用ルール" style="text;html=1;align=left;verticalAlign=middle;fontColor=#4d4e55;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="42" y="228" width="200" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="tree-3" value="📂 仕様書" style="text;html=1;align=left;verticalAlign=middle;fontColor=#2b2b30;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="20" y="252" width="220" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="tree-4" value="📂 議事メモ" style="text;html=1;align=left;verticalAlign=middle;fontColor=#2b2b30;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="20" y="276" width="220" height="22" as="geometry"/>
+        </mxCell>
+
+        <!-- Sidebar footer 4 buttons -->
+        <mxCell id="btn-daily" value="📓 今日の日誌" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ececeb;fontColor=#4d4e55;fontSize=12;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="12" y="606" width="116" height="32" as="geometry"/>
+        </mxCell>
+        <mxCell id="btn-template" value="📄 テンプレから" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ececeb;fontColor=#4d4e55;fontSize=12;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="132" y="606" width="116" height="32" as="geometry"/>
+        </mxCell>
+        <mxCell id="btn-new" value="＋ 新規文書" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#7c6cf0;strokeColor=#5b4bd6;fontColor=#ffffff;fontStyle=1;fontSize=12;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="12" y="644" width="116" height="32" as="geometry"/>
+        </mxCell>
+        <mxCell id="btn-trash" value="🗑 ごみ箱" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ececeb;fontColor=#4d4e55;fontSize=12;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="132" y="644" width="116" height="32" as="geometry"/>
+        </mxCell>
+
+        <!-- Main pane: breadcrumb -->
+        <mxCell id="bread" value="議事録 › 2026-07-08 定例.md" style="text;html=1;align=left;verticalAlign=middle;fontColor=#9a9ba2;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="284" y="68" width="500" height="20" as="geometry"/>
+        </mxCell>
+
+        <!-- Main pane: title -->
+        <mxCell id="title" value="2026-07-08 定例" style="text;html=1;align=left;verticalAlign=middle;fontColor=#2b2b30;fontStyle=1;fontSize=24;" vertex="1" parent="1">
+          <mxGeometry x="284" y="98" width="700" height="32" as="geometry"/>
+        </mxCell>
+        <mxCell id="btn-history" value="⟲ 履歴" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ececeb;fontColor=#4d4e55;fontSize=12;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="96" width="80" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="btn-save" value="✓ 保存" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#7c6cf0;strokeColor=#5b4bd6;fontColor=#ffffff;fontStyle=1;fontSize=12;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="1168" y="96" width="80" height="28" as="geometry"/>
+        </mxCell>
+
+        <!-- Tag chips -->
+        <mxCell id="tag-1" value="＃議事録" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eee9fe;strokeColor=#b3a6f8;fontColor=#5b4bd6;fontSize=12;arcSize=50;" vertex="1" parent="1">
+          <mxGeometry x="284" y="138" width="72" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="tag-2" value="＃定例" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eee9fe;strokeColor=#b3a6f8;fontColor=#5b4bd6;fontSize=12;arcSize=50;" vertex="1" parent="1">
+          <mxGeometry x="364" y="138" width="52" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="tag-add" value="＋ タグ追加" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ececeb;fontColor=#9a9ba2;fontSize=12;arcSize=50;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="424" y="138" width="80" height="22" as="geometry"/>
+        </mxCell>
+
+        <!-- Editor toolbar -->
+        <mxCell id="toolbar" value="H1  H2  H3  |  B  I  S  |  •  1.  ☑  |  ▦  &lt;/&gt;  ❝  |  🔗  🖼  📊  |  📄 テンプレ適用" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fbfbfa;strokeColor=#ececeb;align=left;spacingLeft=16;fontColor=#4d4e55;fontSize=12;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="284" y="180" width="980" height="36" as="geometry"/>
+        </mxCell>
+
+        <!-- Editor content area -->
+        <mxCell id="content" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ececeb;arcSize=15;" vertex="1" parent="1">
+          <mxGeometry x="284" y="232" width="980" height="440" as="geometry"/>
+        </mxCell>
+        <mxCell id="content-h1" value="# 定例ミーティング" style="text;html=1;align=left;verticalAlign=middle;fontColor=#2b2b30;fontStyle=1;fontSize=22;" vertex="1" parent="1">
+          <mxGeometry x="312" y="252" width="700" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="content-meta" value="日時: 2026-07-08 (水) 10:00 / 場所: 会議室A" style="text;html=1;align=left;verticalAlign=middle;fontColor=#4d4e55;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="312" y="292" width="600" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="content-h2-1" value="## 議題" style="text;html=1;align=left;verticalAlign=middle;fontColor=#2b2b30;fontStyle=1;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="312" y="326" width="200" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="content-li-1" value="1. Phase 1 の実装完了報告" style="text;html=1;align=left;verticalAlign=middle;fontColor=#4d4e55;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="330" y="358" width="500" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="content-li-2" value="2. マニュアル整備の進捗" style="text;html=1;align=left;verticalAlign=middle;fontColor=#4d4e55;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="330" y="384" width="500" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="content-li-3" value="3. 次スプリントの優先度" style="text;html=1;align=left;verticalAlign=middle;fontColor=#4d4e55;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="330" y="410" width="500" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="content-h2-2" value="## 参考" style="text;html=1;align=left;verticalAlign=middle;fontColor=#2b2b30;fontStyle=1;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="312" y="450" width="200" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="content-link-1" value="[[Phase1_実装完了メモ]]" style="text;html=1;align=left;verticalAlign=middle;fontColor=#7c6cf0;fontStyle=4;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="330" y="480" width="300" height="22" as="geometry"/>
+        </mxCell>
+        <mxCell id="content-link-2" value="[[マニュアル/README]]" style="text;html=1;align=left;verticalAlign=middle;fontColor=#7c6cf0;fontStyle=4;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="330" y="506" width="300" height="22" as="geometry"/>
+        </mxCell>
+
+        <!-- Toast -->
+        <mxCell id="toast" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#22a06b;arcSize=15;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1064" y="624" width="196" height="46" as="geometry"/>
+        </mxCell>
+        <mxCell id="toast-bar" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#22a06b;strokeColor=none;arcSize=25;" vertex="1" parent="1">
+          <mxGeometry x="1064" y="624" width="4" height="46" as="geometry"/>
+        </mxCell>
+        <mxCell id="toast-title" value="保存しました" style="text;html=1;align=left;verticalAlign=middle;fontColor=#2b2b30;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="628" width="120" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="toast-sub" value="2026-07-08 10:23:41" style="text;html=1;align=left;verticalAlign=middle;fontColor=#9a9ba2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="648" width="120" height="16" as="geometry"/>
+        </mxCell>
+
+        <!-- Status bar -->
+        <mxCell id="status" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fbfbfa;strokeColor=#ececeb;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="0" y="692" width="1280" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="status-dot" value="" style="ellipse;whiteSpace=wrap;html=1;fillColor=#22a06b;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="12" y="702" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="status-left" value="編集中 ・ ロック取得済み(あなた)" style="text;html=1;align=left;verticalAlign=middle;fontColor=#4d4e55;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="26" y="694" width="360" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="status-right" value="議事録/2026-07-08 定例.md" style="text;html=1;align=right;verticalAlign=middle;fontColor=#9a9ba2;fontFamily=monospace;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="880" y="694" width="380" height="24" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
