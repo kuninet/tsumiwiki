@@ -160,6 +160,13 @@ export const historyEntrySchema = z.object({
 });
 export type HistoryEntry = z.infer<typeof historyEntrySchema>;
 
+// ライブラリ全体の履歴(issue #66)。1コミットで複数ファイルが変わりうるため
+// pathsを配列で持つ(このコミットで変更されたファイルパス。1件以上)
+export const allHistoryEntrySchema = historyEntrySchema.extend({
+  paths: z.array(z.string()),
+});
+export type AllHistoryEntry = z.infer<typeof allHistoryEntrySchema>;
+
 export const restoreRequestSchema = z.object({
   path: z.string().min(1),
   rev: z.string().regex(REV_PATTERN, 'リビジョン指定が不正です'),

@@ -136,6 +136,42 @@ describe('履歴API', () => {
     );
     expect(res.statusCode).toBe(400);
   }, 30_000);
+
+  it('全体履歴を取得できる(issue #66)', async () => {
+    const res = await api('GET', '/api/history/all');
+    expect(res.statusCode).toBe(200);
+    const history = res.json().history;
+    expect(history.length).toBeGreaterThan(0);
+    expect(history[0].paths).toContain(docPath);
+  }, 30_000);
+
+  it('全体履歴のlimitが0は400', async () => {
+    const res = await api('GET', '/api/history/all?limit=0');
+    expect(res.statusCode).toBe(400);
+  }, 30_000);
+
+  it('全体履歴のlimitが2000は400', async () => {
+    const res = await api('GET', '/api/history/all?limit=2000');
+    expect(res.statusCode).toBe(400);
+  }, 30_000);
+
+  it('全体履歴用の差分(rev^..rev)が取れる(issue #66)', async () => {
+    const history = (await api('GET', '/api/history/all')).json().history;
+    const target = history.find(
+      (h: { paths: string[] }) => h.paths[0] === docPath && h.paths.length === 1,
+    );
+    const res = await api(
+      'GET',
+      `/api/history/all/diff?path=${encodeURIComponent(docPath)}&rev=${target.rev}`,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(typeof res.json().diff).toBe('string');
+  }, 30_000);
+
+  it('全体履歴用の差分は不正なrevで400', async () => {
+    const res = await api('GET', `/api/history/all/diff?path=${encodeURIComponent(docPath)}&rev=xy`);
+    expect(res.statusCode).toBe(400);
+  }, 30_000);
 });
 
 describe('レビュー指摘の回帰テスト', () => {

@@ -1,12 +1,16 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { AllHistoryEntry, HistoryEntry } from '@tsumiwiki/shared';
 import { useEffect, useState } from 'react';
 import { ApiRequestError } from '../api/client';
 import { docQueryKey, TREE_QUERY_KEY } from '../api/docs';
 import {
+  ALL_HISTORY_QUERY_KEY,
+  fetchHistoryCommitDiff,
   fetchHistoryContent,
   fetchHistoryDiff,
   historyQueryKey,
   restoreRevision,
+  useAllHistory,
   useHistory,
 } from '../api/history';
 import { acquireLock, releaseLock } from '../api/locks';
@@ -41,6 +45,10 @@ function titleFromPath(path: string): string {
   return base.replace(/\.md$/i, '');
 }
 
+function isAllHistoryEntry(entry: HistoryEntry | AllHistoryEntry): entry is AllHistoryEntry {
+  return 'paths' in entry;
+}
+
 export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryPanelProps) {
   // Escapeキーでパネルを閉じる(操作性・a11y)
   useEffect(() => {
@@ -51,12 +59,22 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
-  const { data: history, isLoading } = useHistory(path);
+  const [scope, setScope] = useState<'file' | 'all'>('file');
+  const { data: fileHistory, isLoading: fileLoading } = useHistory(path);
+  const { data: allHistory, isLoading: allLoading } = useAllHistory(scope === 'all');
+  const history = scope === 'all' ? allHistory : fileHistory;
+  const isLoading = scope === 'all' ? allLoading : fileLoading;
   const [selectedRev, setSelectedRev] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('diff');
   const [restoreConfirmVisible, setRestoreConfirmVisible] = useState(false);
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
+
+  // スコープ切替時は選択中の版をリセットする。「全体」は差分タブのみのため合わせて固定する
+  useEffect(() => {
+    setSelectedRev(null);
+    if (scope === 'all') setTab('diff');
+  }, [scope]);
 
   // 初回取得時は最新版を選択状態にする
   useEffect(() => {
@@ -65,16 +83,30 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
     }
   }, [history, selectedRev]);
 
+  // 「全体」スコープでは1コミット内の代表1ファイル(paths[0])を差分対象にする
+  const selectedAllEntry =
+    scope === 'all' ? (allHistory ?? []).find((e) => e.rev === selectedRev) : undefined;
+  const diffTargetPath = scope === 'all' ? selectedAllEntry?.paths[0] : path;
+
   const { data: content } = useQuery({
     queryKey: ['history-content', path, selectedRev],
     queryFn: () => fetchHistoryContent(path, selectedRev!),
-    enabled: !!selectedRev && tab === 'content',
+    enabled: !!selectedRev && tab === 'content' && scope === 'file',
   });
 
-  const { data: diff } = useQuery({
-    queryKey: ['history-diff', path, selectedRev],
-    queryFn: () => fetchHistoryDiff(path, selectedRev!),
-    enabled: !!selectedRev && tab === 'diff',
+  // 「この文書」時は rev↔HEAD、「全体」時は rev^↔rev(そのコミット単体の差分)。
+  // 全体スコープは非文書パス(.gitignore・.trash 等)も含みうるため専用ルートを叩く
+  const { data: diff, isError: diffError } = useQuery({
+    queryKey:
+      scope === 'all'
+        ? ['history-commit-diff', diffTargetPath, selectedRev]
+        : ['history-diff', diffTargetPath, selectedRev],
+    queryFn: () =>
+      scope === 'all'
+        ? fetchHistoryCommitDiff(diffTargetPath!, selectedRev!)
+        : fetchHistoryDiff(diffTargetPath!, selectedRev!),
+    enabled: !!selectedRev && tab === 'diff' && !!diffTargetPath,
+    retry: false,
   });
 
   const diffLines = diff ? parseDiff(diff) : [];
@@ -108,6 +140,7 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
       await restoreRevision(path, selectedRev);
       queryClient.invalidateQueries({ queryKey: docQueryKey(path) });
       queryClient.invalidateQueries({ queryKey: historyQueryKey(path) });
+      queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       showToast('success', 'この版に戻しました');
       onClose(); // 復元後は旧版選択が残らないようパネルを閉じる
@@ -134,6 +167,33 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
         </button>
       </div>
 
+      <div className="flex flex-shrink-0 items-center border-b border-line px-4 py-2">
+        <div className="inline-flex rounded-full border border-line p-0.5" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={scope === 'file'}
+            onClick={() => setScope('file')}
+            className={`rounded-full px-3 py-1 text-xs ${
+              scope === 'file' ? 'bg-active font-semibold text-accent' : 'text-ink-faint'
+            }`}
+          >
+            この文書
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={scope === 'all'}
+            onClick={() => setScope('all')}
+            className={`rounded-full px-3 py-1 text-xs ${
+              scope === 'all' ? 'bg-active font-semibold text-accent' : 'text-ink-faint'
+            }`}
+          >
+            全体
+          </button>
+        </div>
+      </div>
+
       <div className="max-h-[45%] flex-shrink-0 overflow-y-auto border-b border-line">
         {isLoading && <p className="p-3 text-sm text-ink-faint">読み込み中...</p>}
         {!isLoading && (history ?? []).length === 0 && (
@@ -156,12 +216,31 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
                   {entry.authorName.charAt(0)}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-sm text-ink" title={formatDateTime(entry.date)}>
-                    {relativeTime(entry.date)}
-                  </span>
-                  <span className="mt-0.5 block truncate text-xs text-ink-faint">
-                    {entry.authorName} ・ {entry.message}
-                  </span>
+                  {isAllHistoryEntry(entry) ? (
+                    <>
+                      <span className="block truncate text-sm text-ink" title={entry.paths.join(', ')}>
+                        {titleFromPath(entry.paths[0])}
+                        {entry.paths.length > 1 && (
+                          <span className="text-ink-faint"> +他{entry.paths.length - 1}件</span>
+                        )}
+                      </span>
+                      <span
+                        className="mt-0.5 block truncate text-xs text-ink-faint"
+                        title={formatDateTime(entry.date)}
+                      >
+                        {relativeTime(entry.date)} ・ {entry.authorName} ・ {entry.message}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="block text-sm text-ink" title={formatDateTime(entry.date)}>
+                        {relativeTime(entry.date)}
+                      </span>
+                      <span className="mt-0.5 block truncate text-xs text-ink-faint">
+                        {entry.authorName} ・ {entry.message}
+                      </span>
+                    </>
+                  )}
                 </span>
               </button>
             </li>
@@ -183,7 +262,8 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
           <button
             type="button"
             onClick={() => setTab('content')}
-            className={`flex-1 px-3 py-2 text-sm ${
+            disabled={scope === 'all'}
+            className={`flex-1 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-40 ${
               tab === 'content' ? 'border-b-2 border-accent font-semibold text-accent' : 'text-ink-faint'
             }`}
           >
@@ -192,22 +272,30 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
         </div>
 
         <div className="flex-1 overflow-auto p-3">
-          {tab === 'content' && (
+          {scope === 'all' && diffTargetPath && (
+            <p className="mb-2 truncate text-xs text-ink-faint">表示中: {diffTargetPath}</p>
+          )}
+          {tab === 'content' && scope === 'file' && (
             <pre className="whitespace-pre-wrap text-xs text-ink">{content ?? ''}</pre>
           )}
-          {tab === 'diff' && <DiffView lines={diffLines} />}
+          {tab === 'diff' && diffError && (
+            <p className="text-xs text-ink-faint">このパスの差分は表示できません</p>
+          )}
+          {tab === 'diff' && !diffError && <DiffView lines={diffLines} />}
         </div>
 
-        <div className="flex-shrink-0 border-t border-line p-3">
-          <button
-            type="button"
-            disabled={!selectedRev}
-            onClick={() => setRestoreConfirmVisible(true)}
-            className="w-full rounded bg-accent px-3 py-1.5 text-sm text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            この版に戻す
-          </button>
-        </div>
+        {scope === 'file' && (
+          <div className="flex-shrink-0 border-t border-line p-3">
+            <button
+              type="button"
+              disabled={!selectedRev}
+              onClick={() => setRestoreConfirmVisible(true)}
+              className="w-full rounded bg-accent px-3 py-1.5 text-sm text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              この版に戻す
+            </button>
+          </div>
+        )}
       </div>
 
       {restoreConfirmVisible && (

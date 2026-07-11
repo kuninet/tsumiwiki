@@ -249,6 +249,147 @@ describe('HistoryPanel', () => {
     expect(calls.some((c) => c.method === 'POST' && c.path === '/api/locks')).toBe(false);
   });
 
+  it('初期表示は『この文書』スコープ', async () => {
+    stubFetch({
+      'GET /api/history': {
+        history: [{ rev: 'abc1234', authorName: '太郎', date: '2026-07-01T00:00:00+09:00', message: '更新' }],
+      },
+      'GET /api/history/diff': { diff: '' },
+    });
+
+    renderHistoryPanel();
+    await screen.findByText(/太郎/);
+
+    expect(screen.getByRole('tab', { name: 'この文書' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: '全体' }).getAttribute('aria-selected')).toBe('false');
+  });
+
+  it('『全体』に切替でuseAllHistoryのAPIを呼ぶ', async () => {
+    const calls = stubFetch({
+      'GET /api/history': {
+        history: [{ rev: 'abc1234', authorName: '太郎', date: '2026-07-01T00:00:00+09:00', message: '更新' }],
+      },
+      'GET /api/history/diff': { diff: '' },
+      'GET /api/history/all/diff': { diff: '' },
+      'GET /api/history/all': {
+        history: [
+          {
+            rev: 'aaa1111',
+            authorName: '太郎',
+            date: '2026-07-01T00:00:00+09:00',
+            message: '更新',
+            paths: ['メモ.md'],
+          },
+        ],
+      },
+    });
+
+    renderHistoryPanel();
+    await screen.findByText(/太郎/);
+
+    fireEvent.click(screen.getByRole('tab', { name: '全体' }));
+
+    await waitFor(() => {
+      expect(calls.some((c) => c.method === 'GET' && c.path === '/api/history/all')).toBe(true);
+    });
+  });
+
+  it('『全体』時の差分は /api/history/all/diff(rev^..rev)を叩く(#66レビュー指摘対応)', async () => {
+    const calls = stubFetch({
+      'GET /api/history': {
+        history: [{ rev: 'abc1234', authorName: '太郎', date: '2026-07-01T00:00:00+09:00', message: '更新' }],
+      },
+      'GET /api/history/diff': { diff: '' },
+      'GET /api/history/all/diff': { diff: '' },
+      'GET /api/history/all': {
+        history: [
+          {
+            rev: 'aaa1111',
+            authorName: '太郎',
+            date: '2026-07-01T00:00:00+09:00',
+            message: '更新',
+            paths: ['メモ.md'],
+          },
+        ],
+      },
+    });
+
+    renderHistoryPanel();
+    await screen.findByText(/太郎/);
+    fireEvent.click(screen.getByRole('tab', { name: '全体' }));
+
+    await waitFor(() => {
+      expect(
+        calls.some((c) => c.method === 'GET' && c.path.startsWith('/api/history/all/diff')),
+      ).toBe(true);
+    });
+    // 「この文書」用の /api/history/diff は全体時には叩かれない
+    expect(
+      calls.filter((c) => c.method === 'GET' && c.path.startsWith('/api/history/diff')).length,
+    ).toBeLessThanOrEqual(1);
+  });
+
+  it('『全体』時のエントリはパスが表示される', async () => {
+    stubFetch({
+      'GET /api/history': {
+        history: [{ rev: 'abc1234', authorName: '太郎', date: '2026-07-01T00:00:00+09:00', message: '更新' }],
+      },
+      'GET /api/history/diff': { diff: '' },
+      'GET /api/history/all/diff': { diff: '' },
+      'GET /api/history/all': {
+        history: [
+          {
+            rev: 'aaa1111',
+            authorName: '太郎',
+            date: '2026-07-01T00:00:00+09:00',
+            message: '複数編集',
+            paths: ['議事録.md', '週次.md'],
+          },
+        ],
+      },
+    });
+
+    renderHistoryPanel();
+    await screen.findByText(/太郎/);
+
+    fireEvent.click(screen.getByRole('tab', { name: '全体' }));
+
+    // titleFromPath 適用でファイル名から拡張子と親フォルダは落ちる(#66レビュー指摘対応)
+    expect(await screen.findByText('議事録', { exact: false })).toBeTruthy();
+    expect(screen.getByText(/\+他1件/)).toBeTruthy();
+  });
+
+  it('『全体』時は「この版に戻す」ボタンが非表示', async () => {
+    stubFetch({
+      'GET /api/history': {
+        history: [{ rev: 'abc1234', authorName: '太郎', date: '2026-07-01T00:00:00+09:00', message: '更新' }],
+      },
+      'GET /api/history/diff': { diff: '' },
+      'GET /api/history/all/diff': { diff: '' },
+      'GET /api/history/all': {
+        history: [
+          {
+            rev: 'aaa1111',
+            authorName: '太郎',
+            date: '2026-07-01T00:00:00+09:00',
+            message: '更新',
+            paths: ['メモ.md'],
+          },
+        ],
+      },
+    });
+
+    renderHistoryPanel();
+    await screen.findByText(/太郎/);
+    expect(screen.getByRole('button', { name: 'この版に戻す' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('tab', { name: '全体' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'この版に戻す' })).toBeNull();
+    });
+  });
+
   it('ロック取得に失敗した場合は復元を実行しない', async () => {
     const calls = stubFetch({
       'GET /api/history': {

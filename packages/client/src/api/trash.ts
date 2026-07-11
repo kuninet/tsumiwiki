@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { TrashEntry } from '@tsumiwiki/shared';
 import { ApiRequestError, api } from './client';
 import { TAGS_QUERY_KEY, TREE_QUERY_KEY } from './docs';
+import { ALL_HISTORY_QUERY_KEY } from './history';
 import { useToastStore } from '../stores/toast';
 
 // ごみ箱API(FR-DOC-07・設計04章4.3)
@@ -31,6 +32,7 @@ function useTrashMutation<TVariables>(
       queryClient.invalidateQueries({ queryKey: TRASH_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
       showToast('success', successMessage);
     },
     onError: (err) => {

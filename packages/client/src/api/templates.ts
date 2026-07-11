@@ -9,6 +9,7 @@ import type {
 import { useToastStore } from '../stores/toast';
 import { ApiRequestError, api } from './client';
 import { TAGS_QUERY_KEY, TREE_QUERY_KEY } from './docs';
+import { ALL_HISTORY_QUERY_KEY } from './history';
 
 // #84 Phase B: テンプレート API 用のフック群。
 // - useTemplates: `settings.templates.folder` 配下のテンプレ一覧を取得(選択モーダル用)
@@ -35,6 +36,7 @@ export function useApplyTemplate() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
       showToast('success', 'テンプレートから文書を作成しました');
     },
     onError: (err) => {
