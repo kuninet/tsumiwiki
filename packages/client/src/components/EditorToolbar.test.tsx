@@ -67,6 +67,21 @@ describe('EditorToolbar', () => {
     editor.destroy();
   });
 
+  it('B/I/Sボタンのラベルが太字/斜体/打消し線で装飾される', () => {
+    const editor = createTestEditor('本文');
+
+    render(<EditorToolbar editor={editor} onOpenLinkDialog={vi.fn()} onPickImage={vi.fn()} />);
+
+    const bold = screen.getByRole('button', { name: '太字' });
+    const italic = screen.getByRole('button', { name: '斜体' });
+    const strike = screen.getByRole('button', { name: '打消し' });
+    expect(bold.querySelector('span')?.className).toContain('font-bold');
+    expect(italic.querySelector('span')?.className).toContain('italic');
+    expect(strike.querySelector('span')?.className).toContain('line-through');
+
+    editor.destroy();
+  });
+
   it('インデント追加/戻しボタンで箇条書き項目のネストがトグルされる', () => {
     const editor = createTestEditor('- 一つ目\n- 二つ目');
     editor.commands.focus('end');
