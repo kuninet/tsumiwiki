@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AllHistoryEntry, HistoryEntry } from '@tsumiwiki/shared';
 import { useEffect, useState } from 'react';
 import { ApiRequestError } from '../api/client';
-import { docQueryKey, TREE_QUERY_KEY } from '../api/docs';
+import { docQueryKey, TREE_QUERY_KEY, useTree } from '../api/docs';
 import {
   ALL_HISTORY_QUERY_KEY,
   fetchHistoryCommitDiff,
@@ -64,6 +64,9 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
   const { data: allHistory, isLoading: allLoading } = useAllHistory(scope === 'all');
   const history = scope === 'all' ? allHistory : fileHistory;
   const isLoading = scope === 'all' ? allLoading : fileLoading;
+  // #96: 差分表示内の wikilink をクリック可能にするため、DiffView に docs 一覧を渡す。
+  // useTree は React Query でキャッシュされているので DocView と共有され追加取得は起きない
+  const { data: tree } = useTree();
   const [selectedRev, setSelectedRev] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('diff');
   const [restoreConfirmVisible, setRestoreConfirmVisible] = useState(false);
@@ -281,7 +284,9 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
           {tab === 'diff' && diffError && (
             <p className="text-xs text-ink-faint">このパスの差分は表示できません</p>
           )}
-          {tab === 'diff' && !diffError && <DiffView lines={diffLines} />}
+          {tab === 'diff' && !diffError && (
+            <DiffView lines={diffLines} docs={tree?.docs ?? []} />
+          )}
         </div>
 
         {scope === 'file' && (

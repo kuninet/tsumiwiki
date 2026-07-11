@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -54,10 +54,24 @@ afterEach(async () => {
 });
 
 describe('ライブラリ設定API', () => {
-  it('初期状態はデフォルト値が返る', async () => {
+  it('初期状態はデフォルト値が返る(corrupted: false)', async () => {
     const res = await apiAs(yamada, 'GET', '/api/library/settings');
     expect(res.statusCode).toBe(200);
     expect(res.json().settings).toEqual(LIBRARY_SETTINGS_DEFAULTS);
+    expect(res.json().corrupted).toBe(false);
+  }, 20_000);
+
+  // #99: settings.yaml が壊れている場合、サイレントにデフォルト値へフォールバックすると
+  //      admin がそれと気付かず保存し、git上の正しい過去版を上書きしてしまう。
+  //      GETレスポンスに corrupted: true が乗ることを確認する。
+  it('settings.yamlが不正なYAMLの場合、corrupted: trueでデフォルト値が返る', async () => {
+    await mkdir(join(lib, '.tsumiwiki'), { recursive: true });
+    await writeFile(join(lib, '.tsumiwiki/settings.yaml'), 'templates: [unterminated\n', 'utf8');
+
+    const res = await apiAs(yamada, 'GET', '/api/library/settings');
+    expect(res.statusCode).toBe(200);
+    expect(res.json().settings).toEqual(LIBRARY_SETTINGS_DEFAULTS);
+    expect(res.json().corrupted).toBe(true);
   }, 20_000);
 
   it('adminは設定を更新できる。以後の取得で反映される', async () => {

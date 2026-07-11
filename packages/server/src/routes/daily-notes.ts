@@ -20,7 +20,7 @@ export const dailyNotesRoutes: FastifyPluginCallback = (app, _opts, done) => {
   app.post('/api/daily-notes/today', async (req, reply) => {
     if (!req.user) return sendError(reply, 401, 'UNAUTHORIZED', '認証が必要です');
     return handling(reply, async () => {
-      const settings = await app.librarySettingsService.get();
+      const { settings } = await app.librarySettingsService.get();
       const now = new Date();
       // ファイル名パターンは Obsidian と同じく素の日付フォーマット文字列として扱う
       // (例 'YYYY-MM-DD' → '2026-07-05')。{{...}} 変数構文は librarySettingsSchema で拒否済み

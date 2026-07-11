@@ -10,9 +10,8 @@ import { createEditorExtensions } from '../editor/markdown';
 import { parseMarkdownFragment } from '../editor/parse-fragment';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
-import { docUrl } from '../lib/doc-path';
+import { handleWikilinkClick } from '../lib/handle-wikilink-click';
 import { removeInlineTag, renameInlineTag } from '../lib/inline-tag-rewrite';
-import { resolveWikilink } from '../lib/resolve-wikilink';
 import { saveBadge } from '../lib/save-badge';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
@@ -416,19 +415,14 @@ export function DocView({ doc, currentUser }: DocViewProps) {
 
   // wikilinkクリックでの遷移(FR-OBS-02)とfile://・UNCリンクの「パスをコピー」(FR-LINK-02)
   function handleContainerClick(e: ReactMouseEvent<HTMLDivElement>) {
-    // 編集モード中のクリックはカーソル移動として扱い、遷移・コピーはしない
+    // 編集モード中のクリックはカーソル移動として扱い、遷移・コピーはしない(本文側の従来挙動を維持)。
+    // 差分表示側(HistoryPanel > DiffView)は別コンテナで onClick を独自に持ち、この gate の
+    // 影響を受けずに wikilink 遷移する(#96)
     if (sessionRef.current.mode !== 'view') return;
     const target = e.target as HTMLElement;
 
-    const wikilinkEl = target.closest('span[data-type="wikilink"]');
-    if (wikilinkEl) {
-      const wikilinkTarget = wikilinkEl.getAttribute('data-target') ?? '';
-      const resolved = resolveWikilink(wikilinkTarget, wikilinkDocsRef.current);
-      if (resolved) {
-        navigate(docUrl(resolved));
-      } else {
-        showToast('error', 'リンク先が見つかりません');
-      }
+    // #96: wikilink 分岐は本文と差分で共通ヘルパを使う。DocView は view モード時のみ通す
+    if (handleWikilinkClick(target, wikilinkDocsRef.current, navigate, showToast)) {
       return;
     }
 

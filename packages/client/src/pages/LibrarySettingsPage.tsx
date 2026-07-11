@@ -1,6 +1,11 @@
+import { useQueryClient } from '@tanstack/react-query';
 import type { LibrarySettings } from '@tsumiwiki/shared';
 import { useEffect, useState } from 'react';
-import { useLibrarySettings, useUpdateLibrarySettings } from '../api/library-settings';
+import {
+  LIBRARY_SETTINGS_QUERY_KEY,
+  useLibrarySettings,
+  useUpdateLibrarySettings,
+} from '../api/library-settings';
 
 // #84 Phase 1: ライブラリ全体のテンプレート・デイリーノート設定編集画面(admin専用)。
 // 一般ユーザーからも API 経由で読み取れるが、更新は admin のみ。UI は RequireAdmin で保護。
@@ -8,10 +13,16 @@ import { useLibrarySettings, useUpdateLibrarySettings } from '../api/library-set
 export function LibrarySettingsPage() {
   const { data, isLoading } = useLibrarySettings();
   const update = useUpdateLibrarySettings();
+  const queryClient = useQueryClient();
   const [form, setForm] = useState<LibrarySettings | null>(null);
 
+  // #99: admin が settings.yaml を手動で修復した後、キャッシュを更新して再取得するための導線
+  function handleReload() {
+    void queryClient.invalidateQueries({ queryKey: LIBRARY_SETTINGS_QUERY_KEY });
+  }
+
   useEffect(() => {
-    if (data) setForm(data);
+    if (data) setForm(data.settings);
   }, [data]);
 
   function handleChange<K extends keyof LibrarySettings, F extends keyof LibrarySettings[K]>(
@@ -35,6 +46,27 @@ export function LibrarySettingsPage() {
       </p>
 
       {isLoading && <p className="mt-6 text-sm text-ink-faint">読み込み中...</p>}
+
+      {data?.corrupted === true && (
+        <div
+          role="alert"
+          className="mt-6 rounded border border-warning bg-warning/10 px-4 py-3 text-sm text-ink"
+        >
+          <p className="font-medium text-warning">
+            設定ファイル(.tsumiwiki/settings.yaml)を読み込めませんでした。表示されているのは初期値です。
+          </p>
+          <p className="mt-1 text-ink-soft">
+            このまま保存すると git 上の正しい過去版が上書きされます。ファイルを直接修復するか、履歴から復元してください。
+          </p>
+          <button
+            type="button"
+            onClick={handleReload}
+            className="mt-2 rounded border border-warning px-3 py-1 text-xs font-medium text-warning hover:bg-warning/20"
+          >
+            再読込
+          </button>
+        </div>
+      )}
 
       {form && (
         <div className="mt-6 space-y-8">
