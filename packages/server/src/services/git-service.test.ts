@@ -7,7 +7,7 @@ import { GitService } from './git-service';
 
 // Git連携の検証(issue #8 / 設計06章)
 // - 日本語ファイル名・フォルダ名の扱い(NFC)
-// - author記録、--followによるリネーム追跡、過去版・差分
+// - author記録、過去版・差分(リネーム追跡は --follow の誤検出を避けるため付けない。#66)
 // - 直列キューによる並行コミットの安全性
 // - bareリポジトリ(バックアップ先)へのpush
 // Windows実機(Git for Windows・UNCパス)での確認は別issueで行う。
@@ -47,15 +47,37 @@ describe('GitService', () => {
     expect(committer).toBe('TsumiWiki');
   }, 20_000);
 
-  it('リネームを--followで追跡できる', async () => {
+  it('リネーム後の新パスの履歴は「リネーム以降」のみを返す(#66)', async () => {
+    // --follow は使わない方針のため、リネーム前(旧名.md)のコミットは含めない。
+    // 代わりに、テンプレ由来など内容が近い別文書のコミットが誤って混入することが避けられる
     await writeFile(join(lib, '旧名.md'), '内容\n', 'utf8');
     await svc.commit(['旧名.md'], 'add: 旧名.md', AUTHOR);
     await rename(join(lib, '旧名.md'), join(lib, '新名.md'));
     await svc.commitAll('move: 旧名.md -> 新名.md', AUTHOR);
 
     const history = await svc.history('新名.md');
-    expect(history).toHaveLength(2);
+    expect(history).toHaveLength(1);
     expect(history[0].message).toBe('move: 旧名.md -> 新名.md');
+  }, 20_000);
+
+  // #66 リグレッションテスト: テンプレ由来など内容が類似した2文書があるとき、
+  // 一方の履歴に他方のコミットが混入しないこと(git --follow の -M 閾値を無視した
+  // 誤検出パスにハマらないよう --follow を外した)
+  it('内容が類似する別文書のコミットは履歴に混入しない(#66)', async () => {
+    await writeFile(join(lib, 'A.md'), '# テンプレの内容\n', 'utf8');
+    await svc.commit(['A.md'], 'add: A.md', AUTHOR);
+    await writeFile(join(lib, 'B.md'), '# テンプレの内容\n', 'utf8');
+    await svc.commit(['B.md'], 'add: B.md', AUTHOR);
+    await writeFile(join(lib, 'A.md'), '# テンプレの内容\nA固有\n', 'utf8');
+    await svc.commit(['A.md'], 'edit: A.md', AUTHOR);
+    await writeFile(join(lib, 'B.md'), '# テンプレの内容\nB固有\n', 'utf8');
+    await svc.commit(['B.md'], 'edit: B.md', AUTHOR);
+
+    const historyB = await svc.history('B.md');
+    expect(historyB).toHaveLength(2);
+    // B.md の履歴に A.md のコミット(「add: A.md」「edit: A.md」)が混入しないこと
+    expect(historyB.every((h) => !h.message.includes('A.md'))).toBe(true);
+    expect(historyB.map((h) => h.message).sort()).toEqual(['add: B.md', 'edit: B.md']);
   }, 20_000);
 
   it('過去版の内容と差分を取得できる', async () => {

@@ -171,7 +171,7 @@ describe('文書CRUD', () => {
     expect(raw).toContain('created');
   }, 20_000);
 
-  it('リネームで履歴が--follow追跡される', async () => {
+  it('リネーム後の新パス履歴は「リネーム以降」のみを返す(#66 --follow外し)', async () => {
     const created = await api('POST', '/api/docs', { folder: '', title: '旧タイトル' });
     const docPath = created.json().path;
 
@@ -183,8 +183,10 @@ describe('文書CRUD', () => {
     expect(moved.statusCode).toBe(200);
     expect(moved.json().path).toBe('新フォルダ/新タイトル.md');
 
+    // --follow を外したためリネーム前の add: は含まれず、move: のみ
     const history = await app.gitService.history('新フォルダ/新タイトル.md');
-    expect(history.length).toBe(2); // add: + move:
+    expect(history.length).toBe(1);
+    expect(history[0].message.startsWith('move:')).toBe(true);
   }, 20_000);
 
   it('タイトルの禁止文字は全角へ置換される', async () => {

@@ -197,6 +197,14 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
         </div>
       </div>
 
+      {/* スクロールコンテナの外に注記を置く: リストと視覚的に混同されず、
+          スクロールで消えない位置に安定表示する */}
+      {scope === 'file' && (
+        <p className="flex-shrink-0 border-b border-line px-4 py-1 text-[11px] text-ink-faint">
+          ※ リネームがあった場合、リネーム前の履歴は含まれません
+        </p>
+      )}
+
       <div className="max-h-[45%] flex-shrink-0 overflow-y-auto border-b border-line">
         {isLoading && <p className="p-3 text-sm text-ink-faint">読み込み中...</p>}
         {!isLoading && (history ?? []).length === 0 && (

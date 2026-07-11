@@ -62,7 +62,7 @@
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| GET | `/api/history?path=` | 履歴一覧 `[{rev, authorName, date, message}]`(`git log --follow`) |
+| GET | `/api/history?path=` | 履歴一覧 `[{rev, authorName, date, message}]`(`git log -- <path>`)。リネーム追跡は付けない(#66。`--follow` の誤検出回避) |
 | GET | `/api/history/all?limit=` | ライブラリ全体の履歴一覧(issue #66)。`[{rev, authorName, date, message, paths}]`(パス絞りなしの`git log`。`paths`は当該コミットで変更されたファイルパス。リネームはnew側のみ)。`limit`省略時100、1〜1000の範囲で指定可 |
 | GET | `/api/history/content?path=&rev=` | 指定版の内容 |
 | GET | `/api/history/diff?path=&rev=&against=` | 差分(unified形式。`against` 省略時は現行版と比較) |
