@@ -82,6 +82,71 @@ describe('EditorToolbar', () => {
     editor.destroy();
   });
 
+  it('インデント追加/戻しボタンで箇条書き項目のネストがトグルされる', () => {
+    const editor = createTestEditor('- 一つ目\n- 二つ目');
+    editor.commands.focus('end');
+
+    render(<EditorToolbar editor={editor} onOpenLinkDialog={vi.fn()} onPickImage={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'インデント追加(Tab)' }));
+    let markdown = editor.storage.markdown.getMarkdown() as string;
+    expect(markdown).toContain('  - 二つ目');
+
+    fireEvent.click(screen.getByRole('button', { name: 'インデント戻し(Shift+Tab)' }));
+    markdown = editor.storage.markdown.getMarkdown() as string;
+    expect(markdown).not.toContain('  - 二つ目');
+    // 行頭一致で確認(部分一致だとネストされた行でも通ってしまうため)
+    expect(markdown).toMatch(/^- 二つ目$/m);
+
+    editor.destroy();
+  });
+
+  it('インデント追加ボタンの結果はsinkListItemコマンド(Tabキー相当)と同一のMarkdownになる', () => {
+    const byButton = createTestEditor('- 一つ目\n- 二つ目');
+    byButton.commands.focus('end');
+    render(<EditorToolbar editor={byButton} onOpenLinkDialog={vi.fn()} onPickImage={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'インデント追加(Tab)' }));
+
+    // Tabキーマップ(StarterKitのlistItem)が呼ぶコマンドを直接実行した結果と比較する
+    const byCommand = createTestEditor('- 一つ目\n- 二つ目');
+    byCommand.commands.focus('end');
+    byCommand.commands.sinkListItem('listItem');
+
+    expect(byButton.storage.markdown.getMarkdown()).toBe(byCommand.storage.markdown.getMarkdown());
+
+    byButton.destroy();
+    byCommand.destroy();
+  });
+
+  it('インデント追加ボタンでチェックリスト項目もネストされる', () => {
+    const editor = createTestEditor('- [ ] A\n- [ ] B');
+    editor.commands.focus('end');
+
+    render(<EditorToolbar editor={editor} onOpenLinkDialog={vi.fn()} onPickImage={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'インデント追加(Tab)' }));
+
+    const markdown = editor.storage.markdown.getMarkdown() as string;
+    expect(markdown).toContain('  - [ ] B');
+
+    editor.destroy();
+  });
+
+  it('リスト外では インデント追加/戻しボタンがdisabledになる', () => {
+    const editor = createTestEditor('本文');
+    editor.commands.selectAll();
+
+    render(<EditorToolbar editor={editor} onOpenLinkDialog={vi.fn()} onPickImage={vi.fn()} />);
+
+    expect(
+      (screen.getByRole('button', { name: 'インデント追加(Tab)' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: 'インデント戻し(Shift+Tab)' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    editor.destroy();
+  });
+
   it('ツールバーコンテナは折返しせず横スクロールする', () => {
     const editor = createTestEditor('');
 

@@ -4,6 +4,8 @@ import {
   Code2,
   FileText,
   Image as ImageIcon,
+  IndentDecrease,
+  IndentIncrease,
   Link as LinkIcon,
   List,
   ListOrdered,
@@ -31,24 +33,34 @@ interface ToolbarButtonProps {
   label: string;
   title?: string;
   active?: boolean;
+  disabled?: boolean;
   onClick: () => void;
   icon?: ReactNode;
   // ラベル文字自体の装飾(B=太字・I=斜体・S=打消し線など、機能を見た目で示す用)
   labelClassName?: string;
 }
 
-function ToolbarButton({ label, title, active, onClick, icon, labelClassName }: ToolbarButtonProps) {
+function ToolbarButton({
+  label,
+  title,
+  active,
+  disabled,
+  onClick,
+  icon,
+  labelClassName,
+}: ToolbarButtonProps) {
   return (
     <button
       type="button"
       title={title ?? label}
       aria-label={title ?? label}
       aria-pressed={active}
+      disabled={disabled}
       // mousedownでpreventDefaultし、クリックしてもエディタの選択状態を失わないようにする
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      className={`flex h-7 min-w-7 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 text-sm ${
-        active ? 'bg-active text-accent' : 'text-ink-soft hover:bg-hoverbg'
+      className={`flex h-7 min-w-7 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 text-sm disabled:opacity-40 ${
+        active ? 'bg-active text-accent' : `text-ink-soft ${disabled ? '' : 'hover:bg-hoverbg'}`
       }`}
     >
       {icon}
@@ -66,6 +78,20 @@ function Separator() {
 }
 
 const ICON_SIZE = 14;
+
+// インデント操作の対象ノード型。taskItem内ではtaskItemを優先し、それ以外はlistItem。
+// disabled判定(useEditorState)とonClickで優先順位がズレないようここに集約する
+function sinkableListItem(e: Editor): 'taskItem' | 'listItem' | null {
+  if (e.can().sinkListItem('taskItem')) return 'taskItem';
+  if (e.can().sinkListItem('listItem')) return 'listItem';
+  return null;
+}
+
+function liftableListItem(e: Editor): 'taskItem' | 'listItem' | null {
+  if (e.can().liftListItem('taskItem')) return 'taskItem';
+  if (e.can().liftListItem('listItem')) return 'listItem';
+  return null;
+}
 
 export function EditorToolbar({
   editor,
@@ -91,6 +117,8 @@ export function EditorToolbar({
       codeBlock: e.isActive('codeBlock'),
       blockquote: e.isActive('blockquote'),
       link: e.isActive('link'),
+      canIndent: sinkableListItem(e) !== null,
+      canOutdent: liftableListItem(e) !== null,
     }),
   });
 
@@ -141,6 +169,27 @@ export function EditorToolbar({
         labelClassName="line-through"
         active={active.strike}
         onClick={() => editor.chain().focus().toggleStrike().run()}
+      />
+      <Separator />
+      <ToolbarButton
+        icon={<IndentIncrease size={ICON_SIZE} aria-hidden="true" />}
+        label="インデント"
+        title="インデント追加(Tab)"
+        disabled={!active.canIndent}
+        onClick={() => {
+          const type = sinkableListItem(editor);
+          if (type) editor.chain().focus().sinkListItem(type).run();
+        }}
+      />
+      <ToolbarButton
+        icon={<IndentDecrease size={ICON_SIZE} aria-hidden="true" />}
+        label="戻す"
+        title="インデント戻し(Shift+Tab)"
+        disabled={!active.canOutdent}
+        onClick={() => {
+          const type = liftableListItem(editor);
+          if (type) editor.chain().focus().liftListItem(type).run();
+        }}
       />
       <Separator />
       <ToolbarButton
