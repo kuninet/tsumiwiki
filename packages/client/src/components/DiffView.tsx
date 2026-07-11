@@ -67,9 +67,8 @@ interface DiffViewProps {
   lines: DiffLine[];
   // #96: 履歴パネル(HistoryPanel > DiffView)は DocView の onClick コンテナと
   // 兄弟のためクリックが伝播しない。差分内の wikilink をクリック可能にするため、
-  // ここで独自に navigate/toast する。docs は wikilink 解決に使う。
-  // 呼び出し側が渡していない(旧テスト等) 場合は wikilink クリックは no-op に落ちる
-  docs?: DocSummary[];
+  // ここで独自に navigate/toast する。docs は wikilink 解決に使う(必須。誤用防止)
+  docs: DocSummary[];
 }
 
 export function DiffView({ lines, docs }: DiffViewProps) {
@@ -77,10 +76,12 @@ export function DiffView({ lines, docs }: DiffViewProps) {
   const navigate = useNavigate();
   const showToast = useToastStore((s) => s.show);
 
-  // #96: 差分内 wikilink クリックの捕捉。編集モード等のゲートは掛けず、
-  // 履歴パネルを開いている状況では常に遷移可能とする(閲覧の一形態のため)
+  // #96: 差分内 wikilink クリックの捕捉。差分表示は表示専用領域(TipTap エディタが
+  // 挟まらない dangerouslySetInnerHTML の生 HTML)なので、click は caret 移動と
+  // 衝突せずこの onClick に素直に届く。編集モードのゲートも掛けず、履歴パネルを
+  // 開いている状況では常に遷移可能とする(閲覧の一形態のため)
   function handleClick(e: ReactMouseEvent<HTMLDivElement>) {
-    handleWikilinkClick(e.target, docs ?? [], navigate, showToast);
+    handleWikilinkClick(e.target, docs, navigate, showToast);
   }
 
   if (groups.length === 0) {
