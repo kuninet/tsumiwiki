@@ -33,9 +33,11 @@ interface ToolbarButtonProps {
   active?: boolean;
   onClick: () => void;
   icon?: ReactNode;
+  // ラベル文字自体の装飾(B=太字・I=斜体・S=打消し線など、機能を見た目で示す用)
+  labelClassName?: string;
 }
 
-function ToolbarButton({ label, title, active, onClick, icon }: ToolbarButtonProps) {
+function ToolbarButton({ label, title, active, onClick, icon, labelClassName }: ToolbarButtonProps) {
   return (
     <button
       type="button"
@@ -50,7 +52,11 @@ function ToolbarButton({ label, title, active, onClick, icon }: ToolbarButtonPro
       }`}
     >
       {icon}
-      {icon ? <span className="hidden sm:inline">{label}</span> : <span>{label}</span>}
+      {icon ? (
+        <span className={['hidden sm:inline', labelClassName].filter(Boolean).join(' ')}>{label}</span>
+      ) : (
+        <span className={labelClassName}>{label}</span>
+      )}
     </button>
   );
 }
@@ -118,18 +124,21 @@ export function EditorToolbar({
       <ToolbarButton
         label="B"
         title="太字"
+        labelClassName="font-bold"
         active={active.bold}
         onClick={() => editor.chain().focus().toggleBold().run()}
       />
       <ToolbarButton
         label="I"
         title="斜体"
+        labelClassName="italic"
         active={active.italic}
         onClick={() => editor.chain().focus().toggleItalic().run()}
       />
       <ToolbarButton
         label="S"
         title="打消し"
+        labelClassName="line-through"
         active={active.strike}
         onClick={() => editor.chain().focus().toggleStrike().run()}
       />
