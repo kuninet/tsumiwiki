@@ -451,7 +451,8 @@ export function FolderTree() {
         if (err instanceof ApiRequestError) lastError = err.message;
       }
     }
-    // 単発の rename/move (#78/#91) 同様、全件処理後に ref から最新の表示中パスを取り直して追従する
+    // 単発の rename/move (#78/#91) 同様、全件処理後に ref から最新の表示中パスを取り直して追従する。
+    // filterMovable の子孫除外により、単一 nowPath に対して doc/folder の両方が multi-match することは無い(排他)
     const nowPath = currentPathRef.current;
     const hit = nowPath
       ? moved.find(
