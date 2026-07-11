@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
+import { useTags } from '../api/tags';
 
 // 文書ヘッダのタグチップ列。閲覧モードでは #77 Phase A と同じく TagPane フィルタ連動、
 // 編集モードでは各チップから直接改名/削除できるインラインUIを提供する
@@ -14,6 +15,10 @@ interface TagChipEditorProps {
 
 // タグ名として使える文字集合。サーバ側 INLINE_TAG_RE と同じ /\p{L}\p{N}_/-/
 const TAG_NAME_RE = /^[\p{L}\p{N}_/-]+$/u;
+
+// サジェスト候補の上限。選択目的のUIなのでSearchBoxの8件より多めに取り、
+// スクロールで探せる範囲に留める(タグが数百件あっても全件はDOM生成しない)
+const MAX_TAG_SUGGESTIONS = 20;
 
 // 入力を正規化: 先頭の # を落とし、trim、末尾のスラッシュ・ハイフンを除去、NFC 正規化
 function normalizeTagName(input: string): string {
@@ -34,8 +39,20 @@ export function TagChipEditor({
   const [renameDraft, setRenameDraft] = useState('');
   const [adding, setAdding] = useState(false);
   const [addDraft, setAddDraft] = useState('');
+  const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const addInputRef = useRef<HTMLInputElement | null>(null);
+
+  // #118: 「+ タグを追加」の入力欄直下に出す既存タグサジェスト。TagPane/SearchBox と同じ useTags() を使う
+  const { data: allTags } = useTags();
+  const suggestionQuery = addDraft.toLowerCase();
+  const suggestions = adding
+    ? (allTags ?? [])
+        .filter((t) => !tags.includes(t.tag))
+        .filter((t) => suggestionQuery === '' || t.tag.toLowerCase().includes(suggestionQuery))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, MAX_TAG_SUGGESTIONS)
+    : [];
 
   useEffect(() => {
     if (renamingTag !== null) renameInputRef.current?.focus();
@@ -45,6 +62,11 @@ export function TagChipEditor({
     if (adding) addInputRef.current?.focus();
   }, [adding]);
 
+  // 入力値が変わったらサジェストのハイライト位置をリセット
+  useEffect(() => {
+    setActiveSuggestion(-1);
+  }, [addDraft]);
+
   // モード離脱でインラインUIをリセット(編集中のドラフトも捨てる)
   useEffect(() => {
     if (!editable) {
@@ -52,6 +74,7 @@ export function TagChipEditor({
       setRenameDraft('');
       setAdding(false);
       setAddDraft('');
+      setActiveSuggestion(-1);
     }
   }, [editable]);
 
@@ -99,15 +122,36 @@ export function TagChipEditor({
     setAddDraft('');
   }
 
+  // サジェスト候補をクリック/Enterで選択したときの確定(正規化済みの既存タグ名なのでバリデーション不要)
+  function selectSuggestion(name: string) {
+    onAdd(name);
+    setAdding(false);
+    setAddDraft('');
+  }
+
   function cancelAdd() {
     setAdding(false);
     setAddDraft('');
   }
 
   function handleAddKey(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') {
+    // IME変換中のEnter/矢印は候補操作に使わない(FR-EDIT-05。変換確定の誤操作防止。SearchBox と同じ作法)
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === 'ArrowDown') {
+      if (suggestions.length === 0) return;
       e.preventDefault();
-      commitAdd(e.currentTarget.value);
+      setActiveSuggestion((i) => (i + 1) % suggestions.length);
+    } else if (e.key === 'ArrowUp') {
+      if (suggestions.length === 0) return;
+      e.preventDefault();
+      setActiveSuggestion((i) => (i - 1 + suggestions.length) % suggestions.length);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeSuggestion >= 0 && activeSuggestion < suggestions.length) {
+        selectSuggestion(suggestions[activeSuggestion].tag);
+      } else {
+        commitAdd(e.currentTarget.value);
+      }
     } else if (e.key === 'Escape') {
       e.preventDefault();
       cancelAdd();
@@ -177,7 +221,7 @@ export function TagChipEditor({
       )}
       {editable && (
         adding ? (
-          <span className="inline-flex items-center rounded-full border border-accent-border bg-panel-2 pl-1">
+          <span className="relative inline-flex items-center rounded-full border border-accent-border bg-panel-2 pl-1">
             <span className="text-xs text-accent">#</span>
             <input
               ref={addInputRef}
@@ -191,6 +235,27 @@ export function TagChipEditor({
               className="w-[10ch] min-w-[8ch] border-0 bg-transparent px-1 py-0.5 text-xs text-ink outline-none focus:ring-0"
               aria-label="タグを追加"
             />
+            {suggestions.length > 0 && (
+              <div className="absolute left-0 top-full z-[40] mt-1 max-h-48 w-40 overflow-y-auto rounded-lg border border-line bg-panel shadow-lg">
+                <ul>
+                  {suggestions.map((t, i) => (
+                    <li key={t.tag}>
+                      <button
+                        type="button"
+                        // blur より先に発火させて cancelAdd による入力クローズを防ぐ(EditorToolbar と同じ手法)
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => selectSuggestion(t.tag)}
+                        className={`block w-full truncate px-3 py-1.5 text-left text-xs ${
+                          i === activeSuggestion ? 'bg-active text-accent' : 'text-ink-soft hover:bg-hoverbg'
+                        }`}
+                      >
+                        #{t.tag}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </span>
         ) : (
           <button
