@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { docUrl } from '../lib/doc-path';
 import { useEditStore } from '../stores/edit';
 import { useUIStore } from '../stores/ui';
 import { FolderTree } from './FolderTree';
@@ -155,6 +156,16 @@ describe('FolderTree', () => {
           // GET /api/docs (ツリー)は TREE を返す。他は成功
           if (method === 'GET') {
             return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(TREE) });
+          }
+          // #97: move系はサーバー正規化パスを返す実挙動に合わせ、リクエストから新パスを組み立てて返す
+          if (method === 'POST' && reqPath === '/api/docs/move') {
+            const b = body as { newFolder: string; newTitle: string };
+            const newPath = b.newFolder ? `${b.newFolder}/${b.newTitle}.md` : `${b.newTitle}.md`;
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ path: newPath }) });
+          }
+          if (method === 'POST' && reqPath === '/api/folders/move') {
+            const b = body as { newPath: string };
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ path: b.newPath }) });
           }
           return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
         }),
@@ -329,6 +340,190 @@ describe('FolderTree', () => {
       const movedPaths = new Set(moves.map((m) => (m.body as { path: string }).path));
       expect(movedPaths.has('ルート文書.md')).toBe(true);
       expect(movedPaths.has('見出し#1.md')).toBe(true);
+    });
+
+    // #97 URL追従テスト群: 表示中文書のURLがバッチ移動でどう変わる/変わらないか
+    function LocationProbe() {
+      const location = useLocation();
+      return <div data-testid="location-probe">{location.pathname}</div>;
+    }
+
+    function renderWithProbeAt(initialPath: string) {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      return render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={[initialPath]}>
+            <Routes>
+              <Route
+                path="/doc/*"
+                element={
+                  <>
+                    <FolderTree />
+                    <LocationProbe />
+                  </>
+                }
+              />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    }
+
+    // 任意ツリー・任意の失敗パス指定に対応した fetch スタブ(URL追従テスト群用)
+    function stubFetchWithTree(customTree: unknown, opts?: { failMoveDocPath?: string }): Call[] {
+      const calls: Call[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init?: RequestInit) => {
+          const method = (init?.method ?? 'GET').toUpperCase();
+          const [reqPath] = url.split('?');
+          const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+          calls.push({ method, path: reqPath, body });
+          if (method === 'GET') {
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(customTree) });
+          }
+          if (method === 'POST' && reqPath === '/api/docs/move') {
+            const b = body as { path: string; newFolder: string; newTitle: string };
+            if (opts?.failMoveDocPath && b.path === opts.failMoveDocPath) {
+              return Promise.resolve({
+                ok: false,
+                status: 500,
+                json: () =>
+                  Promise.resolve({ error: { code: 'INTERNAL_ERROR', message: 'server error' } }),
+              });
+            }
+            const newPath = b.newFolder ? `${b.newFolder}/${b.newTitle}.md` : `${b.newTitle}.md`;
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ path: newPath }) });
+          }
+          if (method === 'POST' && reqPath === '/api/folders/move') {
+            const b = body as { newPath: string };
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ path: b.newPath }) });
+          }
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+        }),
+      );
+      return calls;
+    }
+
+    it('表示中文書を含む複数選択をバッチ移動すると、URLが移動後のパスへ追従する(#97)', async () => {
+      stubFetchRecording();
+      renderWithProbeAt('/doc/ルート文書.md');
+
+      const doc1 = (await screen.findByText('ルート文書')).closest('button')!;
+      const doc2 = (await screen.findByText('見出し#1')).closest('button')!;
+      const folder = (await screen.findByText('フォルダA')).closest('button')!;
+
+      // 表示中の「ルート文書」を含む2件を選択し、フォルダAへドラッグ&ドロップで一括移動
+      fireEvent.click(doc1, { ctrlKey: true });
+      fireEvent.click(doc2, { ctrlKey: true });
+      fireEvent.dragStart(doc1);
+      fireEvent.dragEnter(folder);
+      fireEvent.dragOver(folder);
+      fireEvent.drop(folder);
+      fireEvent.dragEnd(doc1);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('location-probe').textContent).toBe(
+          docUrl('フォルダA/ルート文書.md'),
+        );
+      });
+    });
+
+    it('フォルダごとバッチ移動して、配下に表示中docがあると URL が「移動先/oldFolder/子doc」に追従する(#97)', async () => {
+      // フォルダA を フォルダB 配下へ丸ごと移動。表示中の「フォルダA/子文書.md」が
+      // 追従して「フォルダB/フォルダA/子文書.md」になることを検証(folder 分岐の rewritten)
+      const TREE_WITH_B = {
+        folders: ['フォルダA', 'フォルダB'],
+        docs: [
+          { path: 'フォルダA/子文書.md', title: '子文書', folder: 'フォルダA', updatedAt: '2026-07-01T00:00:00+09:00' },
+          { path: 'ルート文書.md', title: 'ルート文書', folder: '', updatedAt: '2026-07-01T00:00:00+09:00' },
+        ],
+      };
+      const calls = stubFetchWithTree(TREE_WITH_B);
+      renderWithProbeAt('/doc/フォルダA/子文書.md');
+
+      const folderA = (await screen.findByText('フォルダA')).closest('button')!;
+      const rootDoc = (await screen.findByText('ルート文書')).closest('button')!;
+      const folderB = (await screen.findByText('フォルダB')).closest('button')!;
+
+      // Ctrl+選択で「フォルダA」+「ルート文書」を選択(サイズ2でバッチ判定を満たす)
+      fireEvent.click(folderA, { ctrlKey: true });
+      fireEvent.click(rootDoc, { ctrlKey: true });
+
+      // 選択中の folderA を掴んで folderB にドロップ = 一括移動発火
+      fireEvent.dragStart(folderA);
+      fireEvent.dragEnter(folderB);
+      fireEvent.dragOver(folderB);
+      fireEvent.drop(folderB);
+      fireEvent.dragEnd(folderA);
+
+      // 移動APIが叩かれた(folder + doc の2件)ことを待ってから URL 追従を確認
+      await waitFor(() => {
+        const folderMoves = calls.filter((c) => c.method === 'POST' && c.path === '/api/folders/move');
+        const docMoves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+        expect(folderMoves.length).toBe(1);
+        expect(docMoves.length).toBe(1);
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId('location-probe').textContent).toBe(
+          docUrl('フォルダB/フォルダA/子文書.md'),
+        );
+      });
+    });
+
+    it('表示中docが選択に含まれないバッチ移動では URL は変わらない(#97)', async () => {
+      const calls = stubFetchRecording();
+      const initial = '/doc/フォルダA/子文書.md';
+      renderWithProbeAt(initial);
+
+      const rootDoc = (await screen.findByText('ルート文書')).closest('button')!;
+      const otherDoc = (await screen.findByText('見出し#1')).closest('button')!;
+      const folder = (await screen.findByText('フォルダA')).closest('button')!;
+
+      // 表示中 (フォルダA/子文書.md) は選ばず、他の2件を選択して フォルダA にドロップ
+      fireEvent.click(rootDoc, { ctrlKey: true });
+      fireEvent.click(otherDoc, { ctrlKey: true });
+      fireEvent.dragStart(rootDoc);
+      fireEvent.dragEnter(folder);
+      fireEvent.dragOver(folder);
+      fireEvent.drop(folder);
+      fireEvent.dragEnd(rootDoc);
+
+      // 移動APIが叩き終わったことを待つ(バッチ完了の目印)
+      await waitFor(() => {
+        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+        expect(moves.length).toBe(2);
+      });
+      // 表示中文書は選択に含まれていないので URL は初期値のまま
+      expect(screen.getByTestId('location-probe').textContent).toBe(initial);
+    });
+
+    it('表示中docの移動が失敗したときは URL が変わらない(#97)', async () => {
+      // 単発 move と同じく、失敗した対象については URL 追従しない(古い URL のまま = 安全側)
+      const initial = '/doc/ルート文書.md';
+      const calls = stubFetchWithTree(TREE, { failMoveDocPath: 'ルート文書.md' });
+      renderWithProbeAt(initial);
+
+      const rootDoc = (await screen.findByText('ルート文書')).closest('button')!;
+      const otherDoc = (await screen.findByText('見出し#1')).closest('button')!;
+      const folder = (await screen.findByText('フォルダA')).closest('button')!;
+
+      // 表示中「ルート文書」+ 見出し#1 を選択して フォルダA にドロップ
+      fireEvent.click(rootDoc, { ctrlKey: true });
+      fireEvent.click(otherDoc, { ctrlKey: true });
+      fireEvent.dragStart(rootDoc);
+      fireEvent.dragEnter(folder);
+      fireEvent.dragOver(folder);
+      fireEvent.drop(folder);
+      fireEvent.dragEnd(rootDoc);
+
+      // 移動APIが2件叩き終わったことを待つ(1件は500, 1件は成功)
+      await waitFor(() => {
+        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+        expect(moves.length).toBe(2);
+      });
+      // 表示中 doc の移動は失敗したので URL は初期値のまま
+      expect(screen.getByTestId('location-probe').textContent).toBe(initial);
     });
   });
 });
