@@ -126,11 +126,14 @@ export class GitService {
     });
   }
 
-  // 文書の履歴一覧(リネーム追跡込み。FR-HIST-02)。読み取り系はキューを通さない。
+  // 文書の履歴一覧(FR-HIST-02)。読み取り系はキューを通さない。
+  // `--follow` はテンプレ由来など初期内容が類似した別文書をリネームと誤検出し
+  // (git の --follow は独自の類似度パスを使い -M 閾値も効かない)、他文書のコミットが
+  // 履歴に混入する既知の症状があるため付けない。代償としてリネーム後の文書は
+  // リネーム前の履歴が途切れる(現状のリネーム機能自体があまり使われない前提での判断。#66)
   async history(relPath: string): Promise<HistoryEntry[]> {
     const out = await this.git.raw([
       'log',
-      '--follow',
       '--pretty=format:%H%x09%an%x09%aI%x09%s',
       '--',
       relPath,
