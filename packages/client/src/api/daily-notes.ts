@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { TREE_QUERY_KEY } from './docs';
+import { ALL_HISTORY_QUERY_KEY } from './history';
 import { ApiRequestError, api } from './client';
 import { useToastStore } from '../stores/toast';
 
@@ -15,6 +16,7 @@ export function useCreateOrOpenTodayNote() {
     onSuccess: (res) => {
       if (res.created) {
         queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
+        queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
         showToast('success', '今日の日誌を作成しました');
       } else {
         // 既存の場合も無反応にならないよう軽く通知(既に該当ページに居るとき用)

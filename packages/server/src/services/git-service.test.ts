@@ -94,6 +94,59 @@ describe('GitService', () => {
     expect(await svc.hasExternalChanges()).toBe(false);
   }, 20_000);
 
+  it('複数ファイルが変わったコミットを1エントリとして扱う(historyAll)', async () => {
+    await writeFile(join(lib, 'A.md'), 'A\n', 'utf8');
+    await writeFile(join(lib, 'B.md'), 'B\n', 'utf8');
+    await svc.commit(['A.md', 'B.md'], 'add: A.md, B.md', AUTHOR);
+
+    const all = await svc.historyAll();
+    const entry = all.find((e) => e.message === 'add: A.md, B.md');
+    expect(entry).toBeDefined();
+    expect(entry?.paths.sort()).toEqual(['A.md', 'B.md']);
+  }, 20_000);
+
+  it('リネームはnew側パスのみ返す(historyAll)', async () => {
+    await writeFile(join(lib, '旧.md'), '内容\n', 'utf8');
+    await svc.commit(['旧.md'], 'add: 旧.md', AUTHOR);
+    await rename(join(lib, '旧.md'), join(lib, '新.md'));
+    await svc.commitAll('move: 旧.md -> 新.md', AUTHOR);
+
+    const all = await svc.historyAll();
+    const entry = all.find((e) => e.message === 'move: 旧.md -> 新.md');
+    expect(entry).toBeDefined();
+    expect(entry?.paths).toEqual(['新.md']);
+  }, 20_000);
+
+  it('limitで件数を制限できる(historyAll)', async () => {
+    for (let i = 0; i < 5; i++) {
+      const name = `件数${i}.md`;
+      await writeFile(join(lib, name), `内容${i}\n`, 'utf8');
+      await svc.commit([name], `add: ${name}`, AUTHOR);
+    }
+
+    const all = await svc.historyAll(3);
+    expect(all).toHaveLength(3);
+  }, 20_000);
+
+  // #66 レビュー指摘の回帰テスト: マーカー文字列と衝突する件名・パスがあっても
+  // コミットが誤分割されないこと。当実装ではマーカーをNULで挟んで衝突不能にしている
+  it('件名やパスに「__C__」を含んでもコミットが誤分割されない(historyAll)', async () => {
+    await writeFile(join(lib, '通常.md'), '内容\n', 'utf8');
+    await svc.commit(['通常.md'], '__C__を含む件名のコミット', AUTHOR);
+
+    await writeFile(join(lib, 'path__C__inside.md'), '内容\n', 'utf8');
+    await svc.commit(['path__C__inside.md'], 'add: path__C__inside.md', AUTHOR);
+
+    const all = await svc.historyAll();
+    const withMarkerMessage = all.find((e) => e.message === '__C__を含む件名のコミット');
+    expect(withMarkerMessage).toBeDefined();
+    expect(withMarkerMessage?.paths).toEqual(['通常.md']);
+
+    const withMarkerPath = all.find((e) => e.message === 'add: path__C__inside.md');
+    expect(withMarkerPath).toBeDefined();
+    expect(withMarkerPath?.paths).toEqual(['path__C__inside.md']);
+  }, 20_000);
+
   it('bareリポジトリへバックアップpushできる', async () => {
     const bare = await mkdtemp(join(tmpdir(), 'tsumiwiki-bare-'));
     cleanupDirs.push(bare);

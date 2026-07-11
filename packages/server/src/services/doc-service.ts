@@ -658,6 +658,11 @@ export class DocService {
     return this.git.history(normalized);
   }
 
+  // ライブラリ全体の履歴(issue #66)。パス指定がないためvalidateDocPathは不要
+  async historyAll(limit?: number) {
+    return this.git.historyAll(limit);
+  }
+
   // rev形式の防御的検証(呼び出し元のスキーマ検証に依存しない)
   private assertRev(rev: string): void {
     if (!REV_PATTERN.test(rev)) {
@@ -684,6 +689,24 @@ export class DocService {
         throw new DocNotFoundError(`${normalized} @${rev.slice(0, 7)}`);
       }
       this.logger?.error({ err: e, rev, path: normalized }, '過去版の取得に失敗しました');
+      throw e;
+    }
+  }
+
+  // 全体履歴用: そのコミット単体で加わった差分(rev^..rev)を任意パスに対して返す。
+  // 全体履歴は .gitignore・.trash 配下・添付ファイル等の非文書パスも含みうるため、
+  // validateDocPath の拡張子・保護パス制約を掛けず、パス正規化のみで扱う(issue #66)
+  async diffCommitForAnyPath(relPath: string, rev: string): Promise<string> {
+    const normalized = normalizeRelPath(relPath);
+    if (!normalized) throw new InvalidPathError(relPath);
+    this.assertRev(rev);
+    try {
+      return await this.git.diff(`${rev}^`, rev, normalized);
+    } catch (e) {
+      if (this.isRevNotFound(e)) {
+        throw new DocNotFoundError(`${normalized} @${rev.slice(0, 7)}`);
+      }
+      this.logger?.error({ err: e, rev, path: normalized }, 'コミット差分の取得に失敗しました');
       throw e;
     }
   }

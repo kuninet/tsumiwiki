@@ -16,6 +16,27 @@ export function registerHistoryRoutes(app: FastifyInstance): void {
     });
   });
 
+  app.get('/api/history/all', async (req, reply) => {
+    const { limit } = req.query as { limit?: string };
+    const parsed = limit ? Number.parseInt(limit, 10) : undefined;
+    if (limit !== undefined && (Number.isNaN(parsed) || parsed! < 1 || parsed! > 1000)) {
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'limitは1〜1000の整数で指定してください');
+    }
+    return handling(reply, async () => ({ history: await app.docService.historyAll(parsed) }));
+  });
+
+  // 全体履歴用: 指定コミット単体で加わった差分(rev^..rev)。全体履歴は非文書パス
+  // (.gitignore・.trash 配下・添付ファイル等)も含みうるためこちらのルートを使う
+  app.get('/api/history/all/diff', async (req, reply) => {
+    const { path: filePath, rev } = req.query as { path?: string; rev?: string };
+    if (!filePath || !rev || !REV_PATTERN.test(rev)) {
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'pathとrevを指定してください');
+    }
+    return handling(reply, async () => ({
+      diff: await app.docService.diffCommitForAnyPath(filePath, rev),
+    }));
+  });
+
   app.get('/api/history/content', async (req, reply) => {
     const { path: docPath, rev } = req.query as { path?: string; rev?: string };
     if (!docPath || !rev || !REV_PATTERN.test(rev)) {

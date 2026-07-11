@@ -63,8 +63,10 @@
 | メソッド | パス | 内容 |
 |---|---|---|
 | GET | `/api/history?path=` | 履歴一覧 `[{rev, authorName, date, message}]`(`git log --follow`) |
+| GET | `/api/history/all?limit=` | ライブラリ全体の履歴一覧(issue #66)。`[{rev, authorName, date, message, paths}]`(パス絞りなしの`git log`。`paths`は当該コミットで変更されたファイルパス。リネームはnew側のみ)。`limit`省略時100、1〜1000の範囲で指定可 |
 | GET | `/api/history/content?path=&rev=` | 指定版の内容 |
 | GET | `/api/history/diff?path=&rev=&against=` | 差分(unified形式。`against` 省略時は現行版と比較) |
+| GET | `/api/history/all/diff?path=&rev=` | 全体履歴用の差分(`rev^..rev` = そのコミット単体で加わった差分)。issue #66。非文書パス(`.gitignore`・`.trash` 配下・添付ファイル等)も扱える |
 | POST | `/api/history/restore` | `{path, rev}` 指定版の内容で上書き保存+コミット(履歴は改変しない。FR-HIST-04)。ロック取得が前提 |
 
 ### 編集ロック(FR-LOCK)

@@ -4,6 +4,7 @@ import type { DocResponse } from '@tsumiwiki/shared';
 import { docQueryKey, fetchDoc, saveDoc, TAGS_QUERY_KEY, TREE_QUERY_KEY } from '../api/docs';
 import { ApiRequestError } from '../api/client';
 import { deleteDraft, getDraft, saveDraft } from '../api/drafts';
+import { ALL_HISTORY_QUERY_KEY } from '../api/history';
 import { acquireLock, refreshLock, releaseLock } from '../api/locks';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
@@ -212,6 +213,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
       // tree/tags はタグ変化に追随させる
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
       showToast('success', '保存しました');
       optionsRef.current.onSaved?.(updatedAt);
     } catch (err) {
@@ -261,6 +263,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
       setConflict(false);
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
       showToast('success', '保存しました');
       optionsRef.current.onSaved?.(updatedAt);
     } catch (err) {

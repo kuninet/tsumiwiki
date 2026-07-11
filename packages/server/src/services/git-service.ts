@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { simpleGit, type SimpleGit } from 'simple-git';
+import type { AllHistoryEntry } from '@tsumiwiki/shared';
 import { SerialQueue } from './serial-queue';
 
 // ライブラリのGit連携(設計06章)。
@@ -141,6 +142,73 @@ export class GitService {
         const [rev, authorName, date, message] = line.split('\t');
         return { rev, authorName, date, message };
       });
+  }
+
+  // ライブラリ全体の履歴(パス絞りなし。issue #66)。1コミットで複数ファイルが
+  // 変わりうるのでpathsを配列で持つ。読み取り系はキューを通さない
+  async historyAll(limit = 100): Promise<AllHistoryEntry[]> {
+    const clamped = Math.min(1000, Math.max(1, Math.trunc(limit)));
+    // まず hash 一覧だけを取り、コミットごとに git show でメタ+name-status を取得する。
+    // 1コミット単位で境界が明確なので、-z 出力にマーカー文字列を仕込んで境界を作る
+    // 方式(件名やパスに衝突しうる)を避けられる
+    const hashesOut = await this.git.raw([
+      'log',
+      '--pretty=format:%H',
+      '-n',
+      String(clamped),
+    ]);
+    const hashes = hashesOut.split('\n').filter(Boolean);
+    const entries = await Promise.all(hashes.map((h) => this.historyEntryForRev(h)));
+    return entries.filter((e): e is AllHistoryEntry => e !== null);
+  }
+
+  private async historyEntryForRev(rev: string): Promise<AllHistoryEntry | null> {
+    // 1コミット分を name-status -z で取る。--no-patch は --name-status と併用不可の
+    // ため付けられず、末尾に diff 本体が付いてくるが、パーサー側で name-status 部
+    // (status + path のペア列)だけを抽出して打ち切る
+    const out = await this.git.raw([
+      'show',
+      '--name-status',
+      '-z',
+      '--format=%H%x09%an%x09%aI%x09%s',
+      rev,
+    ]);
+    return this.parseSingleCommit(out);
+  }
+
+  // git show --name-status -z の1コミット分の出力をパースする。
+  // -z 指定時のフォーマット部は「%H\t%an\t%aI\t%s\0\n」で終端し、その後 name-status の
+  // 各エントリが NUL 区切りで並ぶ。リネーム/コピーは status\0旧\0新 の3トークン、
+  // それ以外は status\0path の2トークン。末尾には diff 本文が続くが、status パターン
+  // (A/M/D/R\d+/C\d+等)に一致しなくなった時点で打ち切る
+  private parseSingleCommit(raw: string): AllHistoryEntry | null {
+    if (!raw) return null;
+    // フォーマット部の終端は NUL。NULまでを header とし、残りから先頭の改行を落とす
+    const nulIdx = raw.indexOf('\0');
+    const header = nulIdx === -1 ? raw : raw.slice(0, nulIdx);
+    const rest = nulIdx === -1 ? '' : raw.slice(nulIdx + 1).replace(/^\n/, '');
+    const [rev, authorName, date, message] = header.split('\t');
+    if (!rev) return null;
+
+    const tokens = rest.split('\0');
+    const paths: string[] = [];
+    // git の name-status で出る status コード(通常種のみ)
+    const STATUS_RE = /^([AMDTUXB]|[RC]\d+)$/;
+    for (let i = 0; i < tokens.length; ) {
+      const status = tokens[i];
+      if (!STATUS_RE.test(status)) break; // diff 本文に到達したら打ち切り
+      if (status.startsWith('R') || status.startsWith('C')) {
+        // リネーム/コピーは status\0旧パス\0新パス。new側パスのみ収録する
+        const newPath = tokens[i + 2];
+        if (newPath) paths.push(newPath);
+        i += 3;
+      } else {
+        const p = tokens[i + 1];
+        if (p) paths.push(p);
+        i += 2;
+      }
+    }
+    return { rev, authorName, date, message, paths };
   }
 
   // 指定パスに触れた直近のコミット(--followしない。ごみ箱の由来特定用)

@@ -10,6 +10,7 @@ import type {
 } from '@tsumiwiki/shared';
 import { useToastStore } from '../stores/toast';
 import { ApiRequestError, api } from './client';
+import { ALL_HISTORY_QUERY_KEY } from './history';
 
 export const TREE_QUERY_KEY = ['tree'] as const;
 export const TAGS_QUERY_KEY = ['tags'] as const;
@@ -62,6 +63,7 @@ function useLibraryMutation<TVariables, TData = unknown>(
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
       showToast('success', successMessage);
     },
     onError: (err) => {
