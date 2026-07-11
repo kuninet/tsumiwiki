@@ -428,24 +428,48 @@ export function FolderTree() {
     let succeeded = 0;
     let failed = 0;
     let lastError: string | null = null;
+    // #97: 表示中文書の URL 追従判定用に、成功した移動の新旧パスを保持しておく
+    const moved: { oldPath: string; newPath: string; type: 'doc' | 'folder' }[] = [];
     for (const node of nodes) {
       try {
         if (node.type === 'doc') {
-          await moveDocApi({
+          const data = await moveDocApi({
             path: node.path,
             newFolder: targetFolderPath,
             newTitle: node.title,
           });
+          moved.push({ oldPath: node.path, newPath: data.path, type: 'doc' });
         } else {
           const folderName = node.path.split('/').pop()!;
           const newPath = targetFolderPath ? `${targetFolderPath}/${folderName}` : folderName;
-          await moveFolderApi({ path: node.path, newPath });
+          const data = await moveFolderApi({ path: node.path, newPath });
+          moved.push({ oldPath: node.path, newPath: data.path, type: 'folder' });
         }
         succeeded++;
       } catch (err) {
         failed++;
         if (err instanceof ApiRequestError) lastError = err.message;
       }
+    }
+    // 単発の rename/move (#78/#91) 同様、全件処理後に ref から最新の表示中パスを取り直して追従する
+    const nowPath = currentPathRef.current;
+    const hit = nowPath
+      ? moved.find(
+          (m) =>
+            nowPath === m.oldPath || (m.type === 'folder' && nowPath.startsWith(`${m.oldPath}/`)),
+        )
+      : undefined;
+    if (nowPath && hit) {
+      const rewritten = hit.newPath + nowPath.slice(hit.oldPath.length);
+      queryClient.removeQueries({
+        predicate: (q) => {
+          const key = q.queryKey;
+          if (!Array.isArray(key) || key[0] !== 'doc') return false;
+          const p = key[1];
+          return typeof p === 'string' && (p === hit.oldPath || p.startsWith(`${hit.oldPath}/`));
+        },
+      });
+      navigate(docUrl(rewritten), { replace: true });
     }
     queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
     queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });

@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { docUrl } from '../lib/doc-path';
 import { useEditStore } from '../stores/edit';
 import { useUIStore } from '../stores/ui';
 import { FolderTree } from './FolderTree';
@@ -155,6 +156,16 @@ describe('FolderTree', () => {
           // GET /api/docs (ツリー)は TREE を返す。他は成功
           if (method === 'GET') {
             return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(TREE) });
+          }
+          // #97: move系はサーバー正規化パスを返す実挙動に合わせ、リクエストから新パスを組み立てて返す
+          if (method === 'POST' && reqPath === '/api/docs/move') {
+            const b = body as { newFolder: string; newTitle: string };
+            const newPath = b.newFolder ? `${b.newFolder}/${b.newTitle}.md` : `${b.newTitle}.md`;
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ path: newPath }) });
+          }
+          if (method === 'POST' && reqPath === '/api/folders/move') {
+            const b = body as { newPath: string };
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ path: b.newPath }) });
           }
           return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
         }),
@@ -329,6 +340,53 @@ describe('FolderTree', () => {
       const movedPaths = new Set(moves.map((m) => (m.body as { path: string }).path));
       expect(movedPaths.has('ルート文書.md')).toBe(true);
       expect(movedPaths.has('見出し#1.md')).toBe(true);
+    });
+
+    it('表示中文書を含む複数選択をバッチ移動すると、URLが移動後のパスへ追従する(#97)', async () => {
+      stubFetchRecording();
+
+      function LocationProbe() {
+        const location = useLocation();
+        return <div data-testid="location-probe">{location.pathname}</div>;
+      }
+
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/doc/ルート文書.md']}>
+            <Routes>
+              <Route
+                path="/doc/*"
+                element={
+                  <>
+                    <FolderTree />
+                    <LocationProbe />
+                  </>
+                }
+              />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      const doc1 = (await screen.findByText('ルート文書')).closest('button')!;
+      const doc2 = (await screen.findByText('見出し#1')).closest('button')!;
+      const folder = (await screen.findByText('フォルダA')).closest('button')!;
+
+      // 表示中の「ルート文書」を含む2件を選択し、フォルダAへドラッグ&ドロップで一括移動
+      fireEvent.click(doc1, { ctrlKey: true });
+      fireEvent.click(doc2, { ctrlKey: true });
+      fireEvent.dragStart(doc1);
+      fireEvent.dragEnter(folder);
+      fireEvent.dragOver(folder);
+      fireEvent.drop(folder);
+      fireEvent.dragEnd(doc1);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('location-probe').textContent).toBe(
+          docUrl('フォルダA/ルート文書.md'),
+        );
+      });
     });
   });
 });
