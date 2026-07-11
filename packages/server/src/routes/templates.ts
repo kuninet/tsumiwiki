@@ -199,7 +199,7 @@ async function readTemplate(
 export const templatesRoutes: FastifyPluginCallback = (app, _opts, done) => {
   app.get('/api/templates', async (req, reply) => {
     if (!req.user) return sendError(reply, 401, 'UNAUTHORIZED', '認証が必要です');
-    const settings = await app.librarySettingsService.get();
+    const { settings } = await app.librarySettingsService.get();
     const templates = await listTemplatesUnder(app.config.libraryPath, settings.templates.folder);
     return { templates };
   });
@@ -224,7 +224,7 @@ export const templatesRoutes: FastifyPluginCallback = (app, _opts, done) => {
           ? parsed.data.targetFolder
           : undefined;
 
-      const settings = await app.librarySettingsService.get();
+      const { settings } = await app.librarySettingsService.get();
       const { raw } = await readTemplate(
         app.config.libraryPath,
         templatePath,
@@ -279,7 +279,7 @@ export const templatesRoutes: FastifyPluginCallback = (app, _opts, done) => {
     }
     return handling(reply, async () => {
       const { templatePath, title } = parsed.data;
-      const settings = await app.librarySettingsService.get();
+      const { settings } = await app.librarySettingsService.get();
       const { raw } = await readTemplate(
         app.config.libraryPath,
         templatePath,

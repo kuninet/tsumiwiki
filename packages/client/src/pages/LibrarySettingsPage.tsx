@@ -11,7 +11,7 @@ export function LibrarySettingsPage() {
   const [form, setForm] = useState<LibrarySettings | null>(null);
 
   useEffect(() => {
-    if (data) setForm(data);
+    if (data) setForm(data.settings);
   }, [data]);
 
   function handleChange<K extends keyof LibrarySettings, F extends keyof LibrarySettings[K]>(
@@ -35,6 +35,20 @@ export function LibrarySettingsPage() {
       </p>
 
       {isLoading && <p className="mt-6 text-sm text-ink-faint">読み込み中...</p>}
+
+      {data?.corrupted === true && (
+        <div
+          role="alert"
+          className="mt-6 rounded border border-warning bg-warning/10 px-4 py-3 text-sm text-ink"
+        >
+          <p className="font-medium text-warning">
+            設定ファイル(.tsumiwiki/settings.yaml)を読み込めませんでした。表示されているのは初期値です。
+          </p>
+          <p className="mt-1 text-ink-soft">
+            このまま保存すると git 上の正しい過去版が上書きされます。ファイルを直接修復するか、履歴から復元してください。
+          </p>
+        </div>
+      )}
 
       {form && (
         <div className="mt-6 space-y-8">

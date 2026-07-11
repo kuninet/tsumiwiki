@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { Logger } from 'pino';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import {
   LIBRARY_SETTINGS_DEFAULTS,
@@ -14,33 +15,56 @@ import type { GitAuthor, GitService } from './git-service.js';
 
 const SETTINGS_REL_PATH = '.tsumiwiki/settings.yaml';
 
+export interface LibrarySettingsResult {
+  settings: LibrarySettings;
+  // #99: yaml のパース/バリデーションに失敗した状態でデフォルト値にフォールバックしたか。
+  //      true の場合、この settings をそのまま保存すると git 上の正しい過去版を上書きしてしまう。
+  corrupted: boolean;
+}
+
 export class LibrarySettingsService {
   constructor(
     private readonly libraryPath: string,
     private readonly git: GitService,
+    private readonly logger?: Logger,
   ) {}
 
   private absPath(): string {
     return path.join(this.libraryPath, SETTINGS_REL_PATH);
   }
 
-  // 読み取り: ファイル不在・パース失敗はサイレントにデフォルト値を返す
-  //           (初期セットアップ直後や壊れた設定でも UI が読めるようにする)
-  async get(): Promise<LibrarySettings> {
+  // 読み取り: ファイル不在は初期セットアップ扱い(corrupted: false)でデフォルト値を返す。
+  //           パース失敗・バリデーション失敗は「壊れた設定」として warn ログを出しつつ
+  //           corrupted: true とデフォルト値を返す(#99: サイレントに握って上書き事故を招かないため)。
+  async get(): Promise<LibrarySettingsResult> {
     let raw: string;
     try {
       raw = await readFile(this.absPath(), 'utf8');
     } catch {
-      return LIBRARY_SETTINGS_DEFAULTS;
+      return { settings: LIBRARY_SETTINGS_DEFAULTS, corrupted: false };
     }
+
+    let parsed: unknown;
     try {
-      const parsed = parseYaml(raw);
-      const validated = librarySettingsSchema.safeParse(parsed);
-      if (validated.success) return validated.data;
-    } catch {
-      // parse error → fall through to defaults
+      parsed = parseYaml(raw);
+    } catch (e) {
+      this.logger?.warn(
+        { err: e, path: this.absPath() },
+        'ライブラリ設定(settings.yaml)のパースに失敗しました。デフォルト値にフォールバックします',
+      );
+      return { settings: LIBRARY_SETTINGS_DEFAULTS, corrupted: true };
     }
-    return LIBRARY_SETTINGS_DEFAULTS;
+
+    const validated = librarySettingsSchema.safeParse(parsed);
+    if (!validated.success) {
+      this.logger?.warn(
+        { issues: validated.error.issues, path: this.absPath() },
+        'ライブラリ設定(settings.yaml)のバリデーションに失敗しました。デフォルト値にフォールバックします',
+      );
+      return { settings: LIBRARY_SETTINGS_DEFAULTS, corrupted: true };
+    }
+
+    return { settings: validated.data, corrupted: false };
   }
 
   // 更新: バリデーション済みの値を yaml として書き、git コミット。
