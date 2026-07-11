@@ -137,8 +137,11 @@
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| GET | `/api/library/settings` | 現在のライブラリ設定(認証必須)。ファイル不在・パース失敗時はデフォルト値を返す |
+| GET | `/api/library/settings` | 現在のライブラリ設定(認証必須)。`{ settings, corrupted }` を返す |
 | PUT | `/api/library/settings` | **admin** 更新。`.tsumiwiki/settings.yaml` を書き `config: update library settings` でコミット |
+
+- `corrupted`: `settings.yaml` の**パース失敗・バリデーション失敗**時に `true`(サーバーログに warn を出力しつつデフォルト値へフォールバック)。ファイル不在(初期セットアップ)は `false`。
+  `true` のまま PUT すると git 上の正しい過去版を上書きしてしまうため、クライアントは警告バナーを表示する(#99)。
 
 ### ライブラリ運用
 

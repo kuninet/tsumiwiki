@@ -86,7 +86,10 @@ export function buildApp(options: BuildAppOptions) {
   );
   app.decorate('draftService', draftService);
   app.decorate('docService', docService);
-  app.decorate('librarySettingsService', new LibrarySettingsService(config.libraryPath, gitService));
+  app.decorate(
+    'librarySettingsService',
+    new LibrarySettingsService(config.libraryPath, gitService, logger === false ? undefined : logger),
+  );
 
   // ライブラリのGitリポジトリ初期化(未初期化なら git init。設計06章6.1)
   app.addHook('onReady', async () => {

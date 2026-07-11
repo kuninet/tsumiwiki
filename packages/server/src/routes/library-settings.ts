@@ -9,8 +9,8 @@ import { authorOf } from './docs.js';
 export const librarySettingsRoutes: FastifyPluginCallback = (app, _opts, done) => {
   app.get('/api/library/settings', async (req, reply) => {
     if (!req.user) return sendError(reply, 401, 'UNAUTHORIZED', '認証が必要です');
-    const settings = await app.librarySettingsService.get();
-    return { settings };
+    const { settings, corrupted } = await app.librarySettingsService.get();
+    return { settings, corrupted };
   });
 
   app.put('/api/library/settings', async (req, reply) => {
