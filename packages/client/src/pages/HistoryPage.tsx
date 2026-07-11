@@ -17,6 +17,7 @@ import {
 import { acquireLock, releaseLock } from '../api/locks';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { DiffView } from '../components/DiffView';
+import { SideBySideDiffView } from '../components/SideBySideDiffView';
 import { docUrl } from '../lib/doc-path';
 import { parseDiff } from '../lib/parse-diff';
 import { relativeTime } from '../lib/relative-time';
@@ -26,6 +27,8 @@ import { useToastStore } from '../stores/toast';
 // ロジックはHistoryPanelから複製している(Phase 2でMerged view実装時に共通化を検討)
 
 type Tab = 'diff' | 'content';
+// 差分の表示レイアウト(全画面ページのみ。右サイドパネルは狭いため1列固定。issue #66 Phase 1c)
+type Layout = 'inline' | 'side-by-side';
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString('ja-JP');
@@ -45,6 +48,7 @@ export function HistoryPage() {
   const path = params['*'];
   const navigate = useNavigate();
   const [scope, setScope] = useState<'file' | 'all'>('file');
+  const [layout, setLayout] = useState<Layout>('inline');
   const { data: fileHistory, isLoading: fileLoading } = useHistory(path);
   const { data: allHistory, isLoading: allLoading } = useAllHistory(scope === 'all');
   const history = scope === 'all' ? allHistory : fileHistory;
@@ -158,29 +162,64 @@ export function HistoryPage() {
           </Link>
         </div>
 
-        <div className="mt-3 inline-flex rounded-full border border-line p-0.5" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={scope === 'file'}
-            onClick={() => setScope('file')}
-            className={`rounded-full px-3 py-1 text-xs ${
-              scope === 'file' ? 'bg-active font-semibold text-accent' : 'text-ink-faint'
-            }`}
+        <div className="mt-3 flex items-center justify-between">
+          <div
+            className="inline-flex rounded-full border border-line p-0.5"
+            role="tablist"
+            aria-label="履歴のスコープ"
           >
-            この文書
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={scope === 'all'}
-            onClick={() => setScope('all')}
-            className={`rounded-full px-3 py-1 text-xs ${
-              scope === 'all' ? 'bg-active font-semibold text-accent' : 'text-ink-faint'
-            }`}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={scope === 'file'}
+              onClick={() => setScope('file')}
+              className={`rounded-full px-3 py-1 text-xs ${
+                scope === 'file' ? 'bg-active font-semibold text-accent' : 'text-ink-faint'
+              }`}
+            >
+              この文書
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={scope === 'all'}
+              onClick={() => setScope('all')}
+              className={`rounded-full px-3 py-1 text-xs ${
+                scope === 'all' ? 'bg-active font-semibold text-accent' : 'text-ink-faint'
+              }`}
+            >
+              全体
+            </button>
+          </div>
+
+          <div
+            className="inline-flex rounded-full border border-line p-0.5"
+            role="tablist"
+            aria-label="差分レイアウト"
           >
-            全体
-          </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={layout === 'inline'}
+              onClick={() => setLayout('inline')}
+              className={`rounded-full px-3 py-1 text-xs ${
+                layout === 'inline' ? 'bg-active font-semibold text-accent' : 'text-ink-faint'
+              }`}
+            >
+              1列
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={layout === 'side-by-side'}
+              onClick={() => setLayout('side-by-side')}
+              className={`rounded-full px-3 py-1 text-xs ${
+                layout === 'side-by-side' ? 'bg-active font-semibold text-accent' : 'text-ink-faint'
+              }`}
+            >
+              2列
+            </button>
+          </div>
         </div>
       </div>
 
@@ -281,7 +320,12 @@ export function HistoryPage() {
             {tab === 'diff' && diffError && (
               <p className="text-xs text-ink-faint">このパスの差分は表示できません</p>
             )}
-            {tab === 'diff' && !diffError && <DiffView lines={diffLines} docs={tree?.docs ?? []} />}
+            {tab === 'diff' && !diffError && layout === 'side-by-side' && (
+              <SideBySideDiffView lines={diffLines} docs={tree?.docs ?? []} />
+            )}
+            {tab === 'diff' && !diffError && layout === 'inline' && (
+              <DiffView lines={diffLines} docs={tree?.docs ?? []} />
+            )}
           </div>
 
           {scope === 'file' && (
