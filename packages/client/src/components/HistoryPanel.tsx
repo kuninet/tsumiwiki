@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { ApiRequestError } from '../api/client';
-import { docQueryKey, TREE_QUERY_KEY } from '../api/docs';
+import { docQueryKey, TREE_QUERY_KEY, useTree } from '../api/docs';
 import {
   fetchHistoryContent,
   fetchHistoryDiff,
@@ -52,6 +52,9 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
   }, [onClose]);
 
   const { data: history, isLoading } = useHistory(path);
+  // #96: 差分表示内の wikilink をクリック可能にするため、DiffView に docs 一覧を渡す。
+  // useTree は React Query でキャッシュされているので DocView と共有され追加取得は起きない
+  const { data: tree } = useTree();
   const [selectedRev, setSelectedRev] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('diff');
   const [restoreConfirmVisible, setRestoreConfirmVisible] = useState(false);
@@ -195,7 +198,7 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
           {tab === 'content' && (
             <pre className="whitespace-pre-wrap text-xs text-ink">{content ?? ''}</pre>
           )}
-          {tab === 'diff' && <DiffView lines={diffLines} />}
+          {tab === 'diff' && <DiffView lines={diffLines} docs={tree?.docs ?? []} />}
         </div>
 
         <div className="flex-shrink-0 border-t border-line p-3">

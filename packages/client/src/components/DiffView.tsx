@@ -1,5 +1,10 @@
+import type { DocSummary } from '@tsumiwiki/shared';
+import type { MouseEvent as ReactMouseEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { handleWikilinkClick } from '../lib/handle-wikilink-click';
 import type { DiffLine } from '../lib/parse-diff';
 import { renderDiffInline } from '../lib/render-diff-inline';
+import { useToastStore } from '../stores/toast';
 
 // 履歴パネル『差分』タブの表示コンポーネント(#64)。
 // git出力の生表示 (@@ハンク・+/-プレフィクス・font-mono) をやめ、本文に混ざった
@@ -60,17 +65,30 @@ const KIND_CLASS: Record<'add' | 'del' | 'context', string> = {
 
 interface DiffViewProps {
   lines: DiffLine[];
+  // #96: 履歴パネル(HistoryPanel > DiffView)は DocView の onClick コンテナと
+  // 兄弟のためクリックが伝播しない。差分内の wikilink をクリック可能にするため、
+  // ここで独自に navigate/toast する。docs は wikilink 解決に使う。
+  // 呼び出し側が渡していない(旧テスト等) 場合は wikilink クリックは no-op に落ちる
+  docs?: DocSummary[];
 }
 
-export function DiffView({ lines }: DiffViewProps) {
+export function DiffView({ lines, docs }: DiffViewProps) {
   const groups = groupDiffLines(lines);
+  const navigate = useNavigate();
+  const showToast = useToastStore((s) => s.show);
+
+  // #96: 差分内 wikilink クリックの捕捉。編集モード等のゲートは掛けず、
+  // 履歴パネルを開いている状況では常に遷移可能とする(閲覧の一形態のため)
+  function handleClick(e: ReactMouseEvent<HTMLDivElement>) {
+    handleWikilinkClick(e.target, docs ?? [], navigate, showToast);
+  }
 
   if (groups.length === 0) {
     return <p className="text-sm text-ink-faint">変更はありません</p>;
   }
 
   return (
-    <div className="text-sm text-ink-soft leading-relaxed">
+    <div className="text-sm text-ink-soft leading-relaxed" onClick={handleClick}>
       {groups.map((g, i) => {
         if (g.kind === 'divider') {
           return <hr key={i} className="my-3 border-t border-line" />;

@@ -10,9 +10,8 @@ import { createEditorExtensions } from '../editor/markdown';
 import { parseMarkdownFragment } from '../editor/parse-fragment';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
-import { docUrl } from '../lib/doc-path';
+import { handleWikilinkClick } from '../lib/handle-wikilink-click';
 import { removeInlineTag, renameInlineTag } from '../lib/inline-tag-rewrite';
-import { resolveWikilink } from '../lib/resolve-wikilink';
 import { saveBadge } from '../lib/save-badge';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
@@ -416,21 +415,18 @@ export function DocView({ doc, currentUser }: DocViewProps) {
 
   // wikilinkクリックでの遷移(FR-OBS-02)とfile://・UNCリンクの「パスをコピー」(FR-LINK-02)
   function handleContainerClick(e: ReactMouseEvent<HTMLDivElement>) {
-    // 編集モード中のクリックはカーソル移動として扱い、遷移・コピーはしない
-    if (sessionRef.current.mode !== 'view') return;
     const target = e.target as HTMLElement;
 
-    const wikilinkEl = target.closest('span[data-type="wikilink"]');
-    if (wikilinkEl) {
-      const wikilinkTarget = wikilinkEl.getAttribute('data-target') ?? '';
-      const resolved = resolveWikilink(wikilinkTarget, wikilinkDocsRef.current);
-      if (resolved) {
-        navigate(docUrl(resolved));
-      } else {
-        showToast('error', 'リンク先が見つかりません');
-      }
+    // #96: wikilink は本文(view) / 履歴パネル(DiffView) 共通のヘルパで処理する。
+    // wikilink の遷移は編集モード中でもクリック意図として扱う(view-mode gate より前で判定):
+    // - 編集モード中は atom node なのでキャレット挙動はブロックされず、明示クリックのみ発火する
+    // - 差分表示側は HistoryPanel > DiffView が別コンテナで、独自の onClick で同じヘルパを呼ぶ
+    if (handleWikilinkClick(target, wikilinkDocsRef.current, navigate, showToast)) {
       return;
     }
+
+    // 編集モード中の他リンクは編集操作(カーソル移動等)として扱い、遷移・コピーはしない
+    if (sessionRef.current.mode !== 'view') return;
 
     const anchorEl = target.closest('a');
     if (anchorEl) {

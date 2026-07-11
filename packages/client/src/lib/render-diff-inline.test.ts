@@ -30,6 +30,12 @@ describe('renderDiffInline', () => {
     );
   });
 
+  it('wikilink の [[target|alias]] 記法は data-target=target・表示=alias になる(本文と対称)', () => {
+    expect(renderDiffInline('[[設計|設計ドキュメント]] を参照')).toBe(
+      '<span class="wikilink" data-type="wikilink" data-target="設計">設計ドキュメント</span> を参照',
+    );
+  });
+
   it('inline code 内の * は装飾対象にならない(先に <code> で保護)', () => {
     expect(renderDiffInline('`**not bold**` は装飾されない')).toBe(
       '<code>**not bold**</code> は装飾されない',

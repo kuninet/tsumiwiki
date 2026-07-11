@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HistoryPanel } from './HistoryPanel';
 
@@ -51,12 +52,15 @@ function renderHistoryPanel(
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <HistoryPanel
-        path="メモ.md"
-        onClose={onClose}
-        isDirty={options.isDirty}
-        beforeRestore={options.beforeRestore}
-      />
+      {/* #96: DiffView が useNavigate を使うため Router が必要 */}
+      <MemoryRouter>
+        <HistoryPanel
+          path="メモ.md"
+          onClose={onClose}
+          isDirty={options.isDirty}
+          beforeRestore={options.beforeRestore}
+        />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
