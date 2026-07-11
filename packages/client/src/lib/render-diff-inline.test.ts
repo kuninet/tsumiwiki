@@ -18,9 +18,15 @@ describe('renderDiffInline', () => {
     );
   });
 
-  it('wikilink は class="wikilink" を持つ span で表示される', () => {
+  it('wikilink は class="wikilink" と data-type/data-target を持つ span で表示される(#96: DocViewのクリックハンドラがdata-targetを見てナビゲーションするため)', () => {
     expect(renderDiffInline('[[設計]] を参照')).toBe(
-      '<span class="wikilink">設計</span> を参照',
+      '<span class="wikilink" data-type="wikilink" data-target="設計">設計</span> を参照',
+    );
+  });
+
+  it('wikilink ターゲットに引用符等が含まれても data-target 属性値はエスケープ済みのままで壊れない', () => {
+    expect(renderDiffInline('[["引用"]]')).toBe(
+      '<span class="wikilink" data-type="wikilink" data-target="&quot;引用&quot;">&quot;引用&quot;</span>',
     );
   });
 

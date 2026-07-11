@@ -23,7 +23,10 @@ function escapeHtml(s: string): string {
 // エスケープ済みHTMLに対して inline markdown 相当の装飾を適用する。
 // 順序が重要:
 // 1. inline code(``x``)を最初にプレースホルダに退避して装飾から守る
-// 2. wikilink [[x]]
+// 2. wikilink [[x]](#96。data-type/data-targetを付与しDocViewのクリック
+//    ハンドラから本文と同様にナビゲーション可能にする。text は既に行頭の
+//    escapeHtml で `"` `<` 等がエンティティ化済みなので、そのまま属性値に
+//    使っても壊れない。本文側の wikilink.ts の escapeHtml(target) と同じ扱い)
 // 3. bold **x**(2連続の * を em の 1連続より先に処理する)
 // 4. italic *x*(bold処理後の残った * のみが対象になる)
 // 5. code のプレースホルダを <code>x</code> に戻す
@@ -39,7 +42,10 @@ export function renderDiffInline(text: string): string {
     codes.push(`<code>${inner}</code>`);
     return `${OPEN}${idx}${CLOSE}`;
   });
-  html = html.replace(/\[\[([^\]]+)\]\]/g, '<span class="wikilink">$1</span>');
+  html = html.replace(
+    /\[\[([^\]]+)\]\]/g,
+    '<span class="wikilink" data-type="wikilink" data-target="$1">$1</span>',
+  );
   html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
   html = html.replace(new RegExp(`${OPEN}(\\d+)${CLOSE}`, 'g'), (_, i) => codes[Number(i)] ?? '');
