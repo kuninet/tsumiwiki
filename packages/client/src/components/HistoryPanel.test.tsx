@@ -394,6 +394,50 @@ describe('HistoryPanel', () => {
     });
   });
 
+  it('[⛶ 全画面]リンクは/history/<エンコード済みパス>を指し、クリックでonCloseが呼ばれる', async () => {
+    stubFetch({
+      'GET /api/history': {
+        history: [{ rev: 'abc1234', authorName: '太郎', date: '2026-07-01T00:00:00+09:00', message: '更新' }],
+      },
+      'GET /api/history/diff': { diff: '' },
+    });
+
+    const onClose = vi.fn();
+    renderHistoryPanel(onClose);
+    await screen.findByText(/太郎/);
+
+    const link = screen.getByRole('link', { name: /全画面/ });
+    expect(link.getAttribute('href')).toBe(`/history/${encodeURIComponent('メモ.md')}`);
+
+    fireEvent.click(link);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('[⛶ 全画面]リンクのCmd/Ctrlクリックではパネルを閉じない(#66レビュー指摘対応)', async () => {
+    stubFetch({
+      'GET /api/history': {
+        history: [{ rev: 'abc1234', authorName: '太郎', date: '2026-07-01T00:00:00+09:00', message: '更新' }],
+      },
+      'GET /api/history/diff': { diff: '' },
+    });
+
+    const onClose = vi.fn();
+    renderHistoryPanel(onClose);
+    await screen.findByText(/太郎/);
+
+    const link = screen.getByRole('link', { name: /全画面/ });
+
+    // 新タブで開く(Cmd+クリック相当)ときは元パネルを残したい
+    fireEvent.click(link, { metaKey: true });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(link, { ctrlKey: true });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(link, { shiftKey: true });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('ロック取得に失敗した場合は復元を実行しない', async () => {
     const calls = stubFetch({
       'GET /api/history': {
