@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AllHistoryEntry, HistoryEntry } from '@tsumiwiki/shared';
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ApiRequestError } from '../api/client';
 import { docQueryKey, TREE_QUERY_KEY, useTree } from '../api/docs';
 import {
@@ -14,6 +15,7 @@ import {
   useHistory,
 } from '../api/history';
 import { acquireLock, releaseLock } from '../api/locks';
+import { historyUrl } from '../lib/doc-path';
 import { parseDiff } from '../lib/parse-diff';
 import { relativeTime } from '../lib/relative-time';
 import { useToastStore } from '../stores/toast';
@@ -160,14 +162,30 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
         <h2 className="truncate text-sm font-bold text-ink">
           履歴 <span className="text-ink-faint">·</span> {titleFromPath(path)}
         </h2>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="閉じる"
-          className="text-ink-faint hover:text-ink"
-        >
-          ×
-        </button>
+        <div className="flex flex-shrink-0 items-center">
+          <Link
+            to={historyUrl(path)}
+            // Cmd/Ctrl/Shiftクリック(新タブ・新ウィンドウ)時はパネルを閉じない。
+            // ユーザーの意図は「元パネルは残しつつ新タブで全画面を並べて見る」ため
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+              onClose();
+            }}
+            title="全画面で開く"
+            aria-label="履歴を全画面で開く"
+            className="text-ink-faint hover:text-ink text-xs mr-2"
+          >
+            ⛶ 全画面
+          </Link>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="閉じる"
+            className="text-ink-faint hover:text-ink"
+          >
+            ×
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-shrink-0 items-center border-b border-line px-4 py-2">

@@ -5,6 +5,7 @@ import { RequireAdmin } from './components/RequireAdmin';
 import { RequireAuth } from './components/RequireAuth';
 import { EditorDemo } from './editor/EditorDemo';
 import { AdminUsersPage } from './pages/AdminUsersPage';
+import { HistoryPage } from './pages/HistoryPage';
 import { LibrarySettingsPage } from './pages/LibrarySettingsPage';
 import { LoginPage } from './pages/LoginPage';
 import { MainPage } from './pages/MainPage';
@@ -27,6 +28,7 @@ export function App() {
         <Route element={<AppShell />}>
           <Route index element={<MainPage />} />
           <Route path="doc/*" element={<MainPage />} />
+          <Route path="history/*" element={<HistoryPage />} />
           <Route path="trash" element={<TrashPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="demo" element={<EditorDemo />} />
