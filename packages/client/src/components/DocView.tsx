@@ -14,6 +14,7 @@ import { titleFromPath } from '../lib/doc-path';
 import { handleWikilinkClick } from '../lib/handle-wikilink-click';
 import { removeInlineTag, renameInlineTag } from '../lib/inline-tag-rewrite';
 import { saveBadge } from '../lib/save-badge';
+import { registerTabActions } from '../lib/tab-actions-registry';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
@@ -112,6 +113,19 @@ export function DocView({
     baseUpdatedAt: doc.updatedAt,
     active,
   });
+
+  // Phase A-2: タブ閉じ時に save/discard を DocView 外(CloseConfirmDialog)から
+  // 呼べるようレジストリに登録する。session の save/cancelEditing は useCallback で
+  // ラップされていて安定参照。edit モードのときだけ登録することで、view モードの
+  // タブに対して save 等を呼び出さないようにする(Opus レビュー M1 対応)
+  useEffect(() => {
+    if (session.mode !== 'edit') return;
+    const unregister = registerTabActions(doc.path, {
+      save: () => session.save(),
+      discard: () => session.cancelEditing(),
+    });
+    return unregister;
+  }, [doc.path, session.mode, session.save, session.cancelEditing]);
 
   // タブバー側の dirty 表示(●)と DocTab 側の tab mode を追随させる。
   // 初回マウントの通知はスキップする(M2): 再遷移して DocView が新規マウントされたとき、
