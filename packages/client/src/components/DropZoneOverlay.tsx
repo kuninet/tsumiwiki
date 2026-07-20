@@ -19,8 +19,9 @@ import { useLeafCount, useTabsStore, type PaneId } from '../stores/tabs';
 // - source pane 上では center を無効(同ペイン内の reorder は TabBar が担当)
 // - モバイルでは分割 UI 自体を無効
 
-// 分割の上限。緩めのキャップ。もっと欲しくなったら緩める
-const MAX_PANES = 4;
+// 分割の上限。緩めのキャップ。もっと欲しくなったら緩める(モバイル時のスクロール
+// 縮退などの副作用は要注意 → issue で追跡)
+export const MAX_PANES = 4;
 
 interface Props {
   paneId: PaneId;
@@ -86,8 +87,9 @@ export function DropZoneOverlay({ paneId }: Props) {
   if (!draggingPath) return null;
 
   const isSourcePane = sourcePaneId === paneId;
-  // 分割の可否は「現ペイン数 < MAX_PANES」で判定(source ペイン内での分割も含む)。
-  // ペイン数が上限に達している時は L/R/T/B を出さず center(移動)のみに縮退
+  // 分割の可否は「現ペイン数 < MAX_PANES」で判定。上限に達したら L/R/T/B を出さず
+  // center(=移動)のみに縮退。#147 以前は root が split の時点で L/R/T/B を封じていたが、
+  // N 分割対応で「任意の leaf を再分割してよい」に変更された
   const allowSides = leafCount < MAX_PANES;
   const allowCenter = !isSourcePane;
 
@@ -131,6 +133,8 @@ export function DropZoneOverlay({ paneId }: Props) {
     <div
       ref={containerRef}
       data-testid={`dropzones-${paneId}`}
+      data-allow-sides={allowSides}
+      data-allow-center={allowCenter}
       className="absolute inset-0 z-40"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -148,5 +152,3 @@ export function DropZoneOverlay({ paneId }: Props) {
   );
 }
 
-// テスト用に定数も参照可能にする
-export { MAX_PANES as _MAX_PANES };
