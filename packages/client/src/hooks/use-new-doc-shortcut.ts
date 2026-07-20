@@ -1,12 +1,14 @@
 import { useEffect } from 'react';
 import { getActivePaneActiveIdFromState, useTabsStore } from '../stores/tabs';
 import { useUIStore } from '../stores/ui';
+import { resolveNewDocInitialFolder } from '../stores/user-settings';
 
-// Phase C-1 (#137): Ctrl+N(Mac: ⌘N)で新規文書作成モーダルを起動する。
+// Phase C-1 (#137) + C-2 (#138): Ctrl+N(Mac: ⌘N)で新規文書作成モーダルを起動する。
 //
-// 初期フォルダはアクティブタブの文書と同じフォルダ(#138 の same-folder ポリシー相当)。
-// Phase C-2 で「same-folder / fixed-folder / root」の切替設定が入る予定なので、
-// ここではひとまず同一フォルダ既定で実装する。
+// 初期フォルダは userSettings.newDocPolicy に従って解決する:
+// - same-folder: アクティブタブと同じフォルダ(既定)
+// - fixed-folder: 設定した固定フォルダ
+// - root: 常にルート
 //
 // preventDefault は多くのブラウザで無効(Chrome の Ctrl+N は新規ウィンドウ)。
 // 「試すだけ試す」実装で、ブラウザ側のショートカットが優先されるのは受容する。
@@ -14,11 +16,6 @@ import { useUIStore } from '../stores/ui';
 function isMac(): boolean {
   if (typeof navigator === 'undefined') return false;
   return /Mac|iPod|iPhone|iPad/.test(navigator.platform);
-}
-
-function folderOfPath(path: string): string {
-  const idx = path.lastIndexOf('/');
-  return idx === -1 ? '' : path.slice(0, idx);
 }
 
 export function useNewDocShortcut() {
@@ -30,9 +27,8 @@ export function useNewDocShortcut() {
       if (!(modOk && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n')) return;
       // ブラウザデフォルト抑止(効かない環境もある)
       e.preventDefault();
-      // アクティブタブがあればそのフォルダ、無ければルート
       const activePath = getActivePaneActiveIdFromState(useTabsStore.getState());
-      const initialFolder = activePath ? folderOfPath(activePath) : '';
+      const initialFolder = resolveNewDocInitialFolder(activePath);
       useUIStore.getState().requestCreateDoc(initialFolder);
     }
     window.addEventListener('keydown', handler);
