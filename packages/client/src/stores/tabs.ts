@@ -152,7 +152,8 @@ function pruneEmpty(node: PaneNode): PaneNode {
   const a = pruneEmpty(node.a);
   const b = pruneEmpty(node.b);
   if (a.kind === 'leaf' && a.tabs.length === 0 && b.kind === 'leaf' && b.tabs.length === 0) {
-    // 両方空: 片方を残して単一 leaf に(id は a のもの)
+    // 両側とも空になる遷移は現行 mutator(closeTab / splitOrMove)からは生じないため
+    // 実質デッドコード。B2 以降で「ペインごと閉じる」等が入ったときのための保険として残す
     return a;
   }
   if (a.kind === 'leaf' && a.tabs.length === 0) return b;
@@ -205,19 +206,29 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       // 既に存在するペインを探す
       const existingPane = findLeafByPath(s.root, path);
       if (existingPane) {
-        // kind を preview → pinned へ昇格させたい場合は明示
-        const nextRoot = updateLeaf(s.root, existingPane.id, (leaf) => ({
-          ...leaf,
-          tabs: leaf.tabs.map((t) =>
-            t.path === path && opts?.pinned && t.kind === 'preview'
-              ? { ...t, kind: 'pinned' as const }
-              : t,
-          ),
-          activeId: activate ? path : leaf.activeId,
-        }));
+        const existingTab = existingPane.tabs.find((t) => t.path === path)!;
+        const needsPin = !!opts?.pinned && existingTab.kind === 'preview';
+        const needsActive = activate && existingPane.activeId !== path;
+        const needsActivePane = activate && s.activePaneId !== existingPane.id;
+        // すべて既に整っていれば no-op(URL 変化のたびに useTabsUrlSync から
+        // 呼ばれるので、無駄に root オブジェクトを差し替えて subscriber を発火させない
+        // ようにする — Opus M2)
+        if (!needsPin && !needsActive && !needsActivePane) return {};
+        const nextRoot =
+          needsPin || needsActive
+            ? updateLeaf(s.root, existingPane.id, (leaf) => ({
+                ...leaf,
+                tabs: needsPin
+                  ? leaf.tabs.map((t) =>
+                      t.path === path ? { ...t, kind: 'pinned' as const } : t,
+                    )
+                  : leaf.tabs,
+                activeId: activate ? path : leaf.activeId,
+              }))
+            : s.root;
         return {
           root: nextRoot,
-          activePaneId: activate ? existingPane.id : s.activePaneId,
+          activePaneId: needsActivePane ? existingPane.id : s.activePaneId,
         };
       }
       // どこにも無いので活性ペインに新規で入れる。preview を置換 or 末尾追加
@@ -462,11 +473,15 @@ function setRatioInTree(node: PaneNode, splitId: PaneId, ratio: number): PaneNod
 
 // ------ 選択セレクタ(components/hooks から使う) ------
 
+// 空タブ配列を返すセレクタが毎回新参照を返さないよう共有インスタンスを使う(Opus M1)。
+// pane が消滅した瞬間の再レンダー抑制目的で、意図的に mutable フリーの空配列を再利用
+const EMPTY_TABS: Tab[] = Object.freeze([]) as unknown as Tab[];
+
 /** アクティブペインの tab リスト(旧 flat API の代替) */
 export function useActivePaneTabs(): Tab[] {
   return useTabsStore((s) => {
     const pane = findLeafById(s.root, s.activePaneId);
-    return pane?.tabs ?? [];
+    return pane?.tabs ?? EMPTY_TABS;
   });
 }
 
@@ -485,7 +500,7 @@ export function getActivePaneActiveIdFromState(state: TabsState): string | null 
 
 export function getActivePaneTabsFromState(state: TabsState): Tab[] {
   const pane = findLeafById(state.root, state.activePaneId);
-  return pane?.tabs ?? [];
+  return pane?.tabs ?? EMPTY_TABS;
 }
 
 /** レイアウトツリー(MainPage 描画用) */

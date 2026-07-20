@@ -105,6 +105,10 @@ export function TabBar() {
   // navigateToActive() を明示的に呼ぶ設計に統一した。
   const locationRef = useRef(location);
   locationRef.current = location;
+  // Ctrl+W ハンドラは effect 内で navigate を使いたい。1回登録の effect が
+  // 毎レンダー再登録しないよう ref 経由で参照する(Opus M3: window.history 直叩きを回避)
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
 
   // Ctrl+W(⌘W): アクティブタブを閉じる。ブラウザデフォルトのタブ閉じは preventDefault で
   // 止められないケースがほとんど(Chrome など)。ここでの preventDefault は「効くかもしれない」
@@ -127,14 +131,10 @@ export function TabBar() {
         useTabsStore.getState().requestClose(activePath);
       } else {
         useTabsStore.getState().closeTab(activePath);
-        // 閉じた結果 activeId が変わったら URL 追随。event handler 内なので react-router
-        // の navigate ref を持たず、window.history 経由で URL 更新する
+        // 閉じた結果 activeId が変わったら URL 追随。navigate は ref 経由で参照する
         const nextActive = getActivePaneActiveIdFromState(useTabsStore.getState());
         const desired = nextActive ? docUrl(nextActive) : '/';
-        if (window.location.pathname !== desired) {
-          window.history.pushState({}, '', desired);
-          window.dispatchEvent(new PopStateEvent('popstate'));
-        }
+        if (window.location.pathname !== desired) navigateRef.current(desired);
       }
     }
     window.addEventListener('keydown', handler);

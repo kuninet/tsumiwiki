@@ -6,7 +6,7 @@ import { getActivePaneActiveIdFromState, useTabsStore } from '../stores/tabs';
 import { useToastStore } from '../stores/toast';
 
 // Phase A-2: dirty なタブを閉じるときに表示する 3ボタン(保存/破棄/キャンセル)ダイアログ。
-// MainPage 直下に常駐し、tabs.pendingCloseId が非 null のときのみ描画する。
+// MainPage 直下に常駐し、tabs.pendingClose が非 null のときのみ描画する。
 // save/discard は tab-actions-registry 経由で該当 path の DocView に委譲する。
 
 export function CloseConfirmDialog() {

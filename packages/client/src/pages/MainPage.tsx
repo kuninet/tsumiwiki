@@ -79,7 +79,7 @@ export function MainPage() {
           </div>
         )}
       </div>
-      {/* dirty タブ閉じ確認(Phase A-2)。pendingCloseId が null のときは自分で描画しない */}
+      {/* dirty タブ閉じ確認(Phase A-2)。pendingClose が null のときは自分で描画しない */}
       <CloseConfirmDialog />
     </div>
   );
