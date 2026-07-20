@@ -7,7 +7,13 @@ import {
 } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { docUrl, titleFromPath } from '../lib/doc-path';
-import { useTabsStore } from '../stores/tabs';
+import {
+  getActivePaneActiveIdFromState,
+  getActivePaneTabsFromState,
+  useActivePaneActiveId,
+  useActivePaneTabs,
+  useTabsStore,
+} from '../stores/tabs';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 
 // 編集/閲覧ペインのタブバー(Epic #133 / Phase A-1 + A-2)。
@@ -32,8 +38,9 @@ function isMac(): boolean {
 }
 
 export function TabBar() {
-  const tabs = useTabsStore((s) => s.tabs);
-  const activeId = useTabsStore((s) => s.activeId);
+  // Phase B: 単一ペインの UI は変えない。木構造から activePane の tabs/activeId を取り出して使う
+  const tabs = useActivePaneTabs();
+  const activeId = useActivePaneActiveId();
   const setActive = useTabsStore((s) => s.setActive);
   const promoteToPinned = useTabsStore((s) => s.promoteToPinned);
   const unpin = useTabsStore((s) => s.unpin);
@@ -57,12 +64,12 @@ export function TabBar() {
   // 閉じ操作後に「新しい activeId の URL」に navigate する。
   // 「activeId が消えたら / に戻す」を含む。この関数を close 系操作の直後に必ず呼ぶ
   function navigateToActive() {
-    const s = useTabsStore.getState();
-    if (!s.activeId) {
+    const nextActive = getActivePaneActiveIdFromState(useTabsStore.getState());
+    if (!nextActive) {
       if (locationRef.current.pathname !== '/') navigate('/');
       return;
     }
-    const desired = docUrl(s.activeId);
+    const desired = docUrl(nextActive);
     if (locationRef.current.pathname !== desired) navigate(desired);
   }
 
@@ -98,6 +105,10 @@ export function TabBar() {
   // navigateToActive() を明示的に呼ぶ設計に統一した。
   const locationRef = useRef(location);
   locationRef.current = location;
+  // Ctrl+W ハンドラは effect 内で navigate を使いたい。1回登録の effect が
+  // 毎レンダー再登録しないよう ref 経由で参照する(Opus M3: window.history 直叩きを回避)
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
 
   // Ctrl+W(⌘W): アクティブタブを閉じる。ブラウザデフォルトのタブ閉じは preventDefault で
   // 止められないケースがほとんど(Chrome など)。ここでの preventDefault は「効くかもしれない」
@@ -105,28 +116,25 @@ export function TabBar() {
   useEffect(() => {
     function handler(e: KeyboardEvent) {
       if (e.isComposing) return;
-      const activePath = useTabsStore.getState().activeId;
+      const activePath = getActivePaneActiveIdFromState(useTabsStore.getState());
       if (!activePath) return;
       const modOk = isMac() ? e.metaKey : e.ctrlKey;
       if (!(modOk && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'w')) return;
       e.preventDefault();
-      const target = useTabsStore.getState().tabs.find((t) => t.path === activePath);
+      // path で tab を探す(活性ペインから)
+      const tabsNow = useTabsStore.getState();
+      // findLeaf 相当は store 内部関数なので、helper で活性ペインの tabs を取り出して探す
+      const activePaneTabs = getActivePaneTabsFromState(tabsNow);
+      const target = activePaneTabs.find((t) => t.path === activePath);
       if (!target) return;
       if (target.dirty) {
         useTabsStore.getState().requestClose(activePath);
       } else {
         useTabsStore.getState().closeTab(activePath);
-        // 閉じた結果 activeId が変わったら URL 追随。ここでは navigate は使えないので
-        // window.history.pushState + react-router に見せる navigation event を発火
-        const s = useTabsStore.getState();
-        const desired = s.activeId ? docUrl(s.activeId) : '/';
-        if (window.location.pathname !== desired) {
-          // 通常は React 内で navigate を使うが、event handler は 1 回登録で
-          // navigate ref を持たない設計なので window.history 経由で URL 更新。
-          // react-router v7 は popstate/navigation でこの変化を拾う
-          window.history.pushState({}, '', desired);
-          window.dispatchEvent(new PopStateEvent('popstate'));
-        }
+        // 閉じた結果 activeId が変わったら URL 追随。navigate は ref 経由で参照する
+        const nextActive = getActivePaneActiveIdFromState(useTabsStore.getState());
+        const desired = nextActive ? docUrl(nextActive) : '/';
+        if (window.location.pathname !== desired) navigateRef.current(desired);
       }
     }
     window.addEventListener('keydown', handler);
@@ -208,7 +216,8 @@ export function TabBar() {
   function handleDrop(e: ReactDragEvent, toIndex: number) {
     e.preventDefault();
     if (dragIndex === null) return;
-    reorder(dragIndex, toIndex);
+    const dragged = tabs[dragIndex];
+    if (dragged) reorder(dragged.path, toIndex);
     setDragIndex(null);
   }
   function handleDragEnd() {

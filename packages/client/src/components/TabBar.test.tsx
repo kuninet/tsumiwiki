@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { useTabsStore } from '../stores/tabs';
+import { getActivePaneActiveIdFromState, getActivePaneTabsFromState, useTabsStore } from '../stores/tabs';
 import { TabBar } from './TabBar';
 
 function LocationProbe() {
@@ -58,7 +58,7 @@ describe('TabBar', () => {
     useTabsStore.getState().openDoc('b.md', { pinned: true });
     const { getByTestId } = renderTabBar('/doc/b.md');
     fireEvent.click(screen.getByTestId('tab-a.md'));
-    expect(useTabsStore.getState().activeId).toBe('a.md');
+    expect(getActivePaneActiveIdFromState(useTabsStore.getState())).toBe('a.md');
     expect(getByTestId('location').textContent).toBe('/doc/a.md');
   });
 
@@ -74,7 +74,7 @@ describe('TabBar', () => {
     useTabsStore.getState().openDoc('a.md');
     renderTabBar();
     fireEvent.doubleClick(screen.getByTestId('tab-a.md'));
-    expect(useTabsStore.getState().tabs[0].kind).toBe('pinned');
+    expect(getActivePaneTabsFromState(useTabsStore.getState())[0].kind).toBe('pinned');
   });
 
   // Phase A-2
@@ -85,8 +85,8 @@ describe('TabBar', () => {
       renderTabBar('/doc/b.md');
       fireEvent.click(screen.getByTestId('tab-close-a.md'));
       const s = useTabsStore.getState();
-      expect(s.tabs.map((t) => t.path)).toEqual(['b.md']);
-      expect(s.pendingCloseId).toBeNull();
+      expect(getActivePaneTabsFromState(s).map((t) => t.path)).toEqual(['b.md']);
+      expect(s.pendingClose?.path ?? null).toBeNull();
     });
 
     it('× ボタンで dirty タブを閉じようとすると pendingCloseId が立つ(閉じは保留)', () => {
@@ -95,9 +95,9 @@ describe('TabBar', () => {
       renderTabBar('/doc/a.md');
       fireEvent.click(screen.getByTestId('tab-close-a.md'));
       const s = useTabsStore.getState();
-      expect(s.pendingCloseId).toBe('a.md');
+      expect(s.pendingClose?.path ?? null).toBe('a.md');
       // ダイアログ表示中はまだ閉じない
-      expect(s.tabs).toHaveLength(1);
+      expect(getActivePaneTabsFromState(s)).toHaveLength(1);
     });
 
     it('middle-click(button===1)でも閉じる', () => {
@@ -105,7 +105,7 @@ describe('TabBar', () => {
       useTabsStore.getState().openDoc('b.md', { pinned: true });
       renderTabBar('/doc/b.md');
       fireEvent.mouseDown(screen.getByTestId('tab-a.md'), { button: 1 });
-      expect(useTabsStore.getState().tabs.map((t) => t.path)).toEqual(['b.md']);
+      expect(getActivePaneTabsFromState(useTabsStore.getState()).map((t) => t.path)).toEqual(['b.md']);
     });
 
     it('タブクリックがタブ全体のアクティブ化(× 内クリックはアクティブ化しない)', () => {
@@ -115,8 +115,8 @@ describe('TabBar', () => {
       // × クリックは stopPropagation されるので activeId は b のまま(a に切替って a を閉じる、じゃない)
       fireEvent.click(screen.getByTestId('tab-close-a.md'));
       // a が閉じられて b だけ残る
-      expect(useTabsStore.getState().tabs.map((t) => t.path)).toEqual(['b.md']);
-      expect(useTabsStore.getState().activeId).toBe('b.md');
+      expect(getActivePaneTabsFromState(useTabsStore.getState()).map((t) => t.path)).toEqual(['b.md']);
+      expect(getActivePaneActiveIdFromState(useTabsStore.getState())).toBe('b.md');
     });
 
     it('アクティブタブを閉じたら URL が新アクティブに追随する', async () => {
@@ -126,7 +126,7 @@ describe('TabBar', () => {
       // ● のない b(clean)を × で閉じる
       fireEvent.click(screen.getByTestId('tab-close-b.md'));
       // a が新アクティブ → URL 追随
-      expect(useTabsStore.getState().activeId).toBe('a.md');
+      expect(getActivePaneActiveIdFromState(useTabsStore.getState())).toBe('a.md');
       // useEffect 経由で navigate されるので次のマイクロタスクで反映
       await Promise.resolve();
       expect(getByTestId('location').textContent).toBe('/doc/a.md');
@@ -140,8 +140,8 @@ describe('TabBar', () => {
       renderTabBar('/doc/b.md');
       fireEvent.keyDown(window, { key: 'w', ctrlKey: true });
       const s = useTabsStore.getState();
-      expect(s.tabs.map((t) => t.path)).toEqual(['a.md']);
-      expect(s.pendingCloseId).toBeNull();
+      expect(getActivePaneTabsFromState(s).map((t) => t.path)).toEqual(['a.md']);
+      expect(s.pendingClose?.path ?? null).toBeNull();
     });
 
     it('dirty なアクティブタブでは pendingCloseId を立てる(閉じは保留)', () => {
@@ -149,8 +149,8 @@ describe('TabBar', () => {
       useTabsStore.getState().markDirty('a.md', true);
       renderTabBar('/doc/a.md');
       fireEvent.keyDown(window, { key: 'w', ctrlKey: true });
-      expect(useTabsStore.getState().pendingCloseId).toBe('a.md');
-      expect(useTabsStore.getState().tabs).toHaveLength(1);
+      expect(useTabsStore.getState().pendingClose?.path ?? null).toBe('a.md');
+      expect(getActivePaneTabsFromState(useTabsStore.getState())).toHaveLength(1);
     });
 
     it('IME 変換中(isComposing=true)は無視する', () => {
@@ -159,7 +159,7 @@ describe('TabBar', () => {
       renderTabBar('/doc/b.md');
       fireEvent.keyDown(window, { key: 'w', ctrlKey: true, isComposing: true });
       // 変化なし
-      expect(useTabsStore.getState().tabs).toHaveLength(2);
+      expect(getActivePaneTabsFromState(useTabsStore.getState())).toHaveLength(2);
     });
   });
 
@@ -183,7 +183,7 @@ describe('TabBar', () => {
       fireEvent.contextMenu(screen.getByTestId('tab-a.md'));
       const pinItem = screen.getByRole('menuitem', { name: 'ピン留め' });
       fireEvent.click(pinItem);
-      expect(useTabsStore.getState().tabs[0].kind).toBe('pinned');
+      expect(getActivePaneTabsFromState(useTabsStore.getState())[0].kind).toBe('pinned');
     });
 
     it('「他をすべて閉じる」で該当以外を閉じる', () => {
@@ -193,7 +193,7 @@ describe('TabBar', () => {
       renderTabBar();
       fireEvent.contextMenu(screen.getByTestId('tab-b.md'));
       fireEvent.click(screen.getByRole('menuitem', { name: '他をすべて閉じる' }));
-      expect(useTabsStore.getState().tabs.map((t) => t.path)).toEqual(['b.md']);
+      expect(getActivePaneTabsFromState(useTabsStore.getState()).map((t) => t.path)).toEqual(['b.md']);
     });
   });
 });

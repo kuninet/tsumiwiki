@@ -2,37 +2,37 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { docUrl, titleFromPath } from '../lib/doc-path';
 import { getTabActions } from '../lib/tab-actions-registry';
-import { useTabsStore } from '../stores/tabs';
+import { getActivePaneActiveIdFromState, useTabsStore } from '../stores/tabs';
 import { useToastStore } from '../stores/toast';
 
 // Phase A-2: dirty なタブを閉じるときに表示する 3ボタン(保存/破棄/キャンセル)ダイアログ。
-// MainPage 直下に常駐し、tabs.pendingCloseId が非 null のときのみ描画する。
+// MainPage 直下に常駐し、tabs.pendingClose が非 null のときのみ描画する。
 // save/discard は tab-actions-registry 経由で該当 path の DocView に委譲する。
 
 export function CloseConfirmDialog() {
-  const pendingCloseId = useTabsStore((s) => s.pendingCloseId);
+  const pendingClose = useTabsStore((s) => s.pendingClose);
   const closeTab = useTabsStore((s) => s.closeTab);
   const cancelClose = useTabsStore((s) => s.cancelClose);
   const showToast = useToastStore((s) => s.show);
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
 
-  if (!pendingCloseId) return null;
+  if (!pendingClose) return null;
 
-  const path = pendingCloseId;
+  const path = pendingClose.path;
 
-  // 走行中の非同期操作が終わったあと、pendingCloseId が別 path に置き換わっていた
+  // 走行中の非同期操作が終わったあと、pendingClose が別 path に置き換わっていた
   // ときに新しい方を消してしまわないよう、対象 path が今も pending であるときだけ
   // clearClose する(M4 対応)
   function clearCloseIfStillMe(targetPath: string) {
-    if (useTabsStore.getState().pendingCloseId === targetPath) cancelClose();
+    if (useTabsStore.getState().pendingClose?.path === targetPath) cancelClose();
   }
 
-  // 閉じた後に URL を新 activeId(or /)へ追随させる。TabBar の useEffect を持たない
-  // 設計に伴って、close 系ハンドラでは呼び出し側から明示的に呼ぶ
+  // 閉じた後に URL を新 activeId(or /)へ追随させる。
+  // Phase B: activePane の activeId を参照する
   function navigateToActive() {
-    const s = useTabsStore.getState();
-    const desired = s.activeId ? docUrl(s.activeId) : '/';
+    const activeId = getActivePaneActiveIdFromState(useTabsStore.getState());
+    const desired = activeId ? docUrl(activeId) : '/';
     if (window.location.pathname !== desired) navigate(desired);
   }
 

@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerTabActions } from '../lib/tab-actions-registry';
-import { useTabsStore } from '../stores/tabs';
+import { getActivePaneTabsFromState, useTabsStore } from '../stores/tabs';
 import { useToastStore } from '../stores/toast';
 import { CloseConfirmDialog } from './CloseConfirmDialog';
 
@@ -43,8 +43,8 @@ describe('CloseConfirmDialog', () => {
     useTabsStore.getState().requestClose('a.md');
     renderDialog();
     fireEvent.click(screen.getByRole('button', { name: 'キャンセル' }));
-    expect(useTabsStore.getState().pendingCloseId).toBeNull();
-    expect(useTabsStore.getState().tabs).toHaveLength(1);
+    expect(useTabsStore.getState().pendingClose?.path ?? null).toBeNull();
+    expect(getActivePaneTabsFromState(useTabsStore.getState())).toHaveLength(1);
   });
 
   it('「破棄して閉じる」で discard 呼び出し → タブが閉じる', async () => {
@@ -59,10 +59,10 @@ describe('CloseConfirmDialog', () => {
     renderDialog();
     fireEvent.click(screen.getByRole('button', { name: '破棄して閉じる' }));
     await waitFor(() => {
-      expect(useTabsStore.getState().tabs).toHaveLength(0);
+      expect(getActivePaneTabsFromState(useTabsStore.getState())).toHaveLength(0);
     });
     expect(discard).toHaveBeenCalled();
-    expect(useTabsStore.getState().pendingCloseId).toBeNull();
+    expect(useTabsStore.getState().pendingClose?.path ?? null).toBeNull();
   });
 
   it('「保存して閉じる」で save が true を返したらタブが閉じる', async () => {
@@ -77,7 +77,7 @@ describe('CloseConfirmDialog', () => {
     renderDialog();
     fireEvent.click(screen.getByRole('button', { name: '保存して閉じる' }));
     await waitFor(() => {
-      expect(useTabsStore.getState().tabs).toHaveLength(0);
+      expect(getActivePaneTabsFromState(useTabsStore.getState())).toHaveLength(0);
     });
     expect(save).toHaveBeenCalled();
   });
@@ -96,7 +96,7 @@ describe('CloseConfirmDialog', () => {
     await waitFor(() => {
       expect(save).toHaveBeenCalled();
     });
-    expect(useTabsStore.getState().tabs).toHaveLength(1);
+    expect(getActivePaneTabsFromState(useTabsStore.getState())).toHaveLength(1);
     expect(useToastStore.getState().toast).toMatchObject({ kind: 'error' });
   });
 
@@ -108,7 +108,7 @@ describe('CloseConfirmDialog', () => {
     renderDialog();
     fireEvent.click(screen.getByRole('button', { name: '破棄して閉じる' }));
     await waitFor(() => {
-      expect(useTabsStore.getState().tabs).toHaveLength(0);
+      expect(getActivePaneTabsFromState(useTabsStore.getState())).toHaveLength(0);
     });
   });
 });

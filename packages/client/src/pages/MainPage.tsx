@@ -5,7 +5,7 @@ import { DocTab } from '../components/DocTab';
 import { TabBar } from '../components/TabBar';
 import { useTabsUrlSync } from '../hooks/use-tabs-url-sync';
 import { docUrl } from '../lib/doc-path';
-import { useTabsStore } from '../stores/tabs';
+import { useActivePaneActiveId, useActivePaneTabs } from '../stores/tabs';
 
 // メイン画面(SC-02)。文書未選択時は最近更新一覧、選択時はタブモデルで閲覧・編集する。
 // Epic #133 Phase A-1 でタブ + マウント保存(切替時に DocView を unmount しない)に対応。
@@ -48,8 +48,10 @@ function RecentDocsList() {
 
 export function MainPage() {
   const urlPath = useTabsUrlSync();
-  const tabs = useTabsStore((s) => s.tabs);
-  const activeId = useTabsStore((s) => s.activeId);
+  // Phase B: 活性ペインの tabs / activeId(単一ペイン挙動を維持)。
+  // 分割 UI は Phase B2 で MainPage をツリー再帰レンダーに置き換える予定
+  const tabs = useActivePaneTabs();
+  const activeId = useActivePaneActiveId();
 
   // タブが1つも無く URL も無い状態は「最近更新した文書」の一覧を出す
   if (tabs.length === 0 && !urlPath) {
@@ -77,7 +79,7 @@ export function MainPage() {
           </div>
         )}
       </div>
-      {/* dirty タブ閉じ確認(Phase A-2)。pendingCloseId が null のときは自分で描画しない */}
+      {/* dirty タブ閉じ確認(Phase A-2)。pendingClose が null のときは自分で描画しない */}
       <CloseConfirmDialog />
     </div>
   );
