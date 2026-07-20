@@ -126,6 +126,8 @@ export function FolderTree() {
   // lastClickedPath は Shift+クリックの起点として使う
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [lastClickedPath, setLastClickedPath] = useState<string | null>(null);
+  // #152: インラインリネーム対象パス。null なら通常表示、非 null なら該当行を input に置換
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
   // #82 fix-forward: 新規フォルダにまとめる操作の in-flight ロック(二重発火防止)
   const isGroupingRef = useRef(false);
 
@@ -184,8 +186,9 @@ export function FolderTree() {
           onSelect: () => setDialog({ kind: 'createFolder', parent: target.path }),
         },
         {
+          // #152: モーダルではなく inline 編集を発火
           label: 'リネーム',
-          onSelect: () => setDialog({ kind: 'renameFolder', path: target.path, name: target.name }),
+          onSelect: () => startInlineRename(target.path),
         },
         {
           label: '削除',
@@ -197,9 +200,9 @@ export function FolderTree() {
     }
     const items: ContextMenuItem[] = [
       {
+        // #152: モーダルではなく inline 編集を発火
         label: 'リネーム',
-        onSelect: () =>
-          setDialog({ kind: 'renameDoc', path: target.path, folder: target.folder, title: target.title }),
+        onSelect: () => startInlineRename(target.path),
       },
       {
         label: '削除',
@@ -208,6 +211,77 @@ export function FolderTree() {
       },
     ];
     return groupItem ? [groupItem, ...items] : items;
+  }
+
+  // 文書リネームの実処理(dialog 経路 / inline 経路 の両方から使う)。
+  // 現在文書と一致 + dirty なら離脱確認、成功時は URL 追従
+  function performRenameDoc(oldPath: string, folder: string, newTitle: string) {
+    if (currentPath === oldPath && !confirmNavigationIfDirty()) return;
+    moveDoc.mutate(
+      { path: oldPath, newFolder: folder, newTitle },
+      {
+        onSuccess: (data) => {
+          if (currentPathRef.current === oldPath && oldPath !== data.path) {
+            queryClient.removeQueries({ queryKey: docQueryKey(oldPath) });
+            navigate(docUrl(data.path), { replace: true });
+          }
+        },
+      },
+    );
+  }
+
+  // フォルダリネームの実処理(dialog 経路 / inline 経路 の両方から使う)
+  function performRenameFolder(oldFolder: string, newName: string) {
+    const parent = parentOf(oldFolder);
+    const newPath = parent ? `${parent}/${newName}` : newName;
+    if (
+      currentPath &&
+      (currentPath === oldFolder || currentPath.startsWith(`${oldFolder}/`)) &&
+      !confirmNavigationIfDirty()
+    ) {
+      return;
+    }
+    moveFolder.mutate(
+      { path: oldFolder, newPath },
+      {
+        onSuccess: (data) => {
+          const nowPath = currentPathRef.current;
+          if (nowPath && (nowPath === oldFolder || nowPath.startsWith(`${oldFolder}/`))) {
+            const rewritten = data.path + nowPath.slice(oldFolder.length);
+            queryClient.removeQueries({
+              predicate: (q) => {
+                const key = q.queryKey;
+                if (!Array.isArray(key) || key[0] !== 'doc') return false;
+                const p = key[1];
+                return typeof p === 'string' && (p === oldFolder || p.startsWith(`${oldFolder}/`));
+              },
+            });
+            navigate(docUrl(rewritten), { replace: true });
+          }
+        },
+      },
+    );
+  }
+
+  // #152: インラインリネーム開始・確定・キャンセル
+  function startInlineRename(path: string) {
+    setRenamingPath(path);
+  }
+  function cancelInlineRename() {
+    setRenamingPath(null);
+  }
+  function commitInlineRename(node: TreeNode, newValue: string) {
+    setRenamingPath(null);
+    const trimmed = newValue.trim();
+    if (!trimmed) return; // 空はキャンセル扱い
+    if (node.type === 'doc') {
+      const currentTitle = node.title;
+      if (trimmed === currentTitle) return; // 変更なし
+      performRenameDoc(node.path, parentOf(node.path), trimmed);
+    } else {
+      if (trimmed === node.name) return;
+      performRenameFolder(node.path, trimmed);
+    }
   }
 
   function handleDialogConfirm(value: string) {
@@ -227,57 +301,9 @@ export function FolderTree() {
       const path = dialog.parent ? `${dialog.parent}/${value}` : value;
       createFolder.mutate({ path });
     } else if (dialog.kind === 'renameDoc') {
-      const oldPath = dialog.path;
-      // 表示中文書のリネームで dirty なら離脱確認(他文書のリネームでは確認不要)
-      if (currentPath === oldPath && !confirmNavigationIfDirty()) return;
-      moveDoc.mutate(
-        { path: oldPath, newFolder: dialog.folder, newTitle: value },
-        {
-          onSuccess: (data) => {
-            // 発火時点の URL を ref 経由で参照(stale closure 回避)。
-            // 遷移先はクライアントで組み立てず、必ずサーバー返却の正規化 path を使う
-            // (sanitizeTitle 経由で 'CON' → 'CON_'・空白除去などが起きる場合の 404 対策)
-            if (currentPathRef.current === oldPath && oldPath !== data.path) {
-              queryClient.removeQueries({ queryKey: docQueryKey(oldPath) });
-              navigate(docUrl(data.path), { replace: true });
-            }
-          },
-        },
-      );
+      performRenameDoc(dialog.path, dialog.folder, value);
     } else if (dialog.kind === 'renameFolder') {
-      const parent = parentOf(dialog.path);
-      const newPath = parent ? `${parent}/${value}` : value;
-      const oldFolder = dialog.path;
-      // 表示中文書がリネーム対象フォルダ配下で dirty なら離脱確認
-      if (
-        currentPath &&
-        (currentPath === oldFolder || currentPath.startsWith(`${oldFolder}/`)) &&
-        !confirmNavigationIfDirty()
-      ) {
-        return;
-      }
-      moveFolder.mutate(
-        { path: oldFolder, newPath },
-        {
-          onSuccess: (data) => {
-            // 発火時点の URL を ref から取り直し、サーバー返却の正規化フォルダパスを起点に書き換える
-            const nowPath = currentPathRef.current;
-            if (nowPath && (nowPath === oldFolder || nowPath.startsWith(`${oldFolder}/`))) {
-              const rewritten = data.path + nowPath.slice(oldFolder.length);
-              // 配下の doc query を prefix 一致で全て捨てる(1件だけの掃除では取り残しが出る)
-              queryClient.removeQueries({
-                predicate: (q) => {
-                  const key = q.queryKey;
-                  if (!Array.isArray(key) || key[0] !== 'doc') return false;
-                  const p = key[1];
-                  return typeof p === 'string' && (p === oldFolder || p.startsWith(`${oldFolder}/`));
-                },
-              });
-              navigate(docUrl(rewritten), { replace: true });
-            }
-          },
-        },
-      );
+      performRenameFolder(dialog.path, value);
     } else if (dialog.kind === 'groupIntoNewFolder') {
       // #73 選択物を新規サブフォルダにまとめる。
       // 新規フォルダを共通親配下に作り、その配下へ選択物を一括移動する
@@ -616,16 +642,8 @@ export function FolderTree() {
     }
     if (e.key === 'F2') {
       e.preventDefault();
-      if (entry.node.type === 'folder') {
-        setDialog({ kind: 'renameFolder', path: entry.node.path, name: entry.node.name });
-      } else {
-        setDialog({
-          kind: 'renameDoc',
-          path: entry.node.path,
-          folder: parentOf(entry.node.path),
-          title: entry.node.title,
-        });
-      }
+      // #152: モーダルではなく inline リネームに切替
+      startInlineRename(entry.node.path);
       return;
     }
     if (e.key === 'Delete') {
@@ -736,6 +754,10 @@ export function FolderTree() {
             onKeyDown={handleRowKeyDown}
             registerRow={registerRow}
             dnd={dnd}
+            renamingPath={renamingPath}
+            onStartInlineRename={startInlineRename}
+            onCommitInlineRename={commitInlineRename}
+            onCancelInlineRename={cancelInlineRename}
           />
         ))}
       </ul>
@@ -844,6 +866,11 @@ interface TreeItemProps {
   onKeyDown: (e: KeyboardEvent, entry: FlatEntry) => void;
   registerRow: (path: string, el: HTMLButtonElement | null) => void;
   dnd: TreeDndHandlers;
+  // #152: インラインリネーム関連
+  renamingPath: string | null;
+  onStartInlineRename: (path: string) => void;
+  onCommitInlineRename: (node: TreeNode, value: string) => void;
+  onCancelInlineRename: () => void;
 }
 
 function TreeItem({
@@ -859,10 +886,15 @@ function TreeItem({
   onKeyDown,
   registerRow,
   dnd,
+  renamingPath,
+  onStartInlineRename,
+  onCommitInlineRename,
+  onCancelInlineRename,
 }: TreeItemProps) {
   const indent = { paddingLeft: `${depth * 16 + 8}px` };
   const entry: FlatEntry = { node, depth, parentPath };
   const isFocusTarget = node.path === activeFocusPath;
+  const isRenaming = node.path === renamingPath;
 
   const isDragging = dnd.draggedPath === node.path;
   const isDropTarget =
@@ -893,37 +925,54 @@ function TreeItem({
     const canAcceptHere = dnd.draggedPath !== null && dnd.canDropOn(node.path);
     return (
       <li role="none">
-        <button
-          type="button"
-          role="treeitem"
-          aria-expanded={expanded}
-          tabIndex={isFocusTarget ? 0 : -1}
-          ref={(el) => registerRow(node.path, el)}
-          style={indent}
-          onClick={(e) => onRowClick(e, node)}
-          onKeyDown={(e) => onKeyDown(e, entry)}
-          onContextMenu={(e) => onContextMenu(e, { type: 'folder', path: node.path, name: node.name })}
-          {...dragHandlers}
-          onDragEnter={(e) => {
-            e.stopPropagation();
-            dnd.onDragEnter(node.path);
-          }}
-          onDragOver={(e) => {
-            if (canAcceptHere) e.preventDefault();
-          }}
-          onDrop={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            dnd.onDrop(node.path);
-          }}
-          className={`flex h-[30px] w-full items-center gap-1 px-2 text-left text-sm text-ink-soft hover:bg-hoverbg focus:outline-none focus-visible:bg-active ${
-            isDragging ? 'opacity-50' : ''
-          } ${isDropTarget ? 'bg-accent-soft ring-2 ring-accent' : selectedBgClass}`}
-        >
-          <span className="inline-block w-3 text-ink-faint">{expanded ? '▾' : '▸'}</span>
-          <span aria-hidden="true">📂</span>
-          <span className="truncate">{node.name}</span>
-        </button>
+        {isRenaming ? (
+          // #152: folder の inline リネーム(コンテキストメニュー / F2 経由で発火)
+          <div
+            style={indent}
+            className="flex h-[30px] w-full items-center gap-1 px-2 text-sm"
+            data-testid={`folder-rename-${node.path}`}
+          >
+            <span className="inline-block w-3 text-ink-faint">{expanded ? '▾' : '▸'}</span>
+            <span aria-hidden="true">📂</span>
+            <InlineRenameInput
+              initialValue={node.name}
+              onCommit={(value) => onCommitInlineRename(node, value)}
+              onCancel={onCancelInlineRename}
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            role="treeitem"
+            aria-expanded={expanded}
+            tabIndex={isFocusTarget ? 0 : -1}
+            ref={(el) => registerRow(node.path, el)}
+            style={indent}
+            onClick={(e) => onRowClick(e, node)}
+            onKeyDown={(e) => onKeyDown(e, entry)}
+            onContextMenu={(e) => onContextMenu(e, { type: 'folder', path: node.path, name: node.name })}
+            {...dragHandlers}
+            onDragEnter={(e) => {
+              e.stopPropagation();
+              dnd.onDragEnter(node.path);
+            }}
+            onDragOver={(e) => {
+              if (canAcceptHere) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              dnd.onDrop(node.path);
+            }}
+            className={`flex h-[30px] w-full items-center gap-1 px-2 text-left text-sm text-ink-soft hover:bg-hoverbg focus:outline-none focus-visible:bg-active ${
+              isDragging ? 'opacity-50' : ''
+            } ${isDropTarget ? 'bg-accent-soft ring-2 ring-accent' : selectedBgClass}`}
+          >
+            <span className="inline-block w-3 text-ink-faint">{expanded ? '▾' : '▸'}</span>
+            <span aria-hidden="true">📂</span>
+            <span className="truncate">{node.name}</span>
+          </button>
+        )}
         {expanded && (
           <ul role="group">
             {node.children.map((child) => (
@@ -941,6 +990,10 @@ function TreeItem({
                 onKeyDown={onKeyDown}
                 registerRow={registerRow}
                 dnd={dnd}
+                renamingPath={renamingPath}
+                onStartInlineRename={onStartInlineRename}
+                onCommitInlineRename={onCommitInlineRename}
+                onCancelInlineRename={onCancelInlineRename}
               />
             ))}
           </ul>
@@ -950,6 +1003,26 @@ function TreeItem({
   }
 
   const isCurrent = currentPath === node.path;
+  if (isRenaming) {
+    // #152: doc の inline リネーム
+    return (
+      <li role="none">
+        <div
+          style={indent}
+          className="flex h-[30px] w-full items-center gap-1 px-2 text-sm"
+          data-testid={`doc-rename-${node.path}`}
+        >
+          <span className="inline-block w-3" aria-hidden="true" />
+          <span aria-hidden="true">📄</span>
+          <InlineRenameInput
+            initialValue={node.title}
+            onCommit={(value) => onCommitInlineRename(node, value)}
+            onCancel={onCancelInlineRename}
+          />
+        </div>
+      </li>
+    );
+  }
   return (
     <li role="none">
       <button
@@ -959,6 +1032,12 @@ function TreeItem({
         ref={(el) => registerRow(node.path, el)}
         style={indent}
         onClick={(e) => onRowClick(e, node)}
+        onDoubleClick={(e) => {
+          // #152: ダブルクリックで inline リネーム開始。ドラッグ D&D と区別するため
+          // preventDefault は不要(dblclick は 2 度の click 後に発火)
+          e.stopPropagation();
+          onStartInlineRename(node.path);
+        }}
         onKeyDown={(e) => onKeyDown(e, entry)}
         onContextMenu={(e) =>
           onContextMenu(e, { type: 'doc', path: node.path, folder: parentOf(node.path), title: node.title })
@@ -974,5 +1053,53 @@ function TreeItem({
         <span className="truncate">{node.title}</span>
       </button>
     </li>
+  );
+}
+
+// #152: インラインリネーム用の <input>。マウント時にフォーカス + 全選択、
+// Enter/blur で確定、Esc でキャンセル。空値は commit 側でキャンセル扱い
+interface InlineRenameInputProps {
+  initialValue: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+}
+function InlineRenameInput({ initialValue, onCommit, onCancel }: InlineRenameInputProps) {
+  const [value, setValue] = useState(initialValue);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const committedRef = useRef(false);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  function commit() {
+    if (committedRef.current) return;
+    committedRef.current = true;
+    onCommit(value);
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onKeyDown={(e) => {
+        // React の SyntheticKeyboardEvent には isComposing が無いので native event 経由で判定
+        if (e.nativeEvent.isComposing) return;
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          committedRef.current = true;
+          onCancel();
+        }
+      }}
+      onBlur={commit}
+      data-testid="inline-rename-input"
+      className="min-w-0 flex-1 rounded border border-accent bg-canvas px-1 py-0.5 text-sm text-ink focus:outline-none"
+    />
   );
 }
