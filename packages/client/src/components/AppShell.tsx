@@ -3,6 +3,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useCreateOrOpenTodayNote } from '../api/daily-notes';
 import { useApplyTemplate } from '../api/templates';
 import { useMediaQuery } from '../hooks/use-media-query';
+import { useNewDocShortcut } from '../hooks/use-new-doc-shortcut';
 import { docUrl } from '../lib/doc-path';
 import { useUIStore } from '../stores/ui';
 import { FolderTree } from './FolderTree';
@@ -22,6 +23,9 @@ export function AppShell() {
   const toggleSidebarCollapsed = useUIStore((s) => s.toggleSidebarCollapsed);
   const setSidebarTab = useUIStore((s) => s.setSidebarTab);
   const requestCreateDoc = useUIStore((s) => s.requestCreateDoc);
+
+  // Ctrl+N / ⌘N グローバルショートカット(#137 Phase C-1)
+  useNewDocShortcut();
 
   const navigate = useNavigate();
   const createOrOpenTodayNote = useCreateOrOpenTodayNote();
@@ -157,7 +161,7 @@ export function AppShell() {
               </button>
               <button
                 type="button"
-                onClick={requestCreateDoc}
+                onClick={() => requestCreateDoc()}
                 className="flex flex-1 items-center justify-center gap-1 border-l border-line hover:bg-hoverbg"
               >
                 <span aria-hidden="true">+</span> 新規文書

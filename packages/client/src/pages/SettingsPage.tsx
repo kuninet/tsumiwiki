@@ -3,6 +3,7 @@ import { useMe } from '../api/auth';
 import { ApiRequestError } from '../api/client';
 import { changeMyPassword } from '../api/users';
 import { useToastStore } from '../stores/toast';
+import { useUserSettingsStore, type NewDocPolicy } from '../stores/user-settings';
 
 // 個人設定画面(SC-06・デザインhandoff components.md)。アカウント情報表示とパスワード変更
 
@@ -109,6 +110,70 @@ export function SettingsPage() {
           変更する
         </button>
       </form>
+
+      <NewDocSettings />
     </div>
+  );
+}
+
+// #138 Phase C-2: 新規文書の作成先ポリシー設定。
+// 設定はブラウザローカル(zustand/persist)。将来サーバ side に移してもよい
+function NewDocSettings() {
+  const policy = useUserSettingsStore((s) => s.newDocPolicy);
+  const fixedFolder = useUserSettingsStore((s) => s.fixedFolder);
+  const setPolicy = useUserSettingsStore((s) => s.setNewDocPolicy);
+  const setFixedFolder = useUserSettingsStore((s) => s.setFixedFolder);
+
+  function radio(value: NewDocPolicy, label: string, description: string) {
+    return (
+      <label className="flex cursor-pointer items-start gap-2 rounded border border-line p-3 text-sm hover:bg-hoverbg">
+        <input
+          type="radio"
+          name="new-doc-policy"
+          value={value}
+          checked={policy === value}
+          onChange={() => setPolicy(value)}
+          className="mt-1"
+        />
+        <span>
+          <span className="font-medium text-ink">{label}</span>
+          <span className="mt-0.5 block text-xs text-ink-faint">{description}</span>
+        </span>
+      </label>
+    );
+  }
+
+  return (
+    <section className="mt-8 max-w-md space-y-3">
+      <h2 className="text-sm font-bold text-ink">新規文書の作成先</h2>
+      <p className="text-xs text-ink-faint">
+        Ctrl+N(⌘N)や「+新規文書」で新しく文書を作るとき、どのフォルダを初期値にするかを選びます。
+      </p>
+      <div className="space-y-2">
+        {radio(
+          'same-folder',
+          '表示中の文書と同じフォルダ',
+          '現在アクティブなタブの文書があるフォルダ。ルート直下ならルート',
+        )}
+        {radio(
+          'fixed-folder',
+          '特定のフォルダ',
+          '選択したときに現れる入力欄にフォルダパスを指定する',
+        )}
+        {radio('root', 'ルート', '常にライブラリのルート直下に作る')}
+      </div>
+      {policy === 'fixed-folder' && (
+        <label className="block text-sm text-ink-soft">
+          固定フォルダのパス(例: 日誌 / 業務/週次)
+          <input
+            type="text"
+            value={fixedFolder}
+            onChange={(e) => setFixedFolder(e.target.value)}
+            placeholder="(ルート)"
+            className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
+          />
+        </label>
+      )}
+    </section>
   );
 }

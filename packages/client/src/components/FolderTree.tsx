@@ -21,6 +21,7 @@ import { ApiRequestError } from '../api/client';
 import { buildTree, parentOf, type TreeNode } from '../lib/build-tree';
 import { docUrl } from '../lib/doc-path';
 import { confirmNavigationIfDirty } from '../lib/navigation-guard';
+import { useTabsStore } from '../stores/tabs';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -89,15 +90,20 @@ export function FolderTree() {
 
   const expandedFolders = useUIStore((s) => s.expandedFolders);
   const toggleFolderExpanded = useUIStore((s) => s.toggleFolderExpanded);
-  const createDocRequestNonce = useUIStore((s) => s.createDocRequestNonce);
+  const createDocRequest = useUIStore((s) => s.createDocRequest);
 
-  // AppShellのサイドバーフッター「+ 新規文書」の要求を拾ってルート直下の新規文書ダイアログを開く
+  // AppShell の「+ 新規文書」/ Ctrl+N ショートカット / その他外部要求(#137)を拾って
+  // 新規文書ダイアログを開く。初期フォルダは request payload に載って来る。
+  // 「処理済みの nonce」を ref で持ち、FolderTree 再マウント時に前回の要求で
+  // 誤ってダイアログが開かないようガードする(Opus C レビュー M1)
+  const lastHandledNonceRef = useRef(createDocRequest.nonce);
   useEffect(() => {
-    if (createDocRequestNonce > 0) {
-      setDialog({ kind: 'createDoc', folder: '' });
+    if (createDocRequest.nonce === lastHandledNonceRef.current) return;
+    lastHandledNonceRef.current = createDocRequest.nonce;
+    if (createDocRequest.nonce > 0) {
+      setDialog({ kind: 'createDoc', folder: createDocRequest.folder });
     }
-    // 初期nonce=0では発火しない。以降は変化のたびにダイアログを再表示する
-  }, [createDocRequestNonce]);
+  }, [createDocRequest]);
 
   const createDoc = useCreateDoc();
   const createFolder = useCreateFolder();
@@ -207,7 +213,16 @@ export function FolderTree() {
   function handleDialogConfirm(value: string) {
     if (!dialog) return;
     if (dialog.kind === 'createDoc') {
-      createDoc.mutate({ folder: dialog.folder, title: value });
+      createDoc.mutate(
+        { folder: dialog.folder, title: value },
+        {
+          onSuccess: (data) => {
+            // 作成した文書は「意図的な作成」なので pinned で開く(preview で流されない)
+            useTabsStore.getState().openDoc(data.path, { pinned: true });
+            navigate(docUrl(data.path));
+          },
+        },
+      );
     } else if (dialog.kind === 'createFolder') {
       const path = dialog.parent ? `${dialog.parent}/${value}` : value;
       createFolder.mutate({ path });
