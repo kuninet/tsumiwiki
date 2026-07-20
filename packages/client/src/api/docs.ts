@@ -72,9 +72,14 @@ function useLibraryMutation<TVariables, TData = unknown>(
   });
 }
 
+export interface CreateDocResponse {
+  path: string;
+  updatedAt: string;
+}
+
 export function useCreateDoc() {
-  return useLibraryMutation(
-    (body: CreateDocRequest) => api('POST', '/api/docs', body),
+  return useLibraryMutation<CreateDocRequest, CreateDocResponse>(
+    (body: CreateDocRequest) => api<CreateDocResponse>('POST', '/api/docs', body),
     '文書を作成しました',
   );
 }
