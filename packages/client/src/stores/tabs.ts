@@ -75,7 +75,6 @@ export const useTabsStore = create<TabsState>((set) => ({
     set((s) => {
       const existing = s.tabs.find((t) => t.path === path);
       if (existing) {
-        // 既存タブがあればアクティブにするだけ。opts.pinned=true なら preview→pinned に昇格する
         const nextTabs = opts?.pinned && existing.kind === 'preview'
           ? s.tabs.map((t) => (t.path === path ? { ...t, kind: 'pinned' as const } : t))
           : s.tabs;
@@ -85,8 +84,6 @@ export const useTabsStore = create<TabsState>((set) => ({
         };
       }
 
-      // 新規タブ。既存の preview を置換するのが基本(閲覧タブが際限なく増えないため)。
-      // ただし明示的に pinned で開かれた場合、または置換候補が無ければ末尾追加
       const preview = opts?.pinned ? null : findReplaceablePreview(s.tabs);
       const newTab: Tab = { path, kind: opts?.pinned ? 'pinned' : 'preview', dirty: false };
 

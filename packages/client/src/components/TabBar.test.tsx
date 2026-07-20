@@ -164,13 +164,12 @@ describe('TabBar', () => {
   });
 
   describe('全部閉じた後の URL', () => {
-    it('closeAll で URL が / に戻る(次の render で TabBar effect が navigate)', async () => {
+    it('コンテキストメニューの「すべて閉じる」で URL が / に戻る', async () => {
       useTabsStore.getState().openDoc('a.md');
       const { getByTestId } = renderTabBar('/doc/a.md');
-      // 全部閉じる。React 18 の外側からストアを触るので act で包む
-      act(() => {
-        useTabsStore.getState().closeAll();
-      });
+      // 右クリックメニュー → すべて閉じる
+      fireEvent.contextMenu(screen.getByTestId('tab-a.md'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'すべて閉じる' }));
       await waitFor(() => {
         expect(getByTestId('location').textContent).toBe('/');
       });

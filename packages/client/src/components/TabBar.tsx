@@ -54,6 +54,23 @@ export function TabBar() {
     navigate(docUrl(path));
   }
 
+  // 閉じ操作後に「新しい activeId の URL」に navigate する。
+  // 「activeId が消えたら / に戻す」を含む。この関数を close 系操作の直後に必ず呼ぶ
+  function navigateToActive() {
+    const s = useTabsStore.getState();
+    if (!s.activeId) {
+      if (locationRef.current.pathname !== '/') navigate('/');
+      return;
+    }
+    const desired = docUrl(s.activeId);
+    if (locationRef.current.pathname !== desired) navigate(desired);
+  }
+
+  function closeAndFollow(path: string) {
+    closeTab(path);
+    navigateToActive();
+  }
+
   // dirty なら確認ダイアログ、そうでなければ即閉じる。dirty タブが背景にあった場合は
   // ダイアログを見せるためにまずアクティブへ移動する
   function requestOrClose(path: string) {
@@ -63,31 +80,24 @@ export function TabBar() {
       activateAndNavigate(path);
       requestClose(path);
     } else {
-      // 閉じた後の新 activeId はストア側で計算される。もし activeId が変わったら
-      // 対応する URL へ追随させる(useEffect でまとめて行う)
-      closeTab(path);
+      closeAndFollow(path);
     }
   }
 
-  // 閉じ操作等で activeId が変わったら URL も追随させる。TabBar クリック時は
-  // activateAndNavigate 内で明示 navigate するので二重動作にはならない。
-  // タブを全部閉じてしまったら URL は '/' に戻す。放置すると /doc/xxx が残って
-  // useTabsUrlSync がそのタブを再度 openDoc してしまう(Opus M2 対応)
+  // 「activeId → URL 追随」の useEffect は意図的に持たない。
   //
-  // 重要: location.pathname を dep にすると、URL(location)が新しく activeId(store)が
-  // まだ古いまま useEffect が発火して「古い activeId の URL に戻す」→ 次のレンダで反対
-  // →…と ちかちかチカチカ 無限ループになる(ユーザ観察のバグ)。
-  // location は ref 経由で最新値を読むだけにし、依存は activeId/tabs.length に限る。
+  // 過去実装(あった時):useEffect(activeId, tabs.length, location.pathname) で
+  // activeId 変化を検知して navigate していたが、URL→store は useTabsUrlSync
+  // (useLayoutEffect)で一方向同期されているため、逆方向 effect と組み合わせると
+  // レンダー closure と store 更新タイミングのずれ(navigate 直後で store が
+  // まだ古い等)に、両 effect が互いに古い値をリカバーする navigate を交互に発行し、
+  // URL と store が無限に ping-pong した(Chrome の navigation throttle に引っ掛かる
+  // ほど高速に)。
+  //
+  // 代わりに、activeId を変える操作(閉じ・context menu 系)の呼び出し側で
+  // navigateToActive() を明示的に呼ぶ設計に統一した。
   const locationRef = useRef(location);
   locationRef.current = location;
-  useEffect(() => {
-    if (!activeId) {
-      if (tabs.length === 0 && locationRef.current.pathname !== '/') navigate('/');
-      return;
-    }
-    const desired = docUrl(activeId);
-    if (locationRef.current.pathname !== desired) navigate(desired);
-  }, [activeId, tabs.length, navigate]);
 
   // Ctrl+W(⌘W): アクティブタブを閉じる。ブラウザデフォルトのタブ閉じは preventDefault で
   // 止められないケースがほとんど(Chrome など)。ここでの preventDefault は「効くかもしれない」
@@ -106,6 +116,17 @@ export function TabBar() {
         useTabsStore.getState().requestClose(activePath);
       } else {
         useTabsStore.getState().closeTab(activePath);
+        // 閉じた結果 activeId が変わったら URL 追随。ここでは navigate は使えないので
+        // window.history.pushState + react-router に見せる navigation event を発火
+        const s = useTabsStore.getState();
+        const desired = s.activeId ? docUrl(s.activeId) : '/';
+        if (window.location.pathname !== desired) {
+          // 通常は React 内で navigate を使うが、event handler は 1 回登録で
+          // navigate ref を持たない設計なので window.history 経由で URL 更新。
+          // react-router v7 は popstate/navigation でこの変化を拾う
+          window.history.pushState({}, '', desired);
+          window.dispatchEvent(new PopStateEvent('popstate'));
+        }
       }
     }
     window.addEventListener('keydown', handler);
@@ -130,12 +151,35 @@ export function TabBar() {
         danger: tab?.dirty,
       },
       ...(others.length > 0
-        ? [{ label: '他をすべて閉じる', onSelect: () => closeOthers(path) }]
+        ? [
+            {
+              label: '他をすべて閉じる',
+              onSelect: () => {
+                closeOthers(path);
+                navigateToActive();
+              },
+            },
+          ]
         : []),
       ...(hasRight
-        ? [{ label: '右側をすべて閉じる', onSelect: () => closeToRight(path) }]
+        ? [
+            {
+              label: '右側をすべて閉じる',
+              onSelect: () => {
+                closeToRight(path);
+                navigateToActive();
+              },
+            },
+          ]
         : []),
-      { label: 'すべて閉じる', onSelect: () => closeAll(), danger: true },
+      {
+        label: 'すべて閉じる',
+        onSelect: () => {
+          closeAll();
+          navigateToActive();
+        },
+        danger: true,
+      },
     ];
   }
 

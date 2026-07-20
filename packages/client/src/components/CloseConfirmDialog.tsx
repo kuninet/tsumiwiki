@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { titleFromPath } from '../lib/doc-path';
+import { useNavigate } from 'react-router-dom';
+import { docUrl, titleFromPath } from '../lib/doc-path';
 import { getTabActions } from '../lib/tab-actions-registry';
 import { useTabsStore } from '../stores/tabs';
 import { useToastStore } from '../stores/toast';
@@ -13,6 +14,7 @@ export function CloseConfirmDialog() {
   const closeTab = useTabsStore((s) => s.closeTab);
   const cancelClose = useTabsStore((s) => s.cancelClose);
   const showToast = useToastStore((s) => s.show);
+  const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
 
   if (!pendingCloseId) return null;
@@ -26,6 +28,14 @@ export function CloseConfirmDialog() {
     if (useTabsStore.getState().pendingCloseId === targetPath) cancelClose();
   }
 
+  // 閉じた後に URL を新 activeId(or /)へ追随させる。TabBar の useEffect を持たない
+  // 設計に伴って、close 系ハンドラでは呼び出し側から明示的に呼ぶ
+  function navigateToActive() {
+    const s = useTabsStore.getState();
+    const desired = s.activeId ? docUrl(s.activeId) : '/';
+    if (window.location.pathname !== desired) navigate(desired);
+  }
+
   async function handleSave() {
     if (busy) return;
     setBusy(true);
@@ -36,6 +46,7 @@ export function CloseConfirmDialog() {
         // 単に閉じる。dirty のままなら flushOnLeave が draft を保存してくれる
         closeTab(path);
         clearCloseIfStillMe(path);
+        navigateToActive();
         return;
       }
       // save の戻り値で成否を判定する。tabs store の dirty(onDirtyChange 経由の
@@ -44,6 +55,7 @@ export function CloseConfirmDialog() {
       if (ok) {
         closeTab(path);
         clearCloseIfStillMe(path);
+        navigateToActive();
       } else {
         // session.save() 側で個別エラー(競合/失敗)のトーストは既に出ている
         showToast('error', '保存できなかったのでタブを開いたままにしました');
