@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { getActivePaneActiveIdFromState, useTabsStore } from '../stores/tabs';
 import { useUIStore } from '../stores/ui';
-import { resolveNewDocInitialFolder } from '../stores/user-settings';
+import { resolveNewDocInitialFolder, useUserSettingsStore } from '../stores/user-settings';
 
 // Phase C-1 (#137) + C-2 (#138): Ctrl+N(Mac: ⌘N)で新規文書作成モーダルを起動する。
 //
@@ -28,7 +28,12 @@ export function useNewDocShortcut() {
       // ブラウザデフォルト抑止(効かない環境もある)
       e.preventDefault();
       const activePath = getActivePaneActiveIdFromState(useTabsStore.getState());
-      const initialFolder = resolveNewDocInitialFolder(activePath);
+      const settings = useUserSettingsStore.getState();
+      const initialFolder = resolveNewDocInitialFolder(
+        activePath,
+        settings.newDocPolicy,
+        settings.fixedFolder,
+      );
       useUIStore.getState().requestCreateDoc(initialFolder);
     }
     window.addEventListener('keydown', handler);

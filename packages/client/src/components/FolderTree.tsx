@@ -93,12 +93,16 @@ export function FolderTree() {
   const createDocRequest = useUIStore((s) => s.createDocRequest);
 
   // AppShell の「+ 新規文書」/ Ctrl+N ショートカット / その他外部要求(#137)を拾って
-  // 新規文書ダイアログを開く。初期フォルダは request payload に載って来る
+  // 新規文書ダイアログを開く。初期フォルダは request payload に載って来る。
+  // 「処理済みの nonce」を ref で持ち、FolderTree 再マウント時に前回の要求で
+  // 誤ってダイアログが開かないようガードする(Opus C レビュー M1)
+  const lastHandledNonceRef = useRef(createDocRequest.nonce);
   useEffect(() => {
+    if (createDocRequest.nonce === lastHandledNonceRef.current) return;
+    lastHandledNonceRef.current = createDocRequest.nonce;
     if (createDocRequest.nonce > 0) {
       setDialog({ kind: 'createDoc', folder: createDocRequest.folder });
     }
-    // 初期nonce=0では発火しない。以降は変化のたびにダイアログを再表示する
   }, [createDocRequest]);
 
   const createDoc = useCreateDoc();

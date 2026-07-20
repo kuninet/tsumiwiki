@@ -37,11 +37,13 @@ export const useUserSettingsStore = create<UserSettingsState>()(
  *  - root: 常に ''
  *
  *  存在しないフォルダを指定していても、ここではその判定はしない
- *  (作成時に FolderTree/サーバ側でハンドリング) */
+ *  (作成時に FolderTree/サーバ側でハンドリング)。
+ *  副作用のあるデフォルト引数(store.getState)は静的解析の落とし穴になるので、
+ *  policy/fixedFolder は呼び出し側から明示的に渡す(Opus C レビュー M2) */
 export function resolveNewDocInitialFolder(
   activeDocPath: string | null,
-  policy: NewDocPolicy = useUserSettingsStore.getState().newDocPolicy,
-  fixedFolder: string = useUserSettingsStore.getState().fixedFolder,
+  policy: NewDocPolicy,
+  fixedFolder: string,
 ): string {
   switch (policy) {
     case 'same-folder': {
