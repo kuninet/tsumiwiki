@@ -1,7 +1,11 @@
 import { cleanup, render } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { useTabsStore } from '../stores/tabs';
+import {
+  getActivePaneActiveIdFromState,
+  getActivePaneTabsFromState,
+  useTabsStore,
+} from '../stores/tabs';
 import { useTabsUrlSync } from './use-tabs-url-sync';
 
 function Probe() {
@@ -29,18 +33,20 @@ describe('useTabsUrlSync', () => {
   it('/doc/foo で開くと foo タブが preview として作成されアクティブになる', async () => {
     renderWith('/doc/foo.md');
     await Promise.resolve();
-    expect(useTabsStore.getState().tabs.map((t) => t.path)).toEqual(['foo.md']);
-    expect(useTabsStore.getState().activeId).toBe('foo.md');
+    expect(getActivePaneTabsFromState(useTabsStore.getState()).map((t) => t.path)).toEqual([
+      'foo.md',
+    ]);
+    expect(getActivePaneActiveIdFromState(useTabsStore.getState())).toBe('foo.md');
   });
 
   it('URL 変化で既存タブがある場合はアクティブ切替のみで新規は作らない', async () => {
     useTabsStore.getState().openDoc('a.md', { pinned: true });
     useTabsStore.getState().openDoc('b.md', { pinned: true });
-    expect(useTabsStore.getState().tabs).toHaveLength(2);
+    expect(getActivePaneTabsFromState(useTabsStore.getState())).toHaveLength(2);
 
     renderWith('/doc/a.md');
     await Promise.resolve();
-    expect(useTabsStore.getState().tabs).toHaveLength(2);
-    expect(useTabsStore.getState().activeId).toBe('a.md');
+    expect(getActivePaneTabsFromState(useTabsStore.getState())).toHaveLength(2);
+    expect(getActivePaneActiveIdFromState(useTabsStore.getState())).toBe('a.md');
   });
 });
