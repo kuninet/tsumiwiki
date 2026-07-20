@@ -382,4 +382,91 @@ describe('useEditingSession', () => {
     expect(result.current.draftPrompt).toBeNull();
     expect(result.current.dirty).toBe(true);
   });
+
+  // Epic #133 タブ導入: active=false の非アクティブタブは useEditStore(グローバル)を
+  // 触らない。false→true に切り替わったタイミングで local state の現在値を store に流し込む。
+  it('active=false のときは useEditStore に mode/dirty/lockedPath を書かない', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+    });
+
+    // 事前に別のアクティブタブが store に書いた想定の値を置いておく
+    useEditStore.setState({
+      mode: 'edit',
+      dirty: true,
+      lockedPath: 'other.md',
+      lastDraftSavedAt: null,
+    });
+
+    const { result } = renderHook(
+      () =>
+        useEditingSession({
+          path: 'bg.md',
+          baseUpdatedAt: '2026-07-01T00:00:00+09:00',
+          active: false,
+        }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.startEditing('bg body', []);
+    });
+    act(() => {
+      result.current.updateBody('bg edited');
+    });
+
+    // 非アクティブなので store は他タブの値のまま
+    expect(useEditStore.getState().mode).toBe('edit');
+    expect(useEditStore.getState().dirty).toBe(true);
+    expect(useEditStore.getState().lockedPath).toBe('other.md');
+    // 自分の session は真の値を持っている
+    expect(result.current.mode).toBe('edit');
+    expect(result.current.dirty).toBe(true);
+  });
+
+  it('active が false→true に切り替わると自タブの現在値が useEditStore に反映される', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+    });
+
+    useEditStore.setState({
+      mode: 'view',
+      dirty: false,
+      lockedPath: null,
+      lastDraftSavedAt: null,
+    });
+
+    let currentActive = false;
+    const { result, rerender } = renderHook(
+      ({ active }: { active: boolean }) =>
+        useEditingSession({
+          path: 'me.md',
+          baseUpdatedAt: '2026-07-01T00:00:00+09:00',
+          active,
+        }),
+      { wrapper, initialProps: { active: currentActive } },
+    );
+
+    await act(async () => {
+      await result.current.startEditing('me body', []);
+    });
+    act(() => {
+      result.current.updateBody('me edited');
+    });
+
+    // active=false 中は store は空のまま
+    expect(useEditStore.getState().mode).toBe('view');
+    expect(useEditStore.getState().dirty).toBe(false);
+    expect(useEditStore.getState().lockedPath).toBeNull();
+
+    // active=true に切替
+    currentActive = true;
+    rerender({ active: true });
+
+    expect(useEditStore.getState().mode).toBe('edit');
+    expect(useEditStore.getState().dirty).toBe(true);
+    expect(useEditStore.getState().lockedPath).toBe('me.md');
+  });
 });

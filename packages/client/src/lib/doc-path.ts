@@ -14,3 +14,10 @@ export function docUrl(path: string): string {
 export function historyUrl(path: string): string {
   return `/history/${encodePath(path)}`;
 }
+
+// パス末尾のファイル名から拡張子を落として「表示用タイトル」を得る。
+// TabBar・DocView など複数箇所で同じ演算をしていたので集約する
+export function titleFromPath(path: string): string {
+  const base = path.split('/').pop() ?? path;
+  return base.replace(/\.md$/i, '');
+}

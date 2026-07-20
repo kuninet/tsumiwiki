@@ -29,6 +29,10 @@ export interface UseEditingSessionOptions {
   onCancelled?: () => void;
   heartbeatIntervalMs?: number;
   autosaveIntervalMs?: number;
+  // タブ導入(Epic #133): 非アクティブタブは useEditStore(グローバル)への書き込みを抑止する。
+  // ローカル state は常に更新するので、アクティブに戻ったタイミングで useEffect が
+  // 現在値を store に流し込み、StatusBar 等が正しく追随する。省略時は true(既存挙動互換)
+  active?: boolean;
 }
 
 export interface UseEditingSessionResult {
@@ -80,6 +84,7 @@ function flushOnLeave(path: string, dirty: boolean, body: string): void {
 export function useEditingSession(options: UseEditingSessionOptions): UseEditingSessionResult {
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
   const autosaveIntervalMs = options.autosaveIntervalMs ?? DEFAULT_AUTOSAVE_INTERVAL_MS;
+  const active = options.active ?? true;
 
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
@@ -94,6 +99,10 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
   const [lastDraftSavedAt, setLastDraftSavedAt] = useState<string | null>(null);
   const [draftPrompt, setDraftPrompt] = useState<DraftPrompt | null>(null);
   const [conflict, setConflict] = useState(false);
+  // ロック状態と保存エラーは元々ストアへ直書きしていたが、非アクティブタブから書き込むと
+  // アクティブタブ側の表示を破壊するのでローカル state を経由し、useEffect で active 時のみ同期する
+  const [lockedPath, setLockedPathLocal] = useState<string | null>(null);
+  const [saveError, setSaveErrorLocal] = useState(false);
 
   const contentRef = useRef<{ body: string; tags: string[] }>({ body: '', tags: [] });
   const optionsRef = useRef(options);
@@ -104,9 +113,23 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
   dirtyRef.current = dirty;
   const savingRef = useRef(false);
 
-  useEffect(() => setStoreMode(mode), [mode, setStoreMode]);
-  useEffect(() => setStoreDirty(dirty), [dirty, setStoreDirty]);
-  useEffect(() => setStoreLastDraftSavedAt(lastDraftSavedAt), [lastDraftSavedAt, setStoreLastDraftSavedAt]);
+  // active 時のみグローバルストアへ現在値を反映。active が false→true に変わったタイミングでも
+  // 依存に active が入っているので再実行され、切替後のタブが正しく StatusBar に載る。
+  useEffect(() => {
+    if (active) setStoreMode(mode);
+  }, [mode, active, setStoreMode]);
+  useEffect(() => {
+    if (active) setStoreDirty(dirty);
+  }, [dirty, active, setStoreDirty]);
+  useEffect(() => {
+    if (active) setStoreLastDraftSavedAt(lastDraftSavedAt);
+  }, [lastDraftSavedAt, active, setStoreLastDraftSavedAt]);
+  useEffect(() => {
+    if (active) setStoreLockedPath(lockedPath);
+  }, [lockedPath, active, setStoreLockedPath]);
+  useEffect(() => {
+    if (active) setStoreSaveError(saveError);
+  }, [saveError, active, setStoreSaveError]);
 
   const stopEditingLocally = useCallback(() => {
     setMode('view');
@@ -114,9 +137,9 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     setDraftPrompt(null);
     setLastDraftSavedAt(null);
     setConflict(false);
-    setStoreLockedPath(null);
-    setStoreSaveError(false);
-  }, [setStoreLockedPath, setStoreSaveError]);
+    setLockedPathLocal(null);
+    setSaveErrorLocal(false);
+  }, []);
 
   const startEditing = useCallback(
     async (initialBody: string, initialTags: string[]) => {
@@ -128,12 +151,15 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
         showToast('error', err instanceof ApiRequestError ? err.message : '編集を開始できませんでした');
         return;
       }
+      // ロックを取り直したので前回の失敗表示はここでクリアする
+      setSaveErrorLocal(false);
       contentRef.current = { body: initialBody, tags: initialTags };
       setDirty(false);
       setDraftPrompt(null);
       setConflict(false);
       setMode('edit');
-      setStoreLockedPath(path);
+      setLockedPathLocal(path);
+      // draft prompt などのローカル state だけ操作。ストア反映は useEffect が担う
 
       try {
         const { draft } = await getDraft(path);
@@ -144,7 +170,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
         // 下書き取得の失敗は編集開始自体をブロックしない
       }
     },
-    [showToast, setStoreLockedPath],
+    [showToast],
   );
 
   const updateBody = useCallback((body: string) => {
@@ -185,7 +211,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     if (!path || !baseUpdatedAt) return;
 
     savingRef.current = true;
-    setStoreSaveError(false); // 新しい保存試行時は前回のエラー表示をクリアする
+    setSaveErrorLocal(false); // 新しい保存試行時は前回のエラー表示をクリアする
     try {
       const { updatedAt } = await saveDoc({
         path,
@@ -228,12 +254,12 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
         setConflict(true);
         return;
       }
-      setStoreSaveError(true);
+      setSaveErrorLocal(true);
       showToast('error', err instanceof ApiRequestError ? err.message : '保存に失敗しました');
     } finally {
       savingRef.current = false;
     }
-  }, [queryClient, showToast, stopEditingLocally, setStoreSaveError]);
+  }, [queryClient, showToast, stopEditingLocally]);
 
   // 競合解消: 自分の編集内容を保持したまま、最新のupdatedAtを取得し直して再保存する
   const resolveConflictOverwrite = useCallback(async () => {

@@ -10,6 +10,7 @@ import { createEditorExtensions } from '../editor/markdown';
 import { parseMarkdownFragment } from '../editor/parse-fragment';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
+import { titleFromPath } from '../lib/doc-path';
 import { handleWikilinkClick } from '../lib/handle-wikilink-click';
 import { removeInlineTag, renameInlineTag } from '../lib/inline-tag-rewrite';
 import { saveBadge } from '../lib/save-badge';
@@ -29,11 +30,15 @@ import { TemplatePickerDialog } from './TemplatePickerDialog';
 interface DocViewProps {
   doc: DocResponse;
   currentUser: User;
-}
-
-function titleFromPath(path: string): string {
-  const base = path.split('/').pop() ?? path;
-  return base.replace(/\.md$/i, '');
+  // Epic #133 タブ導入: 非アクティブタブは表示上は hidden で、useEditStore への書き込みや
+  // ロック取得の自動起動を抑止する。dirty 状態はタブバー側に反映するためコールバックで通知する。
+  // 省略時は active=true 互換(直接 DocView を使うテストや demo で従来通り動く)
+  active?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+  // このタブの mode を親(DocTab)に返す。useDoc の refetchInterval を「自分のタブ mode」に
+  // 基づかせるために使う(グローバル useEditStore.mode は active タブのモードなので
+  // 背景 edit タブが誤って refetch されるのを防ぐ)
+  onModeChange?: (mode: 'view' | 'edit') => void;
 }
 
 function folderOfPath(path: string): string {
@@ -71,7 +76,13 @@ function formatUpdatedAt(iso: string): { date: string; time: string } {
 
 const IMAGE_MIME_PREFIX = 'image/';
 
-export function DocView({ doc, currentUser }: DocViewProps) {
+export function DocView({
+  doc,
+  currentUser,
+  active = true,
+  onDirtyChange,
+  onModeChange,
+}: DocViewProps) {
   const [linkDialogVisible, setLinkDialogVisible] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
   const [discardConfirmVisible, setDiscardConfirmVisible] = useState(false);
@@ -99,7 +110,24 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   const session = useEditingSession({
     path: doc.path,
     baseUpdatedAt: doc.updatedAt,
+    active,
   });
+
+  // タブバー側の dirty 表示(●)と DocTab 側の tab mode を追随させる。
+  // 初回マウントの通知はスキップする(M2): 再遷移して DocView が新規マウントされたとき、
+  // 前回の tab.dirty=true(下書きあり) を初期の session.dirty=false で誤消去しないため。
+  // 以降は実際の変化のみを通知する
+  const initialDirtyReportedRef = useRef(false);
+  useEffect(() => {
+    if (!initialDirtyReportedRef.current) {
+      initialDirtyReportedRef.current = true;
+      return;
+    }
+    onDirtyChange?.(session.dirty);
+  }, [session.dirty, onDirtyChange]);
+  useEffect(() => {
+    onModeChange?.(session.mode);
+  }, [session.mode, onModeChange]);
 
   // 拡張群はマウント時に1度だけ構築する(毎レンダーのsetOptions再設定を回避)
   const extensions = useMemo(
@@ -193,6 +221,9 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   sessionRef.current = session;
 
   useEffect(() => {
+    // 非アクティブタブは Ctrl+S / Ctrl+K を拾わない。5タブ開いてるときに1回の Ctrl+S で
+    // 5つの save() が飛ぶのを防ぐ
+    if (!active) return;
     function handleKeyDown(e: KeyboardEvent) {
       const current = sessionRef.current;
       if (current.mode !== 'edit' || e.isComposing) return;
@@ -211,15 +242,17 @@ export function DocView({ doc, currentUser }: DocViewProps) {
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showEditorChrome]);
+  }, [active, showEditorChrome]);
 
   const lockedByOther = doc.lock && doc.lock.userId !== currentUser.id ? doc.lock : null;
 
-  // StatusBar(AppShell)に他者ロック状況を伝える
+  // StatusBar(AppShell)に他者ロック状況を伝える。非アクティブタブが書き込むと
+  // アクティブタブの表示を壊すので、active のときだけ更新する
   useEffect(() => {
+    if (!active) return;
     setLockedByOtherName(lockedByOther?.displayName ?? null);
     return () => setLockedByOtherName(null);
-  }, [lockedByOther?.displayName, setLockedByOtherName]);
+  }, [active, lockedByOther?.displayName, setLockedByOtherName]);
 
   // #51: 文書を開いた瞬間に編集モードに入る。他者ロック中は閲覧モードにフォールバック。
   // 1つの doc.path に対しては1度だけ試行する(startEditing 失敗時のトースト連発を避ける)
@@ -230,11 +263,14 @@ export function DocView({ doc, currentUser }: DocViewProps) {
   docTagsRef.current = doc.tags;
   useEffect(() => {
     if (!editor) return;
+    // 非アクティブなタブは自動編集を試みない(バックグラウンドで不要なロックを取らない)。
+    // アクティブに切り替わったタイミングでこの効果が再実行され、初めて startEditing が走る
+    if (!active) return;
     if (lockedByOther) return;
     if (autoEditAttemptedRef.current === doc.path) return;
     autoEditAttemptedRef.current = doc.path;
     void sessionRef.current.startEditing(docBodyRef.current, docTagsRef.current);
-  }, [editor, lockedByOther, doc.path]);
+  }, [editor, active, lockedByOther, doc.path]);
 
   // #51 Opus C1: 閲覧モードへ落ちたときは doc.tags(サーバ側の真値)へリセット。
   // 編集中は pendingTags を独立に持ち、Rename/Remove/Add の連続操作でも stale 化しない
