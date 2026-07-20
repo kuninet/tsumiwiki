@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getAllOpenPathsFromState, useTabsStore } from '../stores/tabs';
 import { useToastStore } from '../stores/toast';
@@ -26,11 +27,16 @@ function Probe() {
   return null;
 }
 
-function render_() {
+function render_(initialUrl = '/') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <Probe />
+      <MemoryRouter initialEntries={[initialUrl]}>
+        <Routes>
+          <Route path="/" element={<Probe />} />
+          <Route path="doc/*" element={<Probe />} />
+        </Routes>
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -72,5 +78,15 @@ describe('useTabsBootCleanup', () => {
     render_();
     await new Promise((r) => setTimeout(r, 20));
     expect(useToastStore.getState().toast).toBeNull();
+  });
+
+  it('現 URL の path は tree に無くても閉じない(Opus D M1)', async () => {
+    useTabsStore.getState().openDoc('newly-typed.md', { pinned: true });
+    useTabsStore.getState().openDoc('deleted.md', { pinned: true });
+    stubFetch(['exists.md']);
+    render_('/doc/newly-typed.md');
+    await waitFor(() => {
+      expect(getAllOpenPathsFromState(useTabsStore.getState())).toEqual(['newly-typed.md']);
+    });
   });
 });

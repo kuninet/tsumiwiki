@@ -1,15 +1,21 @@
-import { type DragEvent as ReactDragEvent } from 'react';
+import { type DragEvent as ReactDragEvent, useRef, useState } from 'react';
 import { useMediaQuery } from '../hooks/use-media-query';
 import { useDragStore } from '../stores/drag';
 import { useLayoutRoot, useTabsStore, type PaneId } from '../stores/tabs';
 
-// Phase B2: タブドラッグ中に各ペインに重ねる 5 領域(左/右/上/下/中央)のドロップゾーン。
-// 中央 = そのペインへ移動(タブ移動)
-// 左右/上下 = そのペインを分割して片側に配置(新ペイン)
+// Phase B2 / D: タブドラッグ中に各ペインへ重ねるドロップゾーン。VSCode 風に
+// 「今のマウス位置に対応する 1 領域だけ」ハイライトする(動的プレビュー)。
 //
-// 「最大 2 ペイン」制約(Epic #133 で合意)を UI 層で守るため、
-// ルートが既に split の場合は 中央 のみ有効(L/R/T/B は非表示)にする。
-// data-model 側の splitOrMove は N 分割まで受けるが、UI からは 1 分割までしか作らない
+// 領域の判定:
+// - ペイン矩形を relative x, y に正規化(0-1)
+// - 端に近い方の距離を見て、その端(L/R/T/B)を選ぶ
+// - 中央から近ければ 'center'
+// - 端 vs 中央のしきい値は 25%(4 分割時の 1 スロット幅と揃える)
+//
+// 制約:
+// - ルートが既に split(=最大 2 ペイン)なら L/R/T/B は無効、center のみ
+// - source pane 上では center を無効(同ペイン内の reorder は TabBar が担当)
+// - モバイルでは分割 UI 自体を無効
 
 interface Props {
   paneId: PaneId;
@@ -17,83 +23,126 @@ interface Props {
 
 type Position = 'left' | 'right' | 'top' | 'bottom' | 'center';
 
+// 座標分類はテストしやすいよう pure 関数として export する。
+// jsdom は DragEvent の clientX/Y を安定に運ばないので、ここを直接 unit test する
+export function classifyPosition(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  allowSides: boolean,
+  allowCenter: boolean,
+): Position | null {
+  if (width <= 0 || height <= 0) return null;
+  const nx = x / width;
+  const ny = y / height;
+  if (allowSides) {
+    // 各端との距離
+    const dLeft = nx;
+    const dRight = 1 - nx;
+    const dTop = ny;
+    const dBottom = 1 - ny;
+    const minEdge = Math.min(dLeft, dRight, dTop, dBottom);
+    // 端に「近い」= しきい値 0.25 未満
+    if (minEdge < 0.25) {
+      if (minEdge === dLeft) return 'left';
+      if (minEdge === dRight) return 'right';
+      if (minEdge === dTop) return 'top';
+      if (minEdge === dBottom) return 'bottom';
+    }
+  }
+  return allowCenter ? 'center' : null;
+}
+
+function regionStyle(pos: Position): React.CSSProperties {
+  switch (pos) {
+    case 'left':
+      return { left: 0, top: 0, width: '50%', height: '100%' };
+    case 'right':
+      return { right: 0, top: 0, width: '50%', height: '100%' };
+    case 'top':
+      return { left: 0, top: 0, width: '100%', height: '50%' };
+    case 'bottom':
+      return { left: 0, bottom: 0, width: '100%', height: '50%' };
+    case 'center':
+      return { inset: 0 };
+  }
+}
+
 export function DropZoneOverlay({ paneId }: Props) {
   const draggingPath = useDragStore((s) => s.draggingPath);
   const sourcePaneId = useDragStore((s) => s.sourcePaneId);
   const endDrag = useDragStore((s) => s.end);
   const splitOrMove = useTabsStore((s) => s.splitOrMove);
   const root = useLayoutRoot();
-  // Phase D(#139): モバイル(狭幅)では分割 UI 自体を無効にするので DropZone も出さない
   const isMobile = useMediaQuery('(max-width: 767px)');
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [currentPos, setCurrentPos] = useState<Position | null>(null);
 
   if (isMobile) return null;
   if (!draggingPath) return null;
 
   const isRootSplit = root.kind === 'split';
+  const isSourcePane = sourcePaneId === paneId;
+  const allowSides = !isRootSplit;
+  // source ペイン上で center はカバーしない(reorder は TabBar が担う)
+  const allowCenter = !isSourcePane;
 
-  // 同ペイン内 D&D は TabBar 側で reorder として扱うので overlay は出さない(誤発動防止)
-  if (sourcePaneId === paneId) return null;
+  // ドラッグ元と対象が同ペインで、split もできない設定なら何もハイライトしない
+  if (!allowSides && !allowCenter) return null;
 
-  function handleDrop(position: Position) {
-    return (e: ReactDragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!draggingPath) return;
-      splitOrMove(draggingPath, paneId, position);
-      endDrag();
-    };
-  }
-
-  function handleOver(e: ReactDragEvent) {
+  function handleDragOver(e: ReactDragEvent<HTMLDivElement>) {
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const pos = classifyPosition(
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+      rect.width,
+      rect.height,
+      allowSides,
+      allowCenter,
+    );
+    if (pos !== currentPos) setCurrentPos(pos);
   }
 
-  // 5 領域の配置(絶対配置)。「最大 2 ペイン」で既に split なら中央のみ
+  function handleDragLeave(e: ReactDragEvent<HTMLDivElement>) {
+    // 子要素(preview 側)へ入っただけの leave は無視
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+    if (currentPos !== null) setCurrentPos(null);
+  }
+
+  function handleDrop(e: ReactDragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!draggingPath || !currentPos) {
+      endDrag();
+      setCurrentPos(null);
+      return;
+    }
+    splitOrMove(draggingPath, paneId, currentPos);
+    endDrag();
+    setCurrentPos(null);
+  }
+
   return (
     <div
+      ref={containerRef}
       data-testid={`dropzones-${paneId}`}
-      className="pointer-events-none absolute inset-0 z-40"
-      aria-hidden="true"
+      className="absolute inset-0 z-40"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
-      {!isRootSplit && (
-        <>
-          <div
-            data-testid={`dropzone-${paneId}-left`}
-            className="pointer-events-auto absolute left-0 top-0 h-full w-1/4 bg-accent/10 outline outline-2 outline-accent/40"
-            onDragOver={handleOver}
-            onDrop={handleDrop('left')}
-          />
-          <div
-            data-testid={`dropzone-${paneId}-right`}
-            className="pointer-events-auto absolute right-0 top-0 h-full w-1/4 bg-accent/10 outline outline-2 outline-accent/40"
-            onDragOver={handleOver}
-            onDrop={handleDrop('right')}
-          />
-          <div
-            data-testid={`dropzone-${paneId}-top`}
-            className="pointer-events-auto absolute left-1/4 top-0 h-1/4 w-1/2 bg-accent/10 outline outline-2 outline-accent/40"
-            onDragOver={handleOver}
-            onDrop={handleDrop('top')}
-          />
-          <div
-            data-testid={`dropzone-${paneId}-bottom`}
-            className="pointer-events-auto absolute bottom-0 left-1/4 h-1/4 w-1/2 bg-accent/10 outline outline-2 outline-accent/40"
-            onDragOver={handleOver}
-            onDrop={handleDrop('bottom')}
-          />
-        </>
+      {currentPos && (
+        <div
+          data-testid={`dropzone-${paneId}-${currentPos}`}
+          aria-hidden="true"
+          className="pointer-events-none absolute rounded border-2 border-dashed border-accent bg-accent/20 transition-all duration-100"
+          style={regionStyle(currentPos)}
+        />
       )}
-      <div
-        data-testid={`dropzone-${paneId}-center`}
-        className={
-          isRootSplit
-            ? 'pointer-events-auto absolute inset-0 bg-accent/10 outline outline-2 outline-accent/40'
-            : 'pointer-events-auto absolute left-1/4 top-1/4 h-1/2 w-1/2 bg-accent/20 outline outline-2 outline-accent/60'
-        }
-        onDragOver={handleOver}
-        onDrop={handleDrop('center')}
-      />
     </div>
   );
 }
