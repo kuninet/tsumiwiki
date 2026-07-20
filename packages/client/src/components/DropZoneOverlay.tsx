@@ -1,21 +1,26 @@
 import { type DragEvent as ReactDragEvent, useRef, useState } from 'react';
 import { useMediaQuery } from '../hooks/use-media-query';
 import { useDragStore } from '../stores/drag';
-import { useLayoutRoot, useTabsStore, type PaneId } from '../stores/tabs';
+import { useLeafCount, useTabsStore, type PaneId } from '../stores/tabs';
 
-// Phase B2 / D: タブドラッグ中に各ペインへ重ねるドロップゾーン。VSCode 風に
-// 「今のマウス位置に対応する 1 領域だけ」ハイライトする(動的プレビュー)。
+// Phase B2 / D / #147: タブドラッグ中に各ペインへ重ねるドロップゾーン。
+// VSCode 風の「今のマウス位置に対応する 1 領域だけ」を動的にハイライトする。
 //
 // 領域の判定:
 // - ペイン矩形を relative x, y に正規化(0-1)
-// - 端に近い方の距離を見て、その端(L/R/T/B)を選ぶ
-// - 中央から近ければ 'center'
-// - 端 vs 中央のしきい値は 25%(4 分割時の 1 スロット幅と揃える)
+// - 端に「近い」と判定するしきい値は 25%
+// - しきい値未満の端(L/R/T/B)を選ぶ
+// - 中央付近は 'center'
 //
 // 制約:
-// - ルートが既に split(=最大 2 ペイン)なら L/R/T/B は無効、center のみ
+// - 各 leaf ペインで自由に分割可能(#147 で N 分割対応)
+// - 「大量分割で画面が破綻する」ことを防ぐため、leaf 総数が MAX_PANES に達すると
+//   L/R/T/B は無効化して center(移動)のみ許容する
 // - source pane 上では center を無効(同ペイン内の reorder は TabBar が担当)
 // - モバイルでは分割 UI 自体を無効
+
+// 分割の上限。緩めのキャップ。もっと欲しくなったら緩める
+const MAX_PANES = 4;
 
 interface Props {
   paneId: PaneId;
@@ -37,13 +42,11 @@ export function classifyPosition(
   const nx = x / width;
   const ny = y / height;
   if (allowSides) {
-    // 各端との距離
     const dLeft = nx;
     const dRight = 1 - nx;
     const dTop = ny;
     const dBottom = 1 - ny;
     const minEdge = Math.min(dLeft, dRight, dTop, dBottom);
-    // 端に「近い」= しきい値 0.25 未満
     if (minEdge < 0.25) {
       if (minEdge === dLeft) return 'left';
       if (minEdge === dRight) return 'right';
@@ -74,7 +77,7 @@ export function DropZoneOverlay({ paneId }: Props) {
   const sourcePaneId = useDragStore((s) => s.sourcePaneId);
   const endDrag = useDragStore((s) => s.end);
   const splitOrMove = useTabsStore((s) => s.splitOrMove);
-  const root = useLayoutRoot();
+  const leafCount = useLeafCount();
   const isMobile = useMediaQuery('(max-width: 767px)');
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [currentPos, setCurrentPos] = useState<Position | null>(null);
@@ -82,13 +85,12 @@ export function DropZoneOverlay({ paneId }: Props) {
   if (isMobile) return null;
   if (!draggingPath) return null;
 
-  const isRootSplit = root.kind === 'split';
   const isSourcePane = sourcePaneId === paneId;
-  const allowSides = !isRootSplit;
-  // source ペイン上で center はカバーしない(reorder は TabBar が担う)
+  // 分割の可否は「現ペイン数 < MAX_PANES」で判定(source ペイン内での分割も含む)。
+  // ペイン数が上限に達している時は L/R/T/B を出さず center(移動)のみに縮退
+  const allowSides = leafCount < MAX_PANES;
   const allowCenter = !isSourcePane;
 
-  // ドラッグ元と対象が同ペインで、split もできない設定なら何もハイライトしない
   if (!allowSides && !allowCenter) return null;
 
   function handleDragOver(e: ReactDragEvent<HTMLDivElement>) {
@@ -108,7 +110,6 @@ export function DropZoneOverlay({ paneId }: Props) {
   }
 
   function handleDragLeave(e: ReactDragEvent<HTMLDivElement>) {
-    // 子要素(preview 側)へ入っただけの leave は無視
     if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
     if (currentPos !== null) setCurrentPos(null);
   }
@@ -146,3 +147,6 @@ export function DropZoneOverlay({ paneId }: Props) {
     </div>
   );
 }
+
+// テスト用に定数も参照可能にする
+export { MAX_PANES as _MAX_PANES };
