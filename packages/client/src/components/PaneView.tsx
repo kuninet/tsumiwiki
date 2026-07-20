@@ -1,4 +1,3 @@
-import { useParams } from 'react-router-dom';
 import { useTabsStore, type LeafPane } from '../stores/tabs';
 import { DocTab } from './DocTab';
 import { DropZoneOverlay } from './DropZoneOverlay';
@@ -19,7 +18,6 @@ interface Props {
 export function PaneView({ pane }: Props) {
   const activePaneId = useTabsStore((s) => s.activePaneId);
   const setActivePane = useTabsStore((s) => s.setActivePane);
-  const urlPath = useParams()['*'] ?? '';
   const isActivePane = pane.id === activePaneId;
 
   return (
@@ -50,8 +48,6 @@ export function PaneView({ pane }: Props) {
         })}
         <DropZoneOverlay paneId={pane.id} />
       </div>
-      {/* urlPath は現状 debug 目的で未使用(将来 URL/pane 整合の可視化に使う余地) */}
-      <span className="sr-only" data-testid={`pane-${pane.id}-url`}>{urlPath}</span>
     </div>
   );
 }
