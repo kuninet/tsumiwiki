@@ -44,7 +44,10 @@ export interface UseEditingSessionResult {
   startEditing: (initialBody: string, initialTags: string[]) => Promise<void>;
   updateBody: (body: string) => void;
   updateTags: (tags: string[]) => void;
-  save: () => Promise<void>;
+  // 保存試行後、真に成功して dirty が落ちたかどうかを返す。
+  // dirty=false のときの早期 return(何もしなくてよい)も true とみなす。
+  // CloseConfirmDialog が「保存 → 閉じる」を進めてよいか判定するのに使う
+  save: () => Promise<boolean>;
   cancelEditing: () => Promise<void>;
   restoreDraft: () => string;
   discardDraftPrompt: () => Promise<void>;
@@ -203,12 +206,12 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     });
   }, []);
 
-  const save = useCallback(async () => {
-    if (savingRef.current) return; // Ctrl+S連打等での多重送信を防ぐ
-    if (!dirtyRef.current) return; // 変更なしなら何もしない(Ctrl+Sの空打ちで無駄なリクエストを避ける)
+  const save = useCallback(async (): Promise<boolean> => {
+    if (savingRef.current) return false; // 多重送信は失敗扱い(呼び出し側でリトライ判断)
+    if (!dirtyRef.current) return true; // 変更なしは既に保存済みと同義。閉じ確認等でそのまま先へ進める
     const path = optionsRef.current.path;
     const baseUpdatedAt = optionsRef.current.baseUpdatedAt;
-    if (!path || !baseUpdatedAt) return;
+    if (!path || !baseUpdatedAt) return false;
 
     savingRef.current = true;
     setSaveErrorLocal(false); // 新しい保存試行時は前回のエラー表示をクリアする
@@ -242,20 +245,22 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
       queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
       showToast('success', '保存しました');
       optionsRef.current.onSaved?.(updatedAt);
+      return true;
     } catch (err) {
       if (err instanceof ApiRequestError && err.code === 'LOCK_EXPIRED') {
         showToast('error', err.message);
         stopEditingLocally();
-        return;
+        return false;
       }
       if (err instanceof ApiRequestError && err.code === 'CONFLICT') {
         // 編集内容は保持したまま、競合解消ダイアログの表示に切り替える
         showToast('error', err.message);
         setConflict(true);
-        return;
+        return false;
       }
       setSaveErrorLocal(true);
       showToast('error', err instanceof ApiRequestError ? err.message : '保存に失敗しました');
+      return false;
     } finally {
       savingRef.current = false;
     }

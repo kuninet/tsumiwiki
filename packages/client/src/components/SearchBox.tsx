@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useRecentDocs, useSearch } from '../api/search';
 import { useTags } from '../api/tags';
 import { docUrl } from '../lib/doc-path';
-import { confirmNavigationIfDirty } from '../lib/navigation-guard';
 import { sanitizeSnippet } from '../lib/sanitize-snippet';
 import { useUIStore } from '../stores/ui';
 
@@ -73,9 +72,7 @@ export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props,
   }
 
   function handleSelectDoc(path: string) {
-    if (!confirmNavigationIfDirty()) {
-      return;
-    }
+    // タブ化(#133)以降、別文書を開いても現在の dirty タブは残るので確認不要
     navigate(docUrl(path));
     closeAndReset();
   }

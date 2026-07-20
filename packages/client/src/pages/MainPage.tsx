@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useRecentDocs } from '../api/search';
+import { CloseConfirmDialog } from '../components/CloseConfirmDialog';
 import { DocTab } from '../components/DocTab';
 import { TabBar } from '../components/TabBar';
 import { useTabsUrlSync } from '../hooks/use-tabs-url-sync';
@@ -76,6 +77,8 @@ export function MainPage() {
           </div>
         )}
       </div>
+      {/* dirty タブ閉じ確認(Phase A-2)。pendingCloseId が null のときは自分で描画しない */}
+      <CloseConfirmDialog />
     </div>
   );
 }

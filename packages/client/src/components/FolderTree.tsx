@@ -326,9 +326,8 @@ export function FolderTree() {
   }
 
   function handleNavigateToDoc(path: string) {
-    if (!confirmNavigationIfDirty()) {
-      return;
-    }
+    // タブ化(#133 Phase A-1)以降、別文書を開いても現在のタブ(dirty 含む)は
+    // マウント保存されるので離脱確認は不要。draft はサーバー側で自動保存される。
     navigate(docUrl(path));
   }
 

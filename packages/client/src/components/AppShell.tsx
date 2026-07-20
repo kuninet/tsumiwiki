@@ -4,7 +4,6 @@ import { useCreateOrOpenTodayNote } from '../api/daily-notes';
 import { useApplyTemplate } from '../api/templates';
 import { useMediaQuery } from '../hooks/use-media-query';
 import { docUrl } from '../lib/doc-path';
-import { confirmNavigationIfDirty } from '../lib/navigation-guard';
 import { useUIStore } from '../stores/ui';
 import { FolderTree } from './FolderTree';
 import { Header } from './Header';
@@ -30,15 +29,14 @@ export function AppShell() {
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
 
   function handleOpenTodayNote() {
-    if (!confirmNavigationIfDirty()) return;
+    // タブ化(#133)以降、新規文書を開いても現在の dirty タブは残るので確認不要
     createOrOpenTodayNote.mutate(undefined, {
       onSuccess: (res) => navigate(docUrl(res.path)),
     });
   }
 
   function handleOpenTemplatePicker() {
-    // 未保存変更があるときは、作成後に強制遷移するのでここで確認しておく
-    if (!confirmNavigationIfDirty()) return;
+    // タブ化(#133)以降、新規文書を開いても現在の dirty タブは残るので確認不要
     setTemplatePickerOpen(true);
   }
 

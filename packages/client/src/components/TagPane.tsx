@@ -1,7 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useDocsByTags, useTags } from '../api/tags';
 import { docUrl } from '../lib/doc-path';
-import { confirmNavigationIfDirty } from '../lib/navigation-guard';
 import { useUIStore } from '../stores/ui';
 
 // タグペイン(設計04章4.2・デザインhandoff components.md)。複数選択でAND絞り込みし、
@@ -17,9 +16,7 @@ export function TagPane() {
   const navigate = useNavigate();
 
   function handleNavigateToDoc(path: string) {
-    if (!confirmNavigationIfDirty()) {
-      return;
-    }
+    // タブ化(#133)以降、別文書を開いても現在の dirty タブは残るので確認不要
     navigate(docUrl(path));
   }
 

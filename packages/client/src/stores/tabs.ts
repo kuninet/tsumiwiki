@@ -19,6 +19,9 @@ export interface Tab {
 interface TabsState {
   tabs: Tab[];
   activeId: string | null;
+  // Phase A-2: dirty タブの閉じ確認中に「どのタブを閉じようとしているか」を保持する。
+  // 非 null の間 CloseConfirmDialog が表示される
+  pendingCloseId: string | null;
 
   // 文書を開く。preview を再利用/新規作成する。activate=false で背景タブ化も可能(将来用)。
   // 既に開かれていれば activate だけ行う(kind は保持)
@@ -30,8 +33,28 @@ interface TabsState {
   // プレビューを固定タブへ昇格(ダブルクリック等のエントリ)
   promoteToPinned: (path: string) => void;
 
+  // 固定→プレビューに戻す(明示 unpin。dirty のときは preview に戻しても上書きされないので実質固定のまま)
+  unpin: (path: string) => void;
+
   // dirty フラグ更新。true にすると同時に kind='pinned' に昇格する
   markDirty: (path: string, dirty: boolean) => void;
+
+  // タブを閉じる。アクティブタブが閉じられたら隣(右→左)を新アクティブにする
+  closeTab: (path: string) => void;
+
+  // Phase A-2: 「他をすべて閉じる」「右側をすべて閉じる」「すべて閉じる」
+  // dirty のタブは caller 側で確認済み(または明示的に含めない)ことを想定するが、
+  // ここでは呼ばれたものを機械的に閉じる。UI 層で confirm を出す
+  closeOthers: (keepPath: string) => void;
+  closeToRight: (fromPath: string) => void;
+  closeAll: () => void;
+
+  // 同一ペイン内でのタブ並べ替え(D&D 実装用)。範囲外の index は無視
+  reorder: (fromIndex: number, toIndex: number) => void;
+
+  // dirty タブ閉じ確認ダイアログの制御
+  requestClose: (path: string) => void;
+  cancelClose: () => void;
 
   // 全タブ破棄(テスト用)
   reset: () => void;
@@ -45,13 +68,13 @@ function findReplaceablePreview(tabs: Tab[]): Tab | null {
 export const useTabsStore = create<TabsState>((set) => ({
   tabs: [],
   activeId: null,
+  pendingCloseId: null,
 
   openDoc: (path, opts) => {
     const activate = opts?.activate !== false;
     set((s) => {
       const existing = s.tabs.find((t) => t.path === path);
       if (existing) {
-        // 既存タブがあればアクティブにするだけ。opts.pinned=true なら preview→pinned に昇格する
         const nextTabs = opts?.pinned && existing.kind === 'preview'
           ? s.tabs.map((t) => (t.path === path ? { ...t, kind: 'pinned' as const } : t))
           : s.tabs;
@@ -61,8 +84,6 @@ export const useTabsStore = create<TabsState>((set) => ({
         };
       }
 
-      // 新規タブ。既存の preview を置換するのが基本(閲覧タブが際限なく増えないため)。
-      // ただし明示的に pinned で開かれた場合、または置換候補が無ければ末尾追加
       const preview = opts?.pinned ? null : findReplaceablePreview(s.tabs);
       const newTab: Tab = { path, kind: opts?.pinned ? 'pinned' : 'preview', dirty: false };
 
@@ -87,6 +108,12 @@ export const useTabsStore = create<TabsState>((set) => ({
     }));
   },
 
+  unpin: (path) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) => (t.path === path ? { ...t, kind: 'preview' as const } : t)),
+    }));
+  },
+
   markDirty: (path, dirty) => {
     set((s) => {
       const idx = s.tabs.findIndex((t) => t.path === path);
@@ -107,5 +134,76 @@ export const useTabsStore = create<TabsState>((set) => ({
     });
   },
 
-  reset: () => set({ tabs: [], activeId: null }),
+  closeTab: (path) => {
+    set((s) => {
+      const idx = s.tabs.findIndex((t) => t.path === path);
+      if (idx === -1) return {};
+      const nextTabs = [...s.tabs.slice(0, idx), ...s.tabs.slice(idx + 1)];
+      const wasActive = s.activeId === path;
+      let nextActive = s.activeId;
+      if (wasActive) {
+        // 右側があれば右側の先頭を、無ければ左側の末尾を新アクティブに。両方無ければ null
+        nextActive = nextTabs[idx]?.path ?? nextTabs[idx - 1]?.path ?? null;
+      }
+      // 閉じたタブが pendingCloseId 対象なら pendingCloseId もクリア
+      const nextPending = s.pendingCloseId === path ? null : s.pendingCloseId;
+      return { tabs: nextTabs, activeId: nextActive, pendingCloseId: nextPending };
+    });
+  },
+
+  closeOthers: (keepPath) => {
+    set((s) => {
+      const kept = s.tabs.find((t) => t.path === keepPath);
+      if (!kept) return {};
+      // pending が残す側でなければクリア(keepPath なら維持)
+      return {
+        tabs: [kept],
+        activeId: keepPath,
+        pendingCloseId: s.pendingCloseId === keepPath ? keepPath : null,
+      };
+    });
+  },
+
+  closeToRight: (fromPath) => {
+    set((s) => {
+      const idx = s.tabs.findIndex((t) => t.path === fromPath);
+      if (idx === -1) return {};
+      const nextTabs = s.tabs.slice(0, idx + 1);
+      // active が閉じた範囲にあれば基準の fromPath をアクティブに
+      const activeStillOpen = nextTabs.some((t) => t.path === s.activeId);
+      const pendingStillOpen = s.pendingCloseId
+        ? nextTabs.some((t) => t.path === s.pendingCloseId)
+        : false;
+      return {
+        tabs: nextTabs,
+        activeId: activeStillOpen ? s.activeId : fromPath,
+        pendingCloseId: pendingStillOpen ? s.pendingCloseId : null,
+      };
+    });
+  },
+
+  closeAll: () => set({ tabs: [], activeId: null, pendingCloseId: null }),
+
+  reorder: (fromIndex, toIndex) => {
+    set((s) => {
+      if (
+        fromIndex < 0 ||
+        fromIndex >= s.tabs.length ||
+        toIndex < 0 ||
+        toIndex >= s.tabs.length ||
+        fromIndex === toIndex
+      ) {
+        return {};
+      }
+      const nextTabs = [...s.tabs];
+      const [moved] = nextTabs.splice(fromIndex, 1);
+      nextTabs.splice(toIndex, 0, moved);
+      return { tabs: nextTabs };
+    });
+  },
+
+  requestClose: (path) => set({ pendingCloseId: path }),
+  cancelClose: () => set({ pendingCloseId: null }),
+
+  reset: () => set({ tabs: [], activeId: null, pendingCloseId: null }),
 }));
