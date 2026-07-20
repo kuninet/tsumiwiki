@@ -128,6 +128,28 @@ export function FolderTree() {
   const [lastClickedPath, setLastClickedPath] = useState<string | null>(null);
   // #152: インラインリネーム対象パス。null なら通常表示、非 null なら該当行を input に置換
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  // Opus #152 レビュー M1: rename 終了後にツリー行にフォーカスを戻すため、
+  // 「直前の renamingPath / 復帰先候補 path(commit 成功で移動後の新 path)」を追跡する
+  const prevRenamingRef = useRef<string | null>(null);
+  const focusAfterRenameRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevRenamingRef.current;
+    prevRenamingRef.current = renamingPath;
+    if (prev && !renamingPath) {
+      // rename 終了。tree が非同期に更新されるまで path が変わっている可能性あり。
+      // 新 path(focusAfterRenameRef)→ 旧 path の順で 2 tick 試して、最初に見つかった
+      // 行に focus を戻す。どちらも取れなければあきらめる(実害なしで矢印キーで戻せる)
+      const newPath = focusAfterRenameRef.current;
+      focusAfterRenameRef.current = null;
+      const tryFocus = () => {
+        const target = (newPath && rowRefs.current.get(newPath)) || rowRefs.current.get(prev);
+        if (target) target.focus();
+      };
+      requestAnimationFrame(tryFocus);
+      // 2 tick 目にも試す(tree refetch 完了後に新 path 行が出現する場合)
+      setTimeout(tryFocus, 60);
+    }
+  }, [renamingPath]);
   // #82 fix-forward: 新規フォルダにまとめる操作の in-flight ロック(二重発火防止)
   const isGroupingRef = useRef(false);
 
@@ -273,13 +295,21 @@ export function FolderTree() {
   function commitInlineRename(node: TreeNode, newValue: string) {
     setRenamingPath(null);
     const trimmed = newValue.trim();
-    if (!trimmed) return; // 空はキャンセル扱い
+    if (!trimmed) return; // 空はキャンセル扱い(focus は元 path に戻る)
     if (node.type === 'doc') {
-      const currentTitle = node.title;
-      if (trimmed === currentTitle) return; // 変更なし
-      performRenameDoc(node.path, parentOf(node.path), trimmed);
+      if (trimmed === node.title) return; // 変更なし → focus は元 path
+      // rename 後の新 path(親フォルダ + 新タイトル + .md)を focus 復帰先候補にする。
+      // サーバの sanitizeTitle で変わる可能性があるが、その場合は new path が存在せず
+      // rowRefs から取れないので何もフォーカスしない(実害は限定的)
+      const folder = parentOf(node.path);
+      const newPath = folder ? `${folder}/${trimmed}.md` : `${trimmed}.md`;
+      focusAfterRenameRef.current = newPath;
+      performRenameDoc(node.path, folder, trimmed);
     } else {
       if (trimmed === node.name) return;
+      const folder = parentOf(node.path);
+      const newPath = folder ? `${folder}/${trimmed}` : trimmed;
+      focusAfterRenameRef.current = newPath;
       performRenameFolder(node.path, trimmed);
     }
   }
@@ -369,6 +399,9 @@ export function FolderTree() {
   function handleNavigateToDoc(path: string) {
     // タブ化(#133 Phase A-1)以降、別文書を開いても現在のタブ(dirty 含む)は
     // マウント保存されるので離脱確認は不要。draft はサーバー側で自動保存される。
+    // Opus #152 レビュー M2: 同 URL への navigate は history が無駄に積まれ
+    // 「戻る」で 2 回押しが必要になる(ダブルクリックで顕在化)。同じ path なら skip
+    if (currentPathRef.current === path) return;
     navigate(docUrl(path));
   }
 
@@ -1033,8 +1066,8 @@ function TreeItem({
         style={indent}
         onClick={(e) => onRowClick(e, node)}
         onDoubleClick={(e) => {
-          // #152: ダブルクリックで inline リネーム開始。ドラッグ D&D と区別するため
-          // preventDefault は不要(dblclick は 2 度の click 後に発火)
+          // #152: ダブルクリックで inline リネーム開始
+          // (祖先に dblclick リスナは無いので stopPropagation は保険レベル)
           e.stopPropagation();
           onStartInlineRename(node.path);
         }}
@@ -1084,10 +1117,12 @@ function InlineRenameInput({ initialValue, onCommit, onCancel }: InlineRenameInp
       ref={inputRef}
       type="text"
       value={value}
+      aria-label="新しい名前"
       onChange={(e) => setValue(e.target.value)}
       onKeyDown={(e) => {
-        // React の SyntheticKeyboardEvent には isComposing が無いので native event 経由で判定
-        if (e.nativeEvent.isComposing) return;
+        // Opus #152 軽微 3: React の SyntheticKeyboardEvent には isComposing が無い。
+        // Safari は変換確定 Enter で isComposing=false / keyCode=229 になるので併せて判定
+        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
         if (e.key === 'Enter') {
           e.preventDefault();
           commit();
