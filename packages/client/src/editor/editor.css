@@ -290,6 +290,9 @@
   background: none;
   border: none;
   cursor: pointer;
+  /* Opus #151 軽微: sticky ヘッダに item が隠れないよう scroll-margin-top を確保
+     (scrollIntoView({block:'nearest'}) がヘッダ分オフセットしてくれる) */
+  scroll-margin-top: 2em;
 }
 
 .wikilink-suggestion-item.is-selected {
@@ -306,7 +309,8 @@
   color: var(--color-ink-faint);
 }
 
-/* #151: ポップアップ上部のヒント行(現在の絞り込み query + キー操作の案内) */
+/* #151: ポップアップ上部のヒント行(現在の絞り込み query + キー操作の案内)
+   狭幅 popup で折り返しを避けるため 1 行に収めて溢れは省略記号 */
 .wikilink-suggestion-header {
   position: sticky;
   top: 0;
@@ -316,4 +320,7 @@
   color: var(--color-ink-faint);
   background: var(--color-panel);
   border-bottom: 1px solid var(--color-line);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
