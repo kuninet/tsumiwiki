@@ -56,6 +56,40 @@ describe('WikilinkSuggestion', () => {
     editor.destroy();
   });
 
+  it('#151: ポップアップ内スクロールでは popup が閉じない、外側スクロールでは閉じる', async () => {
+    const editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false, getWikilinkDocs: () => DOCS }),
+      content: '',
+    });
+    editor.commands.insertContent('[[');
+    await flushMicrotasks();
+    const popup = document.querySelector('.wikilink-suggestion-popup') as HTMLElement;
+    expect(popup).toBeTruthy();
+
+    // popup 内部の scroll イベントは無視される(popup 存続)
+    const item = popup.querySelector('.wikilink-suggestion-item')!;
+    item.dispatchEvent(new Event('scroll', { bubbles: true }));
+    expect(document.querySelector('.wikilink-suggestion-popup')).toBeTruthy();
+
+    // ドキュメント本体の scroll では閉じる
+    document.body.dispatchEvent(new Event('scroll', { bubbles: true }));
+    expect(document.querySelector('.wikilink-suggestion-popup')).toBeNull();
+
+    editor.destroy();
+  });
+
+  it('#151: ヘッダに現在の絞り込み query が表示される', async () => {
+    const editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false, getWikilinkDocs: () => DOCS }),
+      content: '',
+    });
+    editor.commands.insertContent('[[ペ');
+    await flushMicrotasks();
+    const header = document.querySelector('.wikilink-suggestion-header');
+    expect(header?.textContent).toContain('絞り込み: ペ');
+    editor.destroy();
+  });
+
   it('Escapeでポップアップが閉じる', async () => {
     const editor = new Editor({
       extensions: createEditorExtensions({ nodeViews: false, getWikilinkDocs: () => DOCS }),

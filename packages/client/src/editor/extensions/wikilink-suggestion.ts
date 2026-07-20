@@ -22,18 +22,40 @@ function targetFromDocPath(path: string): string {
 function createRenderer() {
   let popupEl: HTMLDivElement | null = null;
 
-  // スクロールで位置がずれるため、検知したらポップアップを閉じる
-  const closeOnScroll = () => {
-    popupEl?.remove();
+  // #151: ポップアップ内のスクロールで自身が閉じないよう、event.target が popup 内かで
+  // 判定する。popup 外(ドキュメント本体、記事のスクロール等)なら位置ずれ防止で閉じる
+  const closeOnScroll = (e: Event) => {
+    if (!popupEl) return;
+    const t = e.target as Node | null;
+    if (t && popupEl.contains(t)) return; // popup 内スクロールは無視
+    popupEl.remove();
     popupEl = null;
   };
   let selectedIndex = 0;
   let currentItems: DocSummary[] = [];
   let currentCommand: ((doc: DocSummary) => void) | null = null;
+  let currentQuery = '';
+
+  function scrollSelectedIntoView() {
+    if (!popupEl) return;
+    const el = popupEl.querySelector<HTMLElement>('.wikilink-suggestion-item.is-selected');
+    // jsdom などで scrollIntoView が無い環境を想定してガード。
+    // block: 'nearest' で見えていれば動かさず、隠れている場合だけ最小移動でスクロール
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  }
 
   function renderList() {
     if (!popupEl) return;
     popupEl.innerHTML = '';
+    // ヘッダ: discoverability のため、現在の絞り込み query とキー操作ヒントを常に出す
+    const header = document.createElement('div');
+    header.className = 'wikilink-suggestion-header';
+    header.textContent = currentQuery
+      ? `絞り込み: ${currentQuery}(↑↓ で選択 / Enter で確定 / Esc で閉じる)`
+      : '文字入力で絞り込み(↑↓ で選択 / Enter で確定 / Esc で閉じる)';
+    popupEl.appendChild(header);
     if (currentItems.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'wikilink-suggestion-empty';
@@ -53,6 +75,7 @@ function createRenderer() {
       });
       popupEl!.appendChild(button);
     });
+    scrollSelectedIntoView();
   }
 
   function position(rect: DOMRect | null) {
@@ -65,6 +88,7 @@ function createRenderer() {
     selectedIndex = 0;
     currentItems = props.items;
     currentCommand = (item) => props.command(item);
+    currentQuery = props.query ?? '';
     renderList();
     position(props.clientRect?.() ?? null);
   }
@@ -98,6 +122,27 @@ function createRenderer() {
       }
       if (props.event.key === 'ArrowUp') {
         if (count > 0) selectedIndex = (selectedIndex - 1 + count) % count;
+        renderList();
+        return true;
+      }
+      // PageDown/PageUp で 5 件ずつジャンプ(#151: 長いリストで便利)
+      if (props.event.key === 'PageDown') {
+        if (count > 0) selectedIndex = Math.min(count - 1, selectedIndex + 5);
+        renderList();
+        return true;
+      }
+      if (props.event.key === 'PageUp') {
+        if (count > 0) selectedIndex = Math.max(0, selectedIndex - 5);
+        renderList();
+        return true;
+      }
+      if (props.event.key === 'Home') {
+        if (count > 0) selectedIndex = 0;
+        renderList();
+        return true;
+      }
+      if (props.event.key === 'End') {
+        if (count > 0) selectedIndex = count - 1;
         renderList();
         return true;
       }
@@ -142,7 +187,9 @@ export const WikilinkSuggestion = Extension.create<WikilinkSuggestionOptions>({
                   titleFromDocPath(d.path).toLowerCase().includes(q) || d.path.toLowerCase().includes(q),
               )
             : docs;
-          return matched.slice(0, 20);
+          // #151: 上限を 20 → 200 に緩めた(以前は 20 件を超えると出ないので絞り込みが必須になっていた)。
+          // 200 でも popup 側の max-height + overflow-y でスクロール可能
+          return matched.slice(0, 200);
         },
         command: ({ editor, range, props }) => {
           editor

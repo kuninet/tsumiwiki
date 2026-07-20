@@ -117,14 +117,23 @@ describe('FolderTree', () => {
     expect(await screen.findByText('子文書')).toBeTruthy();
   });
 
-  it('F2キーでリネームダイアログが開く', async () => {
+  it('F2キーでインラインリネーム入力欄が表示される(#152)', async () => {
     renderFolderTree();
     const docRow = (await screen.findByText('ルート文書')).closest('button')!;
     docRow.focus();
 
     fireEvent.keyDown(docRow, { key: 'F2' });
 
-    expect(await screen.findByText('文書のリネーム')).toBeTruthy();
+    expect(await screen.findByTestId('inline-rename-input')).toBeTruthy();
+  });
+
+  it('ダブルクリックでインラインリネーム入力欄が表示される(#152)', async () => {
+    renderFolderTree();
+    const docRow = (await screen.findByText('ルート文書')).closest('button')!;
+
+    fireEvent.doubleClick(docRow);
+
+    expect(await screen.findByTestId('inline-rename-input')).toBeTruthy();
   });
 
   it('Deleteキーで削除確認ダイアログが開く', async () => {
