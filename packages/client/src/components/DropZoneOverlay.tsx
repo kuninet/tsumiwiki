@@ -1,4 +1,5 @@
 import { type DragEvent as ReactDragEvent } from 'react';
+import { useMediaQuery } from '../hooks/use-media-query';
 import { useDragStore } from '../stores/drag';
 import { useLayoutRoot, useTabsStore, type PaneId } from '../stores/tabs';
 
@@ -22,7 +23,10 @@ export function DropZoneOverlay({ paneId }: Props) {
   const endDrag = useDragStore((s) => s.end);
   const splitOrMove = useTabsStore((s) => s.splitOrMove);
   const root = useLayoutRoot();
+  // Phase D(#139): モバイル(狭幅)では分割 UI 自体を無効にするので DropZone も出さない
+  const isMobile = useMediaQuery('(max-width: 767px)');
 
+  if (isMobile) return null;
   if (!draggingPath) return null;
 
   const isRootSplit = root.kind === 'split';

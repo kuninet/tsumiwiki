@@ -4,6 +4,8 @@ import { useCreateOrOpenTodayNote } from '../api/daily-notes';
 import { useApplyTemplate } from '../api/templates';
 import { useMediaQuery } from '../hooks/use-media-query';
 import { useNewDocShortcut } from '../hooks/use-new-doc-shortcut';
+import { useTabSwitchShortcut } from '../hooks/use-tab-switch-shortcut';
+import { useTabsBootCleanup } from '../hooks/use-tabs-boot-cleanup';
 import { docUrl } from '../lib/doc-path';
 import { useUIStore } from '../stores/ui';
 import { FolderTree } from './FolderTree';
@@ -26,6 +28,10 @@ export function AppShell() {
 
   // Ctrl+N / ⌘N グローバルショートカット(#137 Phase C-1)
   useNewDocShortcut();
+  // Ctrl+Tab / Ctrl+Shift+Tab(#139 Phase D)
+  useTabSwitchShortcut();
+  // 起動時のタブ復元後始末(#139 Phase D)
+  useTabsBootCleanup();
 
   const navigate = useNavigate();
   const createOrOpenTodayNote = useCreateOrOpenTodayNote();
