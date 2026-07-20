@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useDragStore } from '../stores/drag';
 import { useTabsStore } from '../stores/tabs';
-import { classifyPosition, DropZoneOverlay } from './DropZoneOverlay';
+import { classifyPosition, DropZoneOverlay, MAX_PANES } from './DropZoneOverlay';
 
 // jsdom の DragEvent は clientX/Y を安定に運ばないので、座標判定のロジックは
 // classifyPosition の pure 関数単体テストで担保する。
@@ -66,6 +66,36 @@ describe('DropZoneOverlay', () => {
     const zone = screen.getByTestId(`dropzones-${paneId}`);
     fireEvent.drop(zone);
     expect(useDragStore.getState().draggingPath).toBeNull();
+  });
+
+  it('root が既に split でも L/R/T/B は引き続き有効(#147 N 分割)', () => {
+    useTabsStore.getState().openDoc('a.md', { pinned: true });
+    useTabsStore.getState().openDoc('b.md', { pinned: true });
+    useTabsStore.getState().splitOrMove('a.md', useTabsStore.getState().activePaneId, 'right');
+    const root = useTabsStore.getState().root;
+    if (root.kind !== 'split' || root.a.kind !== 'leaf') throw new Error();
+    useDragStore.getState().start('b.md', 'other-pane');
+    const targetPaneId = root.a.id;
+    render(<DropZoneOverlay paneId={targetPaneId} />);
+    // data-allow-sides で allowSides の実状を検証(以前は isRootSplit で false 固定)
+    const overlay = screen.getByTestId(`dropzones-${targetPaneId}`);
+    expect(overlay.getAttribute('data-allow-sides')).toBe('true');
+  });
+
+  it(`leaf 総数が上限(${MAX_PANES})に達したら L/R/T/B は無効化される`, () => {
+    // 上限までペインを作る
+    useTabsStore.getState().openDoc('a.md', { pinned: true });
+    for (let i = 1; i < MAX_PANES; i++) {
+      const path = `p${i}.md`;
+      useTabsStore.getState().openDoc(path, { pinned: true });
+      useTabsStore.getState().splitOrMove(path, useTabsStore.getState().activePaneId, 'right');
+    }
+    useDragStore.getState().start('a.md', 'other-pane');
+    const paneId = useTabsStore.getState().activePaneId;
+    render(<DropZoneOverlay paneId={paneId} />);
+    const overlay = screen.getByTestId(`dropzones-${paneId}`);
+    expect(overlay.getAttribute('data-allow-sides')).toBe('false');
+    expect(overlay.getAttribute('data-allow-center')).toBe('true');
   });
 
   it('モバイル判定で早期 return(matchMedia を stub)', () => {

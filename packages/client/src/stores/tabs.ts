@@ -549,6 +549,11 @@ export function useLayoutRoot(): PaneNode {
   return useTabsStore((s) => s.root);
 }
 
+/** 現在のペイン数(leaf の総数)。N 分割の UX ガード用 */
+export function useLeafCount(): number {
+  return useTabsStore((s) => allLeaves(s.root).length);
+}
+
 /** ヘルパー: 全 leaf の全 tab の path 集合。
  *  注意: 内部で新配列を返すので useTabsStore の selector に直接渡すと
  *  useSyncExternalStore の同値性ガード違反(getSnapshot 毎回別参照)で無限ループする。

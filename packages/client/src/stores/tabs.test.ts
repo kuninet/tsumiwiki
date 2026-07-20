@@ -341,6 +341,63 @@ describe('tabsストア', () => {
     });
   });
 
+  // #147: N 分割(分割済み leaf をさらに分割 / 樹形の妥当性)
+  describe('N 分割の樹形', () => {
+    it('2 分割の片ペインでさらに分割すると入れ子 split が作られる(3 ペイン)', () => {
+      const { openDoc, splitOrMove } = useTabsStore.getState();
+      // 2 ペインを作る:元 pane に a/b、右分割で b を新 leaf へ
+      openDoc('a.md', { pinned: true });
+      openDoc('b.md', { pinned: true });
+      splitOrMove('b.md', useTabsStore.getState().activePaneId, 'right');
+      // 元 pane を再取得(a.md がいる方)
+      const paneA = _testHelpers.findLeafByPath(useTabsStore.getState().root, 'a.md');
+      if (!paneA) throw new Error('paneA not found');
+      // paneA に 2 タブが必要 → もう 1 枚追加
+      useTabsStore.getState().setActive('a.md');
+      openDoc('c.md', { pinned: true });
+      const paneAWithTwo = _testHelpers.findLeafByPath(useTabsStore.getState().root, 'a.md');
+      if (!paneAWithTwo) throw new Error();
+      // paneA の中で c を下に分割 → 入れ子 split(3 ペイン)
+      splitOrMove('c.md', paneAWithTwo.id, 'bottom');
+      const s = useTabsStore.getState();
+      // ルートは split(row): a側 は入れ子split(column, 上=a.md, 下=c.md)、b側 は b.md 単独
+      expect(s.root.kind).toBe('split');
+      if (s.root.kind !== 'split') throw new Error();
+      expect(s.root.dir).toBe('row');
+      // どちらか(a か b)が入れ子 split で dir='column' になる
+      const inner = s.root.a.kind === 'split' ? s.root.a : s.root.b.kind === 'split' ? s.root.b : null;
+      expect(inner).not.toBeNull();
+      if (!inner || inner.kind !== 'split') throw new Error();
+      expect(inner.dir).toBe('column');
+      // bottom position → 新 leaf は b 側(inner.b = 新 leaf with c.md)
+      if (inner.a.kind !== 'leaf' || inner.b.kind !== 'leaf') throw new Error();
+      expect(inner.a.tabs.map((t) => t.path)).toEqual(['a.md']);
+      expect(inner.b.tabs.map((t) => t.path)).toEqual(['c.md']);
+    });
+
+    it('3 ペインで center 移動して source が空になれば pruneEmpty で 2 ペインに戻る', () => {
+      const { openDoc, splitOrMove } = useTabsStore.getState();
+      openDoc('a.md', { pinned: true });
+      openDoc('b.md', { pinned: true });
+      splitOrMove('b.md', useTabsStore.getState().activePaneId, 'right');
+      const paneA = _testHelpers.findLeafByPath(useTabsStore.getState().root, 'a.md');
+      if (!paneA) throw new Error();
+      useTabsStore.getState().setActive('a.md');
+      openDoc('c.md', { pinned: true });
+      const paneAWithTwo = _testHelpers.findLeafByPath(useTabsStore.getState().root, 'a.md');
+      if (!paneAWithTwo) throw new Error();
+      splitOrMove('c.md', paneAWithTwo.id, 'bottom');
+      // ここで 3 ペイン。b の pane に c.md を center 移動 → c の pane が空 → prune で 2 ペインに
+      const before = _testHelpers.allLeaves(useTabsStore.getState().root).length;
+      expect(before).toBe(3);
+      const paneB = _testHelpers.findLeafByPath(useTabsStore.getState().root, 'b.md');
+      if (!paneB) throw new Error();
+      splitOrMove('c.md', paneB.id, 'center');
+      const after = _testHelpers.allLeaves(useTabsStore.getState().root).length;
+      expect(after).toBe(2);
+    });
+  });
+
   describe('setPaneRatio', () => {
     it('分割の比率を更新する。範囲は 0.1〜0.9 にクランプ', () => {
       const { openDoc, splitOrMove, setPaneRatio } = useTabsStore.getState();
