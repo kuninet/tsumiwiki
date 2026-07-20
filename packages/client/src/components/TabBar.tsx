@@ -7,24 +7,26 @@ import {
 } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { docUrl, titleFromPath } from '../lib/doc-path';
+import { useDragStore } from '../stores/drag';
 import {
   getActivePaneActiveIdFromState,
   getActivePaneTabsFromState,
-  useActivePaneActiveId,
-  useActivePaneTabs,
   useTabsStore,
+  type LeafPane,
+  type PaneId,
 } from '../stores/tabs';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 
-// 編集/閲覧ペインのタブバー(Epic #133 / Phase A-1 + A-2)。
-// - preview タブは斜体で表示
-// - dirty タブは先頭に「●」を付与
-// - タブクリックでアクティブ切替。URL は同時に /doc/* へ追随させる
-// - タブをダブルクリックで pinned に昇格(preview の場合)
-// - 「×」ボタン・middle-click(button===1)・Ctrl+W(⌘W)で閉じる。dirty のときは
-//   CloseConfirmDialog(MainPage 常駐)で保存/破棄/キャンセルを確認する
+// 編集/閲覧ペインのタブバー(Epic #133 / Phase A-1 + A-2 + B2)。
+// - preview タブは斜体で表示 / dirty タブは先頭に「●」
+// - タブクリックでアクティブ切替 + そのペインを activePane に(URL は /doc/* へ追随)
+// - ダブルクリックで preview → pinned に昇格
+// - 「×」/ middle-click / Ctrl+W(⌘W)で閉じる。dirty は CloseConfirmDialog を経由
 // - 右クリックで「ピン留め/解除・他/右/全て閉じる」メニュー
-// - ネイティブ HTML5 D&D で同ペイン内タブを並べ替え(dnd-kit 依存を避けて軽く実装)
+// - HTML5 D&D: 同ペイン内は並べ替え、別ペインへは splitOrMove(DropZoneOverlay 側で受ける)
+//
+// Phase B2 でペイン単位化: paneId を省略すると活性ペイン相当(単一ペイン運用の後方互換)、
+// 明示すると当該ペインのタブを描画する
 
 interface CtxMenuState {
   x: number;
@@ -32,16 +34,27 @@ interface CtxMenuState {
   path: string;
 }
 
+interface Props {
+  paneId?: PaneId;
+}
+
 function isMac(): boolean {
   if (typeof navigator === 'undefined') return false;
   return /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 }
 
-export function TabBar() {
-  // Phase B: 単一ペインの UI は変えない。木構造から activePane の tabs/activeId を取り出して使う
-  const tabs = useActivePaneTabs();
-  const activeId = useActivePaneActiveId();
+export function TabBar({ paneId }: Props = {}) {
+  // paneId が渡された場合はそのペイン、なければ活性ペインを対象にする
+  const pane = useTabsStore((s) => {
+    const targetId = paneId ?? s.activePaneId;
+    return findLeafShallow(s.root, targetId);
+  });
+  const isActivePane = useTabsStore((s) => (paneId ?? s.activePaneId) === s.activePaneId);
+  const tabs = pane?.tabs ?? EMPTY_TABS;
+  const activeId = pane?.activeId ?? null;
+
   const setActive = useTabsStore((s) => s.setActive);
+  const setActivePane = useTabsStore((s) => s.setActivePane);
   const promoteToPinned = useTabsStore((s) => s.promoteToPinned);
   const unpin = useTabsStore((s) => s.unpin);
   const closeTab = useTabsStore((s) => s.closeTab);
@@ -50,19 +63,22 @@ export function TabBar() {
   const closeAll = useTabsStore((s) => s.closeAll);
   const requestClose = useTabsStore((s) => s.requestClose);
   const reorder = useTabsStore((s) => s.reorder);
+  const startDrag = useDragStore((s) => s.start);
+  const endDrag = useDragStore((s) => s.end);
   const navigate = useNavigate();
   const location = useLocation();
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
 
   function activateAndNavigate(path: string) {
-    if (activeId === path) return;
+    // クリックされたペインを activePane にしてから該当タブへ切替。
+    // setActive(path) 内でも activePaneId を該当ペインに合わせるので冗長だが、
+    // paneId が省略のときは setActive のみでよい
+    if (paneId) setActivePane(paneId);
     setActive(path);
-    navigate(docUrl(path));
+    if (window.location.pathname !== docUrl(path)) navigate(docUrl(path));
   }
 
-  // 閉じ操作後に「新しい activeId の URL」に navigate する。
-  // 「activeId が消えたら / に戻す」を含む。この関数を close 系操作の直後に必ず呼ぶ
   function navigateToActive() {
     const nextActive = getActivePaneActiveIdFromState(useTabsStore.getState());
     if (!nextActive) {
@@ -78,8 +94,6 @@ export function TabBar() {
     navigateToActive();
   }
 
-  // dirty なら確認ダイアログ、そうでなければ即閉じる。dirty タブが背景にあった場合は
-  // ダイアログを見せるためにまずアクティブへ移動する
   function requestOrClose(path: string) {
     const target = tabs.find((t) => t.path === path);
     if (!target) return;
@@ -91,28 +105,13 @@ export function TabBar() {
     }
   }
 
-  // 「activeId → URL 追随」の useEffect は意図的に持たない。
-  //
-  // 過去実装(あった時):useEffect(activeId, tabs.length, location.pathname) で
-  // activeId 変化を検知して navigate していたが、URL→store は useTabsUrlSync
-  // (useLayoutEffect)で一方向同期されているため、逆方向 effect と組み合わせると
-  // レンダー closure と store 更新タイミングのずれ(navigate 直後で store が
-  // まだ古い等)に、両 effect が互いに古い値をリカバーする navigate を交互に発行し、
-  // URL と store が無限に ping-pong した(Chrome の navigation throttle に引っ掛かる
-  // ほど高速に)。
-  //
-  // 代わりに、activeId を変える操作(閉じ・context menu 系)の呼び出し側で
-  // navigateToActive() を明示的に呼ぶ設計に統一した。
   const locationRef = useRef(location);
   locationRef.current = location;
-  // Ctrl+W ハンドラは effect 内で navigate を使いたい。1回登録の effect が
-  // 毎レンダー再登録しないよう ref 経由で参照する(Opus M3: window.history 直叩きを回避)
   const navigateRef = useRef(navigate);
   navigateRef.current = navigate;
 
-  // Ctrl+W(⌘W): アクティブタブを閉じる。ブラウザデフォルトのタブ閉じは preventDefault で
-  // 止められないケースがほとんど(Chrome など)。ここでの preventDefault は「効くかもしれない」
-  // 程度の期待値で、実運用は「試すだけ試す」実装。将来別ショートカット案を検討する余地あり。
+  // Ctrl+W(⌘W): 活性ペインのアクティブタブを閉じる。paneId 引数を持たない global listener
+  // なので常に「活性ペインの activeId」を参照する(ペインが分かれていても意図通り)
   useEffect(() => {
     function handler(e: KeyboardEvent) {
       if (e.isComposing) return;
@@ -121,17 +120,13 @@ export function TabBar() {
       const modOk = isMac() ? e.metaKey : e.ctrlKey;
       if (!(modOk && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'w')) return;
       e.preventDefault();
-      // path で tab を探す(活性ペインから)
-      const tabsNow = useTabsStore.getState();
-      // findLeaf 相当は store 内部関数なので、helper で活性ペインの tabs を取り出して探す
-      const activePaneTabs = getActivePaneTabsFromState(tabsNow);
+      const activePaneTabs = getActivePaneTabsFromState(useTabsStore.getState());
       const target = activePaneTabs.find((t) => t.path === activePath);
       if (!target) return;
       if (target.dirty) {
         useTabsStore.getState().requestClose(activePath);
       } else {
         useTabsStore.getState().closeTab(activePath);
-        // 閉じた結果 activeId が変わったら URL 追随。navigate は ref 経由で参照する
         const nextActive = getActivePaneActiveIdFromState(useTabsStore.getState());
         const desired = nextActive ? docUrl(nextActive) : '/';
         if (window.location.pathname !== desired) navigateRef.current(desired);
@@ -139,7 +134,6 @@ export function TabBar() {
     }
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-    // getState() だけ参照するので effect 自体は 1 回登録で十分
   }, []);
 
   if (tabs.length === 0) return null;
@@ -192,25 +186,25 @@ export function TabBar() {
   }
 
   function handleTabMouseDown(e: ReactMouseEvent, path: string) {
-    // middle click(auxclick も同じイベントだが preventDefault の効きが違う)で閉じる
     if (e.button === 1) {
       e.preventDefault();
       requestOrClose(path);
     }
   }
 
-  // ---- HTML5 D&D による並べ替え ----
-  function handleDragStart(e: ReactDragEvent, index: number) {
+  // ---- HTML5 D&D ----
+  function handleDragStart(e: ReactDragEvent, index: number, path: string) {
     setDragIndex(index);
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move';
-      // Firefox は setData がないとドラッグ開始しない
-      e.dataTransfer.setData('text/plain', String(index));
+      e.dataTransfer.setData('text/plain', path);
     }
+    // ペイン外 D&D を判定できるように、ドラッグ中の path と source pane を共有ストアに
+    if (pane) startDrag(path, pane.id);
   }
   function handleDragOver(e: ReactDragEvent) {
     if (dragIndex === null) return;
-    e.preventDefault(); // drop を許可するため必要
+    e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
   }
   function handleDrop(e: ReactDragEvent, toIndex: number) {
@@ -219,34 +213,42 @@ export function TabBar() {
     const dragged = tabs[dragIndex];
     if (dragged) reorder(dragged.path, toIndex);
     setDragIndex(null);
+    endDrag();
   }
   function handleDragEnd() {
     setDragIndex(null);
+    endDrag();
   }
+
+  const tabbarActiveClass = isActivePane ? '' : 'opacity-90';
 
   return (
     <>
       <div
         role="tablist"
         aria-label="文書タブ"
-        data-testid="tabbar"
-        className="flex flex-shrink-0 items-stretch overflow-x-auto border-b border-line bg-panel"
+        data-testid={paneId ? `tabbar-${paneId}` : 'tabbar'}
+        className={`flex flex-shrink-0 items-stretch overflow-x-auto border-b border-line bg-panel ${tabbarActiveClass}`}
+        onMouseDown={() => {
+          // ペイン内をクリックしたらそのペインを activePane にする(TabBar のクリックでも同様)
+          if (paneId && paneId !== useTabsStore.getState().activePaneId) setActivePane(paneId);
+        }}
       >
         {tabs.map((tab, index) => {
-          const isActive = tab.path === activeId;
+          const isTabActive = tab.path === activeId;
           const italic = tab.kind === 'preview' ? 'italic' : '';
-          const activeCls = isActive
+          const activeCls = isTabActive
             ? 'bg-canvas text-ink border-b-2 border-accent'
             : 'text-ink-soft border-b-2 border-transparent hover:bg-hoverbg';
           return (
             <div
               key={tab.path}
               role="tab"
-              aria-selected={isActive}
+              aria-selected={isTabActive}
               data-testid={`tab-${tab.path}`}
               title={tab.path}
               draggable
-              onDragStart={(e) => handleDragStart(e, index)}
+              onDragStart={(e) => handleDragStart(e, index, tab.path)}
               onDragOver={handleDragOver}
               onDrop={(e) => handleDrop(e, index)}
               onDragEnd={handleDragEnd}
@@ -272,7 +274,6 @@ export function TabBar() {
                 aria-label="タブを閉じる"
                 data-testid={`tab-close-${tab.path}`}
                 onClick={(e) => {
-                  // タブ全体の onClick(activate)より前に閉じる。stopPropagation で親クリックを抑止
                   e.stopPropagation();
                   requestOrClose(tab.path);
                 }}
@@ -296,3 +297,13 @@ export function TabBar() {
     </>
   );
 }
+
+// TabBar 内で使う小道具。store 内部の findLeafById と等価だが hook のセレクタ最適化のため
+// TabBar 側でシャロー参照する。パニックを避けて undefined を返す
+function findLeafShallow(node: import('../stores/tabs').PaneNode, id: PaneId): LeafPane | null {
+  if (node.kind === 'leaf') return node.id === id ? node : null;
+  return findLeafShallow(node.a, id) ?? findLeafShallow(node.b, id);
+}
+
+// 空配列参照の共用(useActivePaneTabs と同趣旨)
+const EMPTY_TABS: never[] = Object.freeze([]) as unknown as never[];

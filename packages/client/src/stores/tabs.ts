@@ -508,9 +508,17 @@ export function useLayoutRoot(): PaneNode {
   return useTabsStore((s) => s.root);
 }
 
-/** ヘルパー: 全 leaf の全 tab の path 集合 */
-export function useAllOpenPaths(): string[] {
-  return useTabsStore((s) => allLeaves(s.root).flatMap((leaf) => leaf.tabs.map((t) => t.path)));
+/** ヘルパー: 全 leaf の全 tab の path 集合。
+ *  注意: 内部で新配列を返すので useTabsStore の selector に直接渡すと
+ *  useSyncExternalStore の同値性ガード違反(getSnapshot 毎回別参照)で無限ループする。
+ *  hook 版は用意せず、getState() スナップショット用途に限定 */
+export function getAllOpenPathsFromState(state: TabsState): string[] {
+  return allLeaves(state.root).flatMap((leaf) => leaf.tabs.map((t) => t.path));
+}
+
+/** どこかにタブが開いているか。UI の分岐に使う(boolean は安定なので selector として安全) */
+export function useHasAnyOpenTab(): boolean {
+  return useTabsStore((s) => allLeaves(s.root).some((leaf) => leaf.tabs.length > 0));
 }
 
 // テストや外部用途向けに素の関数も公開
