@@ -1,14 +1,14 @@
 import { useNavigate } from 'react-router-dom';
 import { useRecentDocs } from '../api/search';
 import { CloseConfirmDialog } from '../components/CloseConfirmDialog';
-import { DocTab } from '../components/DocTab';
-import { TabBar } from '../components/TabBar';
+import { PaneLayout } from '../components/PaneLayout';
 import { useTabsUrlSync } from '../hooks/use-tabs-url-sync';
 import { docUrl } from '../lib/doc-path';
-import { useActivePaneActiveId, useActivePaneTabs } from '../stores/tabs';
+import { useHasAnyOpenTab, useLayoutRoot } from '../stores/tabs';
 
-// メイン画面(SC-02)。文書未選択時は最近更新一覧、選択時はタブモデルで閲覧・編集する。
-// Epic #133 Phase A-1 でタブ + マウント保存(切替時に DocView を unmount しない)に対応。
+// メイン画面(SC-02)。文書未選択時は最近更新一覧、選択時はタブ + 分割ペインで閲覧・編集。
+// Epic #133 Phase A-1: タブ + マウント保存(切替時に DocView を unmount しない)
+// Epic #133 Phase B: 二分木レイアウトツリーの再帰レンダー(PaneLayout)
 
 function RecentDocsList() {
   const { data: docs, isLoading } = useRecentDocs();
@@ -48,32 +48,20 @@ function RecentDocsList() {
 
 export function MainPage() {
   const urlPath = useTabsUrlSync();
-  // Phase B: 活性ペインの tabs / activeId(単一ペイン挙動を維持)。
-  // 分割 UI は Phase B2 で MainPage をツリー再帰レンダーに置き換える予定
-  const tabs = useActivePaneTabs();
-  const activeId = useActivePaneActiveId();
+  const root = useLayoutRoot();
+  const hasAnyTab = useHasAnyOpenTab();
 
-  // タブが1つも無く URL も無い状態は「最近更新した文書」の一覧を出す
-  if (tabs.length === 0 && !urlPath) {
+  // どのペインにもタブが無く URL も無いなら最近更新一覧
+  if (!hasAnyTab && !urlPath) {
     return <RecentDocsList />;
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <TabBar />
       <div className="min-h-0 flex-1">
-        {/* すべてのタブは常時マウントしておき、非アクティブは hidden で隠す。
-            これで切替時に Tiptap インスタンスや useEditingSession の state が失われず、
-            スクロール位置・カーソル・dirty な編集内容が保持される。 */}
-        {tabs.map((tab) => (
-          <DocTabWrapper
-            key={tab.path}
-            path={tab.path}
-            active={tab.path === activeId && urlPath === tab.path}
-          />
-        ))}
+        <PaneLayout node={root} />
         {/* URL が空(ルート戻りなど)でタブは残っているケース: 上に最近一覧を重ねる */}
-        {!urlPath && tabs.length > 0 && (
+        {!urlPath && hasAnyTab && (
           <div className="h-full overflow-auto">
             <RecentDocsList />
           </div>
@@ -81,15 +69,6 @@ export function MainPage() {
       </div>
       {/* dirty タブ閉じ確認(Phase A-2)。pendingClose が null のときは自分で描画しない */}
       <CloseConfirmDialog />
-    </div>
-  );
-}
-
-// map の親側で active/hidden を判定するので、h-full 相当のラッパーで包む
-function DocTabWrapper({ path, active }: { path: string; active: boolean }) {
-  return (
-    <div className={active ? 'h-full' : 'hidden'}>
-      <DocTab path={path} active={active} />
     </div>
   );
 }
