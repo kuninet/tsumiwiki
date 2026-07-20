@@ -47,6 +47,9 @@ export function useNewDocShortcut() {
 
       const tree = treeRef.current;
       if (!tree) return; // tree 未取得時は諦める(初回起動直後の稀なケース)
+      // Opus M1: 連打時の 409 抑止。1 発目 mutation が終わるまで次を撃たない。
+      // これで「短時間に同じ '無題' を 2 回作りに行って 409 で red toast が出る」を防ぐ
+      if (createDocRef.current.isPending) return;
 
       const activePath = getActivePaneActiveIdFromState(useTabsStore.getState());
       const settings = useUserSettingsStore.getState();
