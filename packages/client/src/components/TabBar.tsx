@@ -2,6 +2,7 @@ import {
   type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
   useEffect,
+  useRef,
   useState,
 } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -72,14 +73,21 @@ export function TabBar() {
   // activateAndNavigate 内で明示 navigate するので二重動作にはならない。
   // タブを全部閉じてしまったら URL は '/' に戻す。放置すると /doc/xxx が残って
   // useTabsUrlSync がそのタブを再度 openDoc してしまう(Opus M2 対応)
+  //
+  // 重要: location.pathname を dep にすると、URL(location)が新しく activeId(store)が
+  // まだ古いまま useEffect が発火して「古い activeId の URL に戻す」→ 次のレンダで反対
+  // →…と ちかちかチカチカ 無限ループになる(ユーザ観察のバグ)。
+  // location は ref 経由で最新値を読むだけにし、依存は activeId/tabs.length に限る。
+  const locationRef = useRef(location);
+  locationRef.current = location;
   useEffect(() => {
     if (!activeId) {
-      if (tabs.length === 0 && location.pathname !== '/') navigate('/');
+      if (tabs.length === 0 && locationRef.current.pathname !== '/') navigate('/');
       return;
     }
     const desired = docUrl(activeId);
-    if (location.pathname !== desired) navigate(desired);
-  }, [activeId, tabs.length, location.pathname, navigate]);
+    if (locationRef.current.pathname !== desired) navigate(desired);
+  }, [activeId, tabs.length, navigate]);
 
   // Ctrl+W(⌘W): アクティブタブを閉じる。ブラウザデフォルトのタブ閉じは preventDefault で
   // 止められないケースがほとんど(Chrome など)。ここでの preventDefault は「効くかもしれない」
