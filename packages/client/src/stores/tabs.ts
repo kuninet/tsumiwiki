@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 
 // 編集/閲覧のタブモデル(Epic #133 / Phase A-1 + A-2 + B)。
 // VSCode 風の「プレビュー(1タブ使い回し) / 固定(明示ピン) / dirty(編集あり=固定相当)」を実現する。
@@ -197,8 +198,30 @@ function initialState(): Pick<TabsState, 'root' | 'activePaneId' | 'pendingClose
   return { root: leaf, activePaneId: leaf.id, pendingClose: null };
 }
 
-export const useTabsStore = create<TabsState>((set, get) => ({
-  ...initialState(),
+// Phase D(#139)永続化スキーマ。バージョンを持ち、将来スキーマが変わったら
+// migrate/破棄で対応する。pendingClose は run-time state なので保存しない
+const PERSIST_VERSION = 1;
+
+// 永続化した root ツリーから paneCounter を安全な値に持ち上げる。
+// 復元後に splitOrMove などで新しい ID を生成したとき、既存 ID と衝突しないようにする
+function bumpPaneCounter(root: PaneNode): void {
+  let max = 0;
+  function walk(node: PaneNode): void {
+    const m = /^p(\d+)$/.exec(node.id);
+    if (m) max = Math.max(max, Number(m[1]));
+    if (node.kind === 'split') {
+      walk(node.a);
+      walk(node.b);
+    }
+  }
+  walk(root);
+  paneCounter = max;
+}
+
+export const useTabsStore = create<TabsState>()(
+  persist(
+    (set, get) => ({
+      ...initialState(),
 
   openDoc: (path, opts) => {
     const activate = opts?.activate !== false;
@@ -458,8 +481,26 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     set((s) => ({ root: setRatioInTree(s.root, splitId, clamped) }));
   },
 
-  reset: () => set(() => initialState()),
-}));
+      reset: () => set(() => initialState()),
+    }),
+    {
+      name: 'tsumiwiki-tabs',
+      version: PERSIST_VERSION,
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        root: state.root,
+        activePaneId: state.activePaneId,
+        // pendingClose は run-time state。次セッションに引き継がない
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        bumpPaneCounter(state.root);
+        // pendingClose は必ず null で復元する(partialize で除外しているが念のため)
+        state.pendingClose = null;
+      },
+    },
+  ),
+);
 
 function setRatioInTree(node: PaneNode, splitId: PaneId, ratio: number): PaneNode {
   if (node.kind === 'leaf') return node;
@@ -522,4 +563,11 @@ export function useHasAnyOpenTab(): boolean {
 }
 
 // テストや外部用途向けに素の関数も公開
-export const _testHelpers = { findLeafByPath, findLeafById, allLeaves, pruneEmpty };
+export const _testHelpers = {
+  findLeafByPath,
+  findLeafById,
+  allLeaves,
+  pruneEmpty,
+  bumpPaneCounter,
+  getPaneCounter: () => paneCounter,
+};

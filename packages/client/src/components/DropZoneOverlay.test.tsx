@@ -2,11 +2,40 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { useDragStore } from '../stores/drag';
 import { useTabsStore } from '../stores/tabs';
-import { DropZoneOverlay } from './DropZoneOverlay';
+import { classifyPosition, DropZoneOverlay } from './DropZoneOverlay';
 
-function renderOverlay(paneId: string) {
-  return render(<DropZoneOverlay paneId={paneId} />);
-}
+// jsdom の DragEvent は clientX/Y を安定に運ばないので、座標判定のロジックは
+// classifyPosition の pure 関数単体テストで担保する。
+// コンポーネント側のテストは「ドラッグ中に overlay が存在する」「drop で drag state が
+// 消える」の高レベル振る舞いに絞る
+
+describe('classifyPosition', () => {
+  it('左端に近ければ left', () => {
+    expect(classifyPosition(20, 150, 400, 300, true, true)).toBe('left');
+  });
+  it('右端に近ければ right', () => {
+    expect(classifyPosition(380, 150, 400, 300, true, true)).toBe('right');
+  });
+  it('上端に近ければ top', () => {
+    expect(classifyPosition(200, 10, 400, 300, true, true)).toBe('top');
+  });
+  it('下端に近ければ bottom', () => {
+    expect(classifyPosition(200, 290, 400, 300, true, true)).toBe('bottom');
+  });
+  it('中央付近は center', () => {
+    expect(classifyPosition(200, 150, 400, 300, true, true)).toBe('center');
+  });
+  it('allowSides=false のときは端に近くても center', () => {
+    expect(classifyPosition(20, 150, 400, 300, false, true)).toBe('center');
+  });
+  it('allowCenter=false のとき、中央付近は null(何もハイライトしない)', () => {
+    expect(classifyPosition(200, 150, 400, 300, true, false)).toBeNull();
+  });
+  it('サイズ 0 は null', () => {
+    expect(classifyPosition(10, 10, 0, 100, true, true)).toBeNull();
+    expect(classifyPosition(10, 10, 100, 0, true, true)).toBeNull();
+  });
+});
 
 describe('DropZoneOverlay', () => {
   beforeEach(() => {
@@ -15,58 +44,51 @@ describe('DropZoneOverlay', () => {
   });
   afterEach(() => cleanup());
 
-  it('ドラッグ中でなければ描画しない', () => {
+  it('ドラッグ中でなければ overlay 自体を描画しない', () => {
     const paneId = useTabsStore.getState().activePaneId;
-    const { container } = renderOverlay(paneId);
+    const { container } = render(<DropZoneOverlay paneId={paneId} />);
     expect(container.querySelector('[data-testid^="dropzones-"]')).toBeNull();
   });
 
-  it('自ペインからのドラッグ中は overlay を出さない(同ペイン D&D は reorder で扱う)', () => {
+  it('ドラッグ中は overlay コンテナを描画する(source pane)', () => {
     const paneId = useTabsStore.getState().activePaneId;
     useTabsStore.getState().openDoc('a.md');
     useDragStore.getState().start('a.md', paneId);
-    const { container } = renderOverlay(paneId);
-    expect(container.querySelector('[data-testid^="dropzones-"]')).toBeNull();
+    render(<DropZoneOverlay paneId={paneId} />);
+    expect(screen.getByTestId(`dropzones-${paneId}`)).toBeTruthy();
   });
 
-  it('別ペインからのドラッグ中は overlay を出す(single-leaf なら 5 領域)', () => {
+  it('ドロップで drag state がクリアされる', () => {
     useTabsStore.getState().openDoc('a.md');
     useDragStore.getState().start('a.md', 'other-pane');
     const paneId = useTabsStore.getState().activePaneId;
-    renderOverlay(paneId);
-    expect(screen.getByTestId(`dropzone-${paneId}-left`)).toBeTruthy();
-    expect(screen.getByTestId(`dropzone-${paneId}-right`)).toBeTruthy();
-    expect(screen.getByTestId(`dropzone-${paneId}-top`)).toBeTruthy();
-    expect(screen.getByTestId(`dropzone-${paneId}-bottom`)).toBeTruthy();
-    expect(screen.getByTestId(`dropzone-${paneId}-center`)).toBeTruthy();
-  });
-
-  it('root が既に split の場合は L/R/T/B を非表示にして center のみ(最大2ペイン制約)', () => {
-    useTabsStore.getState().openDoc('a.md', { pinned: true });
-    useTabsStore.getState().openDoc('b.md', { pinned: true });
-    useTabsStore.getState().splitOrMove('a.md', useTabsStore.getState().activePaneId, 'right');
-    const root = useTabsStore.getState().root;
-    if (root.kind !== 'split' || root.a.kind !== 'leaf') throw new Error();
-    useDragStore.getState().start('b.md', 'somewhere-else');
-    const targetPaneId = root.a.id;
-    renderOverlay(targetPaneId);
-    expect(screen.queryByTestId(`dropzone-${targetPaneId}-left`)).toBeNull();
-    expect(screen.queryByTestId(`dropzone-${targetPaneId}-right`)).toBeNull();
-    expect(screen.getByTestId(`dropzone-${targetPaneId}-center`)).toBeTruthy();
-  });
-
-  it('right ドロップで store.splitOrMove が呼ばれる', () => {
-    useTabsStore.getState().openDoc('a.md');
-    useDragStore.getState().start('a.md', 'other-pane');
-    const paneId = useTabsStore.getState().activePaneId;
-    renderOverlay(paneId);
-    const zone = screen.getByTestId(`dropzone-${paneId}-right`);
-    // 実行するために dragOver で drop を許可、drop で splitOrMove
-    fireEvent.dragOver(zone);
+    render(<DropZoneOverlay paneId={paneId} />);
+    const zone = screen.getByTestId(`dropzones-${paneId}`);
     fireEvent.drop(zone);
-    // splitOrMove の結果、root が split になる想定(source pane が別なので分割ができないが、
-    // ここでは overlay の onDrop → splitOrMove が呼ばれること自体を検証)
-    // ドロップ後 dragging state が endDrag される
     expect(useDragStore.getState().draggingPath).toBeNull();
+  });
+
+  it('モバイル判定で早期 return(matchMedia を stub)', () => {
+    // useMediaQuery('(max-width: 767px)') が true を返すよう matchMedia を stub
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = (q: string) => ({
+      matches: q.includes('767px'),
+      media: q,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+      onchange: null,
+    }) as unknown as MediaQueryList;
+    try {
+      useTabsStore.getState().openDoc('a.md');
+      useDragStore.getState().start('a.md', 'other-pane');
+      const paneId = useTabsStore.getState().activePaneId;
+      const { container } = render(<DropZoneOverlay paneId={paneId} />);
+      expect(container.querySelector('[data-testid^="dropzones-"]')).toBeNull();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 });
