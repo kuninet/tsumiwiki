@@ -259,6 +259,14 @@
   color: var(--color-ink-soft);
 }
 
+/* チェック済みタスクの本文に取り消し線を付ける。TaskItem は nested:true 構成で
+   `li > div` の中に子 taskList やコードブロックも入り得るため、直下 <p> だけを
+   対象にして子タスクやコード色に副作用が及ばないようにする */
+.ProseMirror ul[data-type='taskList'] li[data-checked='true'] > div > p {
+  text-decoration: line-through;
+  color: var(--color-ink-faint);
+}
+
 .ProseMirror .obsidian-embed-image img,
 .ProseMirror .tiptap-image img {
   max-width: 100%;
