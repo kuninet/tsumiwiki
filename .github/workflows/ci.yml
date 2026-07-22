@@ -49,13 +49,18 @@ jobs:
 
       # install 以降は互いに独立なので `parallel:` で同時実行し、
       # 全体時間を最長ステップ(現状はテスト)に律速させる。
-      - if: env.SKIP != '1'
-        parallel:
+      # `parallel:` は単独キーのstepとして書く必要があるため、
+      # docs-only スキップ条件は各サブステップの `if:` で持たせる。
+      - parallel:
           - name: Lint
+            if: env.SKIP != '1'
             run: pnpm lint
           - name: 型チェック
+            if: env.SKIP != '1'
             run: pnpm typecheck
           - name: テスト
+            if: env.SKIP != '1'
             run: pnpm test
           - name: クライアントビルド
+            if: env.SKIP != '1'
             run: pnpm --filter @tsumiwiki/client build
