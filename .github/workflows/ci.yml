@@ -47,16 +47,18 @@ jobs:
         if: env.SKIP != '1'
         run: pnpm install --frozen-lockfile
 
-      # install 以降は互いに独立なので `parallel:` で同時実行し、
-      # 全体時間を最長ステップ(現状はテスト)に律速させる。
-      - name: チェック並列実行
+      - name: Lint
         if: env.SKIP != '1'
-        parallel:
-          - name: Lint
-            run: pnpm lint
-          - name: 型チェック
-            run: pnpm typecheck
-          - name: テスト
-            run: pnpm test
-          - name: クライアントビルド
-            run: pnpm --filter @tsumiwiki/client build
+        run: pnpm lint
+
+      - name: 型チェック
+        if: env.SKIP != '1'
+        run: pnpm typecheck
+
+      - name: テスト
+        if: env.SKIP != '1'
+        run: pnpm test
+
+      - name: クライアントビルド
+        if: env.SKIP != '1'
+        run: pnpm --filter @tsumiwiki/client build
