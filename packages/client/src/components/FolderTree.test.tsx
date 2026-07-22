@@ -351,6 +351,111 @@ describe('FolderTree', () => {
       expect(movedPaths.has('見出し#1.md')).toBe(true);
     });
 
+    it('一括移動は1件成功するごとにツリー refetch を挟む(#163)', async () => {
+      const calls = stubFetchRecording();
+      renderRecording();
+      const doc1 = (await screen.findByText('ルート文書')).closest('button')!;
+      const doc2 = (await screen.findByText('見出し#1')).closest('button')!;
+      const folder = (await screen.findByText('フォルダA')).closest('button')!;
+
+      fireEvent.click(doc1, { ctrlKey: true });
+      fireEvent.click(doc2, { ctrlKey: true });
+      fireEvent.dragStart(doc1);
+      fireEvent.dragEnter(folder);
+      fireEvent.dragOver(folder);
+      fireEvent.drop(folder);
+      fireEvent.dragEnd(doc1);
+
+      // 2件の移動 POST が完了するまで待ち、その間にツリー GET が挟まっていることを確認する
+      await waitFor(() => {
+        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+        expect(moves.length).toBe(2);
+      });
+      // ツリー refetch が2件目の POST より前に少なくとも1回追加で走っていること。
+      // 旧実装では末尾1回だけだが、#163 で1件成功ごとに走るようになるため
+      // 「1件目のPOSTと2件目のPOSTの間に GET /api/tree が挟まる」ことを検証する。
+      const moveIdxs = calls
+        .map((c, i) => (c.method === 'POST' && c.path === '/api/docs/move' ? i : -1))
+        .filter((i) => i >= 0);
+      const treeBetween = calls
+        .slice(moveIdxs[0] + 1, moveIdxs[1])
+        .some((c) => c.method === 'GET' && c.path === '/api/tree');
+      expect(treeBetween).toBe(true);
+    });
+
+    it('#163 全件失敗時でも末尾で TREE invalidate をフォールバックする', async () => {
+      // 全 doc の move を失敗させる。ツリー GET が最低1回は末尾で追加される(フォールバック)
+      const TREE_ALL = {
+        folders: ['先'],
+        docs: [
+          { path: 'a.md', title: 'a', folder: '', updatedAt: '2026-07-01T00:00:00+09:00' },
+          { path: 'b.md', title: 'b', folder: '', updatedAt: '2026-07-01T00:00:00+09:00' },
+        ],
+      };
+      const calls = stubFetchWithTree(TREE_ALL, { failMoveDocPath: '__all__' });
+      // 上の failMoveDocPath は any-match しないので、明示的に全件失敗の別 stub を建てる
+      vi.unstubAllGlobals();
+      const calls2: Call[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init?: RequestInit) => {
+          const method = (init?.method ?? 'GET').toUpperCase();
+          const [reqPath] = url.split('?');
+          const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+          calls2.push({ method, path: reqPath, body });
+          if (method === 'GET') {
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(TREE_ALL) });
+          }
+          if (method === 'POST' && reqPath === '/api/docs/move') {
+            return Promise.resolve({
+              ok: false,
+              status: 500,
+              json: () => Promise.resolve({ error: { code: 'INTERNAL_ERROR', message: 'x' } }),
+            });
+          }
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+        }),
+      );
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/']}>
+            <Routes>
+              <Route path="/" element={<FolderTree />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      const docA = (await screen.findByText('a')).closest('button')!;
+      const docB = (await screen.findByText('b')).closest('button')!;
+      const folder = (await screen.findByText('先')).closest('button')!;
+      fireEvent.click(docA, { ctrlKey: true });
+      fireEvent.click(docB, { ctrlKey: true });
+      fireEvent.dragStart(docA);
+      fireEvent.dragEnter(folder);
+      fireEvent.dragOver(folder);
+      fireEvent.drop(folder);
+      fireEvent.dragEnd(docA);
+
+      await waitFor(() => {
+        const moves = calls2.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+        expect(moves.length).toBe(2);
+      });
+      // 全件失敗しても末尾フォールバックで最終 tree GET が走る(2件目の POST 後の tree GET が存在)
+      const lastMoveIdx = calls2
+        .map((c, i) => (c.method === 'POST' && c.path === '/api/docs/move' ? i : -1))
+        .filter((i) => i >= 0)
+        .pop()!;
+      await waitFor(() => {
+        const treeAfterAllMoves = calls2
+          .slice(lastMoveIdx + 1)
+          .some((c) => c.method === 'GET' && c.path === '/api/tree');
+        expect(treeAfterAllMoves).toBe(true);
+      });
+      // TS の未使用警告回避(stubFetchWithTree の戻り値 calls は使わないためのタイプチェック)
+      expect(calls).toBeDefined();
+    });
+
     // #97 URL追従テスト群: 表示中文書のURLがバッチ移動でどう変わる/変わらないか
     function LocationProbe() {
       const location = useLocation();

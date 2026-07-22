@@ -497,55 +497,70 @@ export function FolderTree() {
 
   // 選択された複数アイテムを targetFolderPath へ移動する(#72)。
   // useMoveDoc/useMoveFolder は個別トーストを出すため、生API + 一括サマリートーストで対応する
+  // #163: 1件移動が成功するたびに TREE を invalidate してツリーを追従更新し、URL 追従も
+  // 該当ファイルが動いた時点で前倒しする(進捗が視覚的に分かる)
   async function performBatchMove(nodes: TreeNode[], targetFolderPath: string) {
     let succeeded = 0;
     let failed = 0;
     let lastError: string | null = null;
-    // #97: 表示中文書の URL 追従判定用に、成功した移動の新旧パスを保持しておく
-    const moved: { oldPath: string; newPath: string; type: 'doc' | 'folder' }[] = [];
     for (const node of nodes) {
       try {
+        let oldPath: string;
+        let newPath: string;
+        let kind: 'doc' | 'folder';
         if (node.type === 'doc') {
           const data = await moveDocApi({
             path: node.path,
             newFolder: targetFolderPath,
             newTitle: node.title,
           });
-          moved.push({ oldPath: node.path, newPath: data.path, type: 'doc' });
+          oldPath = node.path;
+          newPath = data.path;
+          kind = 'doc';
         } else {
           const folderName = node.path.split('/').pop()!;
-          const newPath = targetFolderPath ? `${targetFolderPath}/${folderName}` : folderName;
-          const data = await moveFolderApi({ path: node.path, newPath });
-          moved.push({ oldPath: node.path, newPath: data.path, type: 'folder' });
+          const rawNew = targetFolderPath ? `${targetFolderPath}/${folderName}` : folderName;
+          const data = await moveFolderApi({ path: node.path, newPath: rawNew });
+          oldPath = node.path;
+          newPath = data.path;
+          kind = 'folder';
         }
         succeeded++;
+
+        // #97: 表示中文書が今動いたファイル(またはその配下)なら、この時点で URL を追従する。
+        // filterMovable が同一選択集合内の子孫を除外しているため、iteration k で nowPath を
+        // 新パスに書き換えた後の iteration k+1 で「更新前の古い nowPath」と偶然マッチする
+        // ケースは発生しない(祖先が既に動いた後の子孫は選択から除外されている)
+        const nowPath = currentPathRef.current;
+        const hit =
+          !!nowPath &&
+          (nowPath === oldPath || (kind === 'folder' && nowPath.startsWith(`${oldPath}/`)));
+        if (nowPath && hit) {
+          const rewritten = newPath + nowPath.slice(oldPath.length);
+          queryClient.removeQueries({
+            predicate: (q) => {
+              const key = q.queryKey;
+              if (!Array.isArray(key) || key[0] !== 'doc') return false;
+              const p = key[1];
+              return typeof p === 'string' && (p === oldPath || p.startsWith(`${oldPath}/`));
+            },
+          });
+          navigate(docUrl(rewritten), { replace: true });
+        }
+
+        // 1件成功ごとにツリーを refetch(await して次の移動より先にツリー反映を待つ)
+        await queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       } catch (err) {
         failed++;
         if (err instanceof ApiRequestError) lastError = err.message;
       }
     }
-    // 単発の rename/move (#78/#91) 同様、全件処理後に ref から最新の表示中パスを取り直して追従する。
-    // filterMovable の子孫除外により、単一 nowPath に対して doc/folder の両方が multi-match することは無い(排他)
-    const nowPath = currentPathRef.current;
-    const hit = nowPath
-      ? moved.find(
-          (m) =>
-            nowPath === m.oldPath || (m.type === 'folder' && nowPath.startsWith(`${m.oldPath}/`)),
-        )
-      : undefined;
-    if (nowPath && hit) {
-      const rewritten = hit.newPath + nowPath.slice(hit.oldPath.length);
-      queryClient.removeQueries({
-        predicate: (q) => {
-          const key = q.queryKey;
-          if (!Array.isArray(key) || key[0] !== 'doc') return false;
-          const p = key[1];
-          return typeof p === 'string' && (p === hit.oldPath || p.startsWith(`${hit.oldPath}/`));
-        },
-      });
-      navigate(docUrl(rewritten), { replace: true });
+    // 全件失敗時はループ内 invalidate が一度も走らないため、フォールバックとして
+    // 末尾でもう1回 TREE を invalidate する(冪等)。並行編集で古い状態を残さないため
+    if (succeeded === 0) {
+      queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
     }
-    queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
+    // タグはコンテンツ由来で folder 移動では変化しないため、末尾で1回だけ invalidate すれば足りる
     queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
     if (failed === 0) {
       showToast('success', succeeded === 1 ? '移動しました' : `${succeeded}件を移動しました`);
