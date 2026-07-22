@@ -121,6 +121,51 @@ function localIso(d = new Date()): string {
 // フロントマターブロック(開始〜終了フェンス)の抽出用
 const FM_BLOCK_RE = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/;
 
+// #159: 文書本文が同フォルダに置いた画像添付を参照している「bareファイル名」を抽出する。
+// Obsidian embed `![[X]]`(`|alias`・`#anchor` は捨てる)とマークダウン画像 `![alt](X)`
+// (`"title"` は捨てる)を対象。http(s)/data スキームやフォルダ区切りを含むターゲットは
+// 対象外(同フォルダ添付に限定)。単一行 URL 想定で改行含みには当たらない。
+// TODO(#160): 保存先モード拡張時に、集約フォルダを指す絶対パス参照も対象化するか再検討
+const OBSIDIAN_EMBED_RE = /!\[\[([^\]|#\n]+?)(?:[#|][^\]\n]*)?\]\]/g;
+const MARKDOWN_IMG_RE = /!\[[^\]\n]*\]\(([^)\s\n]+)(?:\s+["'][^)\n]*)?\)/g;
+
+function extractAttachmentFilenames(
+  body: string,
+  extensions: ReadonlySet<string>,
+): string[] {
+  const result = new Set<string>();
+  const consider = (raw: string) => {
+    const target = raw.trim();
+    if (!target) return;
+    if (/^(https?:|data:)/i.test(target)) return;
+    if (target.includes('/')) return;
+    // クエリ・フラグメントは拡張子判定前に落とす(ローカルファイル参照は通常付かないが保険)
+    const clean = target.split(/[?#]/)[0];
+    const dot = clean.lastIndexOf('.');
+    if (dot < 0) return;
+    const ext = clean.slice(dot).toLowerCase();
+    if (!extensions.has(ext)) return;
+    result.add(clean);
+  };
+  for (const m of body.matchAll(OBSIDIAN_EMBED_RE)) consider(m[1]);
+  for (const m of body.matchAll(MARKDOWN_IMG_RE)) consider(m[1]);
+  return [...result];
+}
+
+// 他文書本文にファイル名リテラルが「独立した」トークンとして現れるかを判定する。
+// 素朴な substring 一致だと `1.png` が `image-1.png` にヒットしてしまう(false-shared)
+// ため、直前は英数・`_`・`-`・`.`・`/` 以外、直後は英数・`_`・`-`・`.` 以外を要求する。
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function referencesFilename(content: string, filename: string): boolean {
+  const re = new RegExp(
+    `(?:^|[^\\w\\-./])${escapeRegex(filename)}(?![\\w\\-.])`,
+    'u',
+  );
+  return re.test(content);
+}
+
 export class DocService {
   constructor(
     private readonly db: AppDatabase,
@@ -442,14 +487,136 @@ export class DocService {
     if (!caseOnly && (await this.exists(newAbs))) {
       throw new DocConflictError(`移動先に同名の文書があります: ${newNorm}`);
     }
+
+    // #159: フォルダ跨ぎの移動時、この文書が同フォルダに置いた画像添付のうち
+    // 他文書から一切参照されていないもの(=専属)を一緒に運ぶ。他文書が参照して
+    // いる可能性のあるものは他方のリンク維持を優先して現地に残す。
+    // 大文字小文字のみの折衝(case-only)は case-insensitive FS で self-exists にぶつかる
+    // ため、フォルダ実体は同一とみなして添付走査自体をスキップする。
+    const oldFolder =
+      path.posix.dirname(oldNorm) === '.' ? '' : path.posix.dirname(oldNorm);
+    const folderChanged =
+      folderNorm !== oldFolder &&
+      folderNorm.toLowerCase() !== oldFolder.toLowerCase();
+    const attachmentMoves: {
+      oldRel: string;
+      newRel: string;
+      oldAbs: string;
+      newAbs: string;
+    }[] = [];
+    if (folderChanged) {
+      try {
+        const oldContent = await readFile(oldAbs, 'utf8');
+        const { body } = parseDocMeta(oldContent);
+        const candidates = extractAttachmentFilenames(body, DocService.ATTACHMENT_EXTENSIONS);
+        const exclusive = await this.findExclusiveAttachments(oldFolder, candidates, oldNorm);
+        for (const filename of exclusive) {
+          const attOldRel = oldFolder ? `${oldFolder}/${filename}` : filename;
+          const attNewRel = folderNorm ? `${folderNorm}/${filename}` : filename;
+          const attOldAbs = resolveInLibrary(this.libraryPath, attOldRel);
+          const attNewAbs = resolveInLibrary(this.libraryPath, attNewRel);
+          // 移動先に同名添付がある場合は誤上書き回避で現地に残す
+          if (await this.exists(attNewAbs)) continue;
+          attachmentMoves.push({
+            oldRel: attOldRel,
+            newRel: attNewRel,
+            oldAbs: attOldAbs,
+            newAbs: attNewAbs,
+          });
+        }
+      } catch (e) {
+        // 添付走査は best-effort。失敗しても文書自体の移動は継続する
+        this.logger?.warn({ err: e, docPath: oldNorm }, '添付の同伴走査に失敗しました');
+      }
+    }
+
     await mkdir(path.dirname(newAbs), { recursive: true });
     await rename(oldAbs, newAbs);
-    await this.tryCommit([oldNorm, newNorm], `move: ${oldNorm} -> ${newNorm}`, author);
+    const commitPaths: string[] = [oldNorm, newNorm];
+    const movedAttachments: typeof attachmentMoves = [];
+    for (const m of attachmentMoves) {
+      try {
+        await rename(m.oldAbs, m.newAbs);
+        movedAttachments.push(m);
+        commitPaths.push(m.oldRel, m.newRel);
+      } catch (e) {
+        // 添付の rename が失敗するとリンクが切れる。move 全体をロールバックして
+        // 「一部だけ移動して壊れた状態」を残さない。
+        this.logger?.error(
+          { err: e, docPath: oldNorm, from: m.oldRel, to: m.newRel },
+          '添付の移動に失敗したため、文書移動をロールバックします',
+        );
+        for (const done of movedAttachments) {
+          try {
+            await rename(done.newAbs, done.oldAbs);
+          } catch (rbErr) {
+            this.logger?.error(
+              { err: rbErr, from: done.newAbs, to: done.oldAbs },
+              '添付のロールバックに失敗しました(手動復旧が必要)',
+            );
+          }
+        }
+        try {
+          await rename(newAbs, oldAbs);
+        } catch (rbErr) {
+          this.logger?.error(
+            { err: rbErr, from: newAbs, to: oldAbs },
+            '文書のロールバックに失敗しました(手動復旧が必要)',
+          );
+        }
+        throw new Error(`添付の移動に失敗したため文書移動を中止しました: ${m.oldRel}`);
+      }
+    }
+    await this.tryCommit(commitPaths, `move: ${oldNorm} -> ${newNorm}`, author);
     await this.indexer.moveFile(oldNorm, newNorm);
     // ロック・下書きも新パスへ追随させる
     this.locks.repath(oldNorm, newNorm);
     this.drafts.repath(oldNorm, newNorm);
     return { path: newNorm };
+  }
+
+  // 指定文書の同フォルダ画像添付のうち、他文書から一切参照されていないもの(専属)を返す。
+  // 判定は referencesFilename(境界チェック付き)で他 .md 本文を走査する近似で、誤って
+  // 共有扱いとする方向へ倒す(現地に残す)ことで他文書のリンク切れを防ぐ。
+  // TODO(#160含む): 大規模ライブラリでは N-1 件 readFile が高コスト。将来、doc_index に
+  // 添付参照リストを持たせて O(1) 逆引きに置き換える。
+  private async findExclusiveAttachments(
+    sourceFolder: string,
+    candidateFilenames: string[],
+    excludeDocPath: string,
+  ): Promise<string[]> {
+    if (candidateFilenames.length === 0) return [];
+    const shared = new Set<string>();
+    const otherDocs = (
+      this.db
+        .prepare('SELECT doc_path FROM doc_index WHERE doc_path != ?')
+        .all(excludeDocPath) as { doc_path: string }[]
+    ).map((r) => r.doc_path);
+
+    for (const docPath of otherDocs) {
+      if (shared.size === candidateFilenames.length) break;
+      let content: string;
+      try {
+        const abs = resolveInLibrary(this.libraryPath, docPath);
+        content = await readFile(abs, 'utf8');
+      } catch {
+        // 読めない .md は共有判定できないが、安全側=現地に残す方向に倒れるためスキップ
+        continue;
+      }
+      for (const filename of candidateFilenames) {
+        if (shared.has(filename)) continue;
+        if (referencesFilename(content, filename)) shared.add(filename);
+      }
+    }
+
+    const exclusive: string[] = [];
+    for (const filename of candidateFilenames) {
+      if (shared.has(filename)) continue;
+      const rel = sourceFolder ? `${sourceFolder}/${filename}` : filename;
+      const abs = resolveInLibrary(this.libraryPath, rel);
+      if (await this.exists(abs)) exclusive.push(filename);
+    }
+    return exclusive;
   }
 
   // ---- 添付(FR-IMG / FR-OBS-05) ----

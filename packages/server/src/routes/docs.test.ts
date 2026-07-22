@@ -307,6 +307,252 @@ describe('計画者レビュー反映分', () => {
   }, 20_000);
 });
 
+describe('文書移動時の添付同伴 (#159)', () => {
+  // 添付のダミー画像バイト列(4byteでPNG扱いはできないがmoveDoc内容には関与しない)
+  const dummyImage = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+  async function placeDocWithEmbed(
+    folder: string,
+    title: string,
+    imgFilename: string,
+  ): Promise<{ path: string }> {
+    await api('POST', '/api/folders', { path: folder });
+    await api('POST', '/api/docs', { folder, title });
+    const docPath = folder ? `${folder}/${title}.md` : `${title}.md`;
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent(docPath)}`);
+    // 同フォルダに画像を配置し、本文の embed で参照する
+    const imgAbs = folder ? join(lib, folder, imgFilename) : join(lib, imgFilename);
+    await writeFile(imgAbs, dummyImage);
+    await app.indexerService.indexFile(docPath);
+    await saveDoc({
+      path: docPath,
+      body: `![[${imgFilename}]]\n`,
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    return { path: docPath };
+  }
+
+  async function fileExists(rel: string): Promise<boolean> {
+    try {
+      await readFile(join(lib, rel));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  it('専属の画像は文書と一緒に移動先フォルダへ運ばれる', async () => {
+    await api('POST', '/api/folders', { path: '移動先' });
+    const doc = await placeDocWithEmbed('元', '記事', 'image-A.png');
+
+    const moved = await api('POST', '/api/docs/move', {
+      path: doc.path,
+      newFolder: '移動先',
+      newTitle: '記事',
+    });
+    expect(moved.statusCode).toBe(200);
+    expect(await fileExists('移動先/記事.md')).toBe(true);
+    expect(await fileExists('移動先/image-A.png')).toBe(true);
+    expect(await fileExists('元/image-A.png')).toBe(false);
+  }, 20_000);
+
+  it('他文書からも参照されている画像は現地に残る', async () => {
+    await api('POST', '/api/folders', { path: '移動先' });
+    const doc = await placeDocWithEmbed('元', '本命記事', 'image-B.png');
+    // 別 doc が同じファイル名を embed している(実際に image-B.png を参照)
+    await api('POST', '/api/folders', { path: '別' });
+    await api('POST', '/api/docs', { folder: '別', title: '併用記事' });
+    const otherPath = '別/併用記事.md';
+    const otherGot = await api('GET', `/api/docs?path=${encodeURIComponent(otherPath)}`);
+    await saveDoc({
+      path: otherPath,
+      body: `![[image-B.png]]\n`,
+      tags: [],
+      baseUpdatedAt: otherGot.json().updatedAt,
+    });
+
+    await api('POST', '/api/docs/move', {
+      path: doc.path,
+      newFolder: '移動先',
+      newTitle: '本命記事',
+    });
+
+    // 他文書のリンク維持を優先し、現地に残る(移動先には運ばれない)
+    expect(await fileExists('元/image-B.png')).toBe(true);
+    expect(await fileExists('移動先/image-B.png')).toBe(false);
+  }, 20_000);
+
+  it('タイトル変更のみ(同フォルダ内 rename)では添付を触らない', async () => {
+    const doc = await placeDocWithEmbed('固定', '旧タイトル', 'image-C.png');
+
+    await api('POST', '/api/docs/move', {
+      path: doc.path,
+      newFolder: '固定',
+      newTitle: '新タイトル',
+    });
+
+    expect(await fileExists('固定/image-C.png')).toBe(true);
+    expect(await fileExists('固定/新タイトル.md')).toBe(true);
+  }, 20_000);
+
+  it('移動先に同名添付が既にあると誤上書きを避けて現地に残す', async () => {
+    await api('POST', '/api/folders', { path: '衝突先' });
+    // 移動先に先客の同名画像
+    await writeFile(join(lib, '衝突先', 'image-D.png'), Buffer.from([1, 2, 3]));
+    const doc = await placeDocWithEmbed('元', '記事', 'image-D.png');
+
+    await api('POST', '/api/docs/move', {
+      path: doc.path,
+      newFolder: '衝突先',
+      newTitle: '記事',
+    });
+
+    // 元の画像は残り、移動先の先客画像は保持される
+    expect(await fileExists('元/image-D.png')).toBe(true);
+    const preserved = await readFile(join(lib, '衝突先', 'image-D.png'));
+    expect(Array.from(preserved)).toEqual([1, 2, 3]);
+  }, 20_000);
+
+  it('ネスト構造(a/b → x/y)でも専属画像は一緒に移動する', async () => {
+    await api('POST', '/api/folders', { path: 'a/b' });
+    await api('POST', '/api/folders', { path: 'x/y' });
+    const doc = await placeDocWithEmbed('a/b', 'ネスト記事', 'image-nest.png');
+
+    await api('POST', '/api/docs/move', {
+      path: doc.path,
+      newFolder: 'x/y',
+      newTitle: 'ネスト記事',
+    });
+
+    expect(await fileExists('x/y/ネスト記事.md')).toBe(true);
+    expect(await fileExists('x/y/image-nest.png')).toBe(true);
+    expect(await fileExists('a/b/image-nest.png')).toBe(false);
+  }, 20_000);
+
+  it('ルート→フォルダ / フォルダ→ルート の双方向で専属画像を運ぶ', async () => {
+    // ルート → フォルダ
+    const rootDoc = await placeDocWithEmbed('', 'ルート発', 'image-root.png');
+    await api('POST', '/api/folders', { path: '受け先' });
+    await api('POST', '/api/docs/move', {
+      path: rootDoc.path,
+      newFolder: '受け先',
+      newTitle: 'ルート発',
+    });
+    expect(await fileExists('受け先/image-root.png')).toBe(true);
+    expect(await fileExists('image-root.png')).toBe(false);
+
+    // フォルダ → ルート
+    const folderDoc = await placeDocWithEmbed('元フォルダ', 'ルートへ', 'image-back.png');
+    await api('POST', '/api/docs/move', {
+      path: folderDoc.path,
+      newFolder: '',
+      newTitle: 'ルートへ',
+    });
+    expect(await fileExists('image-back.png')).toBe(true);
+    expect(await fileExists('元フォルダ/image-back.png')).toBe(false);
+  }, 20_000);
+
+  it('複数添付のうち一部だけ他 doc と共有なら、専属のみ運ばれ共有は残る', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/docs', { folder: '元', title: '複数持ち' });
+    const docPath = '元/複数持ち.md';
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent(docPath)}`);
+    await writeFile(join(lib, '元', 'image-solo.png'), dummyImage);
+    await writeFile(join(lib, '元', 'image-shared.png'), dummyImage);
+    await app.indexerService.indexFile(docPath);
+    await saveDoc({
+      path: docPath,
+      body: '![[image-solo.png]]\n![[image-shared.png]]\n',
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    // 別 doc が image-shared.png を参照
+    await api('POST', '/api/docs', { folder: '', title: '共有元' });
+    const otherGot = await api('GET', `/api/docs?path=${encodeURIComponent('共有元.md')}`);
+    await saveDoc({
+      path: '共有元.md',
+      body: '![[image-shared.png]]\n',
+      tags: [],
+      baseUpdatedAt: otherGot.json().updatedAt,
+    });
+
+    await api('POST', '/api/docs/move', {
+      path: docPath,
+      newFolder: '先',
+      newTitle: '複数持ち',
+    });
+
+    // 専属は一緒に、共有は元フォルダに残る
+    expect(await fileExists('先/image-solo.png')).toBe(true);
+    expect(await fileExists('元/image-solo.png')).toBe(false);
+    expect(await fileExists('元/image-shared.png')).toBe(true);
+    expect(await fileExists('先/image-shared.png')).toBe(false);
+  }, 20_000);
+
+  it('マークダウン画像形式 `![alt](x.png)` でも専属判定して運ぶ', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/docs', { folder: '元', title: 'MD画像' });
+    const docPath = '元/MD画像.md';
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent(docPath)}`);
+    await writeFile(join(lib, '元', 'image-md.png'), dummyImage);
+    await app.indexerService.indexFile(docPath);
+    await saveDoc({
+      path: docPath,
+      body: '![alt文言](image-md.png "タイトル")\n',
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+
+    await api('POST', '/api/docs/move', {
+      path: docPath,
+      newFolder: '先',
+      newTitle: 'MD画像',
+    });
+
+    expect(await fileExists('先/image-md.png')).toBe(true);
+    expect(await fileExists('元/image-md.png')).toBe(false);
+  }, 20_000);
+
+  it('部分一致(image-1.png と image-11.png の共存)で false-shared 判定にならない', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先' });
+    // 移動対象 doc が image-1.png を持つ
+    await api('POST', '/api/docs', { folder: '元', title: '短名画像' });
+    const docPath = '元/短名画像.md';
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent(docPath)}`);
+    await writeFile(join(lib, '元', 'image-1.png'), dummyImage);
+    await app.indexerService.indexFile(docPath);
+    await saveDoc({
+      path: docPath,
+      body: '![[image-1.png]]\n',
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    // 別 doc は image-11.png を参照(image-1.png ではない)
+    await api('POST', '/api/docs', { folder: '', title: '長名画像' });
+    const otherGot = await api('GET', `/api/docs?path=${encodeURIComponent('長名画像.md')}`);
+    await saveDoc({
+      path: '長名画像.md',
+      body: '![[image-11.png]]\n',
+      tags: [],
+      baseUpdatedAt: otherGot.json().updatedAt,
+    });
+
+    await api('POST', '/api/docs/move', {
+      path: docPath,
+      newFolder: '先',
+      newTitle: '短名画像',
+    });
+
+    // 境界チェックが効いて image-1.png は専属と判定される
+    expect(await fileExists('先/image-1.png')).toBe(true);
+    expect(await fileExists('元/image-1.png')).toBe(false);
+  }, 20_000);
+});
+
 describe('レビュー指摘の回帰テスト', () => {
   it('大文字小文字のみのリネームが成功する', async () => {
     const created = await api('POST', '/api/docs', { folder: '', title: 'readme' });
