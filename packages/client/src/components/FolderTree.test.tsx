@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { docUrl } from '../lib/doc-path';
@@ -638,6 +638,208 @@ describe('FolderTree', () => {
       });
       // 表示中 doc の移動は失敗したので URL は初期値のまま
       expect(screen.getByTestId('location-probe').textContent).toBe(initial);
+    });
+
+    describe('#169: 文書行へのドロップで親フォルダに移動', () => {
+      it('展開フォルダ配下の文書行にドロップすると、その親フォルダへ移動する', async () => {
+        const calls = stubFetchRecording();
+        renderRecording();
+        // フォルダA を展開して子文書を表示
+        fireEvent.click(await screen.findByText('フォルダA'));
+        const childRow = (await screen.findByText('子文書')).closest('button')!;
+        const rootDoc = (await screen.findByText('ルート文書')).closest('button')!;
+
+        // ルート文書 を フォルダA/子文書 の行にドロップ → フォルダA へ移動
+        fireEvent.dragStart(rootDoc);
+        fireEvent.dragEnter(childRow);
+        fireEvent.dragOver(childRow);
+        fireEvent.drop(childRow);
+        fireEvent.dragEnd(rootDoc);
+
+        await waitFor(() => {
+          expect(calls.some((c) => c.method === 'POST' && c.path === '/api/docs/move')).toBe(true);
+        });
+        const move = calls.find((c) => c.method === 'POST' && c.path === '/api/docs/move')!;
+        expect(move.body).toEqual({
+          path: 'ルート文書.md',
+          newFolder: 'フォルダA',
+          newTitle: 'ルート文書',
+        });
+      });
+
+      it('同一フォルダ内の兄弟文書行へのドロップは移動APIを呼ばない(no-op)', async () => {
+        const calls = stubFetchRecording();
+        renderRecording();
+        const rootDoc = (await screen.findByText('ルート文書')).closest('button')!;
+        const otherRootDoc = (await screen.findByText('見出し#1')).closest('button')!;
+
+        // 両方ルート直下 → 親が同じ = 移動しても意味なし
+        fireEvent.dragStart(rootDoc);
+        fireEvent.dragEnter(otherRootDoc);
+        fireEvent.dragOver(otherRootDoc);
+        fireEvent.drop(otherRootDoc);
+        fireEvent.dragEnd(rootDoc);
+
+        await new Promise((r) => setTimeout(r, 20));
+        expect(calls.some((c) => c.method === 'POST' && c.path.startsWith('/api/'))).toBe(false);
+      });
+
+      it('フォルダ配下の文書をルート直下の文書行にドロップするとルートへ移動する', async () => {
+        const calls = stubFetchRecording();
+        renderRecording();
+        fireEvent.click(await screen.findByText('フォルダA'));
+        const childRow = (await screen.findByText('子文書')).closest('button')!;
+        const rootDoc = (await screen.findByText('ルート文書')).closest('button')!;
+
+        // 子文書 を ルート文書行 にドロップ → ルート('')へ移動
+        fireEvent.dragStart(childRow);
+        fireEvent.dragEnter(rootDoc);
+        fireEvent.dragOver(rootDoc);
+        fireEvent.drop(rootDoc);
+        fireEvent.dragEnd(childRow);
+
+        await waitFor(() => {
+          expect(calls.some((c) => c.method === 'POST' && c.path === '/api/docs/move')).toBe(true);
+        });
+        const move = calls.find((c) => c.method === 'POST' && c.path === '/api/docs/move')!;
+        expect(move.body).toEqual({
+          path: 'フォルダA/子文書.md',
+          newFolder: '',
+          newTitle: '子文書',
+        });
+      });
+
+      it('受け入れ可の文書行の dragOver では preventDefault が呼ばれる', async () => {
+        // Opus レビュー M3: canDropOn ガードだけでなく、実ブラウザ上で drop を発火させる
+        // 前提条件である preventDefault が実際に走っているかを検証する
+        stubFetchRecording();
+        renderRecording();
+        fireEvent.click(await screen.findByText('フォルダA'));
+        const childRow = (await screen.findByText('子文書')).closest('button')!;
+        const rootDoc = (await screen.findByText('ルート文書')).closest('button')!;
+
+        fireEvent.dragStart(rootDoc);
+        fireEvent.dragEnter(childRow);
+        const evt = createEvent.dragOver(childRow);
+        fireEvent(childRow, evt);
+        expect(evt.defaultPrevented).toBe(true);
+        fireEvent.dragEnd(rootDoc);
+      });
+
+      it('同一親の兄弟文書行の dragOver では preventDefault が呼ばれない(canDropOn=false)', async () => {
+        stubFetchRecording();
+        renderRecording();
+        const rootDoc = (await screen.findByText('ルート文書')).closest('button')!;
+        const otherRootDoc = (await screen.findByText('見出し#1')).closest('button')!;
+
+        fireEvent.dragStart(rootDoc);
+        fireEvent.dragEnter(otherRootDoc);
+        const evt = createEvent.dragOver(otherRootDoc);
+        fireEvent(otherRootDoc, evt);
+        expect(evt.defaultPrevented).toBe(false);
+        fireEvent.dragEnd(rootDoc);
+      });
+
+      it('フォルダを自分の配下の子文書行にドロップしても no-op(祖先→子孫は禁止)', async () => {
+        const calls = stubFetchRecording();
+        renderRecording();
+        fireEvent.click(await screen.findByText('フォルダA'));
+        const folderA = (await screen.findByText('フォルダA')).closest('button')!;
+        const childRow = (await screen.findByText('子文書')).closest('button')!;
+
+        // フォルダA を掴んで、そのフォルダ配下の子文書行(=親 = フォルダA)にドロップ
+        // → canDropOn は同一親判定で弾く
+        fireEvent.dragStart(folderA);
+        fireEvent.dragEnter(childRow);
+        fireEvent.dragOver(childRow);
+        fireEvent.drop(childRow);
+        fireEvent.dragEnd(folderA);
+
+        await new Promise((r) => setTimeout(r, 20));
+        expect(calls.some((c) => c.method === 'POST' && c.path.startsWith('/api/'))).toBe(false);
+      });
+
+      it('フォルダを別フォルダ配下の子文書行にドロップすると、その親フォルダ配下へ移動する', async () => {
+        // フォルダBを追加して フォルダA を フォルダB/子 の行にドロップ → フォルダB配下へ
+        const TREE2 = {
+          folders: ['フォルダA', 'フォルダB'],
+          docs: [
+            { path: 'フォルダB/子B.md', title: '子B', folder: 'フォルダB', updatedAt: '2026-07-01T00:00:00+09:00' },
+          ],
+        };
+        const calls: Call[] = [];
+        vi.stubGlobal(
+          'fetch',
+          vi.fn((url: string, init?: RequestInit) => {
+            const method = (init?.method ?? 'GET').toUpperCase();
+            const [reqPath] = url.split('?');
+            const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+            calls.push({ method, path: reqPath, body });
+            if (method === 'GET') {
+              return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(TREE2) });
+            }
+            if (method === 'POST' && reqPath === '/api/folders/move') {
+              const b = body as { newPath: string };
+              return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ path: b.newPath }) });
+            }
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+          }),
+        );
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        render(
+          <QueryClientProvider client={queryClient}>
+            <MemoryRouter>
+              <FolderTree />
+            </MemoryRouter>
+          </QueryClientProvider>,
+        );
+        fireEvent.click(await screen.findByText('フォルダB'));
+        const folderA = (await screen.findByText('フォルダA')).closest('button')!;
+        const childB = (await screen.findByText('子B')).closest('button')!;
+
+        fireEvent.dragStart(folderA);
+        fireEvent.dragEnter(childB);
+        fireEvent.dragOver(childB);
+        fireEvent.drop(childB);
+        fireEvent.dragEnd(folderA);
+
+        await waitFor(() => {
+          expect(calls.some((c) => c.method === 'POST' && c.path === '/api/folders/move')).toBe(true);
+        });
+        const move = calls.find((c) => c.method === 'POST' && c.path === '/api/folders/move')!;
+        expect(move.body).toEqual({ path: 'フォルダA', newPath: 'フォルダB/フォルダA' });
+      });
+
+      it('複数選択中の1つを別フォルダの子文書行へドロップすると、全件がその親フォルダへ一括移動される', async () => {
+        const calls = stubFetchRecording();
+        renderRecording();
+        fireEvent.click(await screen.findByText('フォルダA'));
+        const childRow = (await screen.findByText('子文書')).closest('button')!;
+        const doc1 = (await screen.findByText('ルート文書')).closest('button')!;
+        const doc2 = (await screen.findByText('見出し#1')).closest('button')!;
+
+        // Ctrl+クリックで2件選択
+        fireEvent.click(doc1, { ctrlKey: true });
+        fireEvent.click(doc2, { ctrlKey: true });
+
+        // 選択中の doc1 を掴んで フォルダA/子文書 の行へドロップ → フォルダA へ2件とも移動
+        fireEvent.dragStart(doc1);
+        fireEvent.dragEnter(childRow);
+        fireEvent.dragOver(childRow);
+        fireEvent.drop(childRow);
+        fireEvent.dragEnd(doc1);
+
+        await waitFor(() => {
+          const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+          expect(moves.length).toBe(2);
+        });
+        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+        const movedPaths = new Set(moves.map((m) => (m.body as { path: string }).path));
+        expect(movedPaths.has('ルート文書.md')).toBe(true);
+        expect(movedPaths.has('見出し#1.md')).toBe(true);
+        const targets = new Set(moves.map((m) => (m.body as { newFolder: string }).newFolder));
+        expect(targets).toEqual(new Set(['フォルダA']));
+      });
     });
   });
 });
