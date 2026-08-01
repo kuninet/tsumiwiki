@@ -1008,9 +1008,23 @@ function TreeItem({
             onDragEnter={(e) => {
               e.stopPropagation();
               dnd.onDragEnter(node.path);
+              // #171: Safari(WebKit)は HTML5 D&D 仕様に厳格で、dragenter/dragover の
+              // 初回で preventDefault が呼ばれないと以降その要素を drop 不可と決めつける。
+              // Chrome/Firefox は寛容で条件付き preventDefault でも動くが、Safari 互換のため
+              // 内部 D&D 中は常に preventDefault し、実際の可否は onDrop 側の canDropOn で判定
+              if (dnd.draggedPath !== null) {
+                e.preventDefault();
+                if (e.dataTransfer) e.dataTransfer.dropEffect = canAcceptHere ? 'move' : 'none';
+              }
             }}
             onDragOver={(e) => {
-              if (canAcceptHere) e.preventDefault();
+              // 内部 D&D 中は常に preventDefault(#171: Safari 対策)。
+              // dropEffect を明示することで、落とせないケース(same parent 等)では
+              // 禁止カーソルを出し、drop 側の canDropOn で API 発火を弾く
+              if (dnd.draggedPath !== null) {
+                e.preventDefault();
+                if (e.dataTransfer) e.dataTransfer.dropEffect = canAcceptHere ? 'move' : 'none';
+              }
             }}
             onDrop={(e) => {
               e.stopPropagation();
@@ -1107,13 +1121,25 @@ function TreeItem({
           // #169: 文書行にドラッグ進入 → 親フォルダをドロップ先候補として扱う
           e.stopPropagation();
           dnd.onDragEnter(parentDropFolder);
+          // #171: Safari(WebKit)は HTML5 D&D 仕様に厳格で、dragenter/dragover の
+          // 初回で preventDefault が呼ばれないと以降その要素を drop 不可と決めつける
+          // (Chrome/Firefox は寛容で条件付きでも動く)。内部 D&D 中は常に preventDefault し、
+          // 実際の可否は onDrop 側の canDropOn で判定する
+          if (dnd.draggedPath !== null) {
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = canAcceptParentDrop ? 'move' : 'none';
+          }
         }}
         onDragOver={(e) => {
-          // 内部 D&D 中(draggedPath !== null)かつ受け入れ可のときだけ preventDefault。
-          // 外部ファイルドラッグ(DropZoneOverlay)は draggedPath === null なので影響しない
-          if (canAcceptParentDrop) {
+          // 内部 D&D 中は常に preventDefault(#171: Safari 対策)。
+          // dropEffect を明示して「移動可」or「禁止」のカーソル表示を制御し、
+          // 実際の判定は onDrop 側の canDropOn で厳密に行う。
+          // タブドラッグ(DropZoneOverlay / useDragStore)は FolderTree の draggedItem と
+          // 別ストアで、タブドラッグ中は dnd.draggedPath === null のためこの分岐に入らず影響なし
+          if (dnd.draggedPath !== null) {
             e.stopPropagation();
             e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = canAcceptParentDrop ? 'move' : 'none';
           }
         }}
         onDrop={(e) => {
