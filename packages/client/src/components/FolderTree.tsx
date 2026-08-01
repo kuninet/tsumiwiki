@@ -433,7 +433,12 @@ export function FolderTree() {
   }
 
   function handleDragEnterTarget(targetFolderPath: string) {
+    // #169: 受け入れ可なら該当フォルダをハイライト。
+    // 受け入れ不可のときは「自分自身が直前のハイライト対象だった場合だけ」クリアする。
+    // これによりフォルダ帯 → 自分自身の子孫(受け入れ不可)へ抜けた時のハイライト残存を
+    // 消しつつ、無関係な受け入れ不可行を横切ってもハイライトが明滅しないようにする
     if (canDropOn(targetFolderPath)) setDragOverPath(targetFolderPath);
+    else if (dragOverPath === targetFolderPath) setDragOverPath(null);
   }
 
   // #73 選択物の共通親フォルダを求める(全てルートなら空文字)
@@ -1051,6 +1056,13 @@ function TreeItem({
   }
 
   const isCurrent = currentPath === node.path;
+  // #169: doc 行を「親フォルダへのドロップ受け入れ側」として扱う。
+  // doc の親 ('' ならルート)を dropFolder として使う
+  const parentDropFolder = parentOf(node.path);
+  const canAcceptParentDrop = dnd.draggedPath !== null && dnd.canDropOn(parentDropFolder);
+  // 「私の親がドロップ先扱いされている」ときに doc 行にも薄いハイライトを出す。
+  // フォルダ帯本体は既に ring 付きで別途ハイライトされる
+  const isParentDropTarget = dnd.dragOverPath === parentDropFolder && canAcceptParentDrop;
   if (isRenaming) {
     // #152: doc の inline リネーム
     return (
@@ -1091,10 +1103,28 @@ function TreeItem({
           onContextMenu(e, { type: 'doc', path: node.path, folder: parentOf(node.path), title: node.title })
         }
         {...dragHandlers}
+        onDragEnter={(e) => {
+          // #169: 文書行にドラッグ進入 → 親フォルダをドロップ先候補として扱う
+          e.stopPropagation();
+          dnd.onDragEnter(parentDropFolder);
+        }}
+        onDragOver={(e) => {
+          // 内部 D&D 中(draggedPath !== null)かつ受け入れ可のときだけ preventDefault。
+          // 外部ファイルドラッグ(DropZoneOverlay)は draggedPath === null なので影響しない
+          if (canAcceptParentDrop) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+        }}
+        onDrop={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          dnd.onDrop(parentDropFolder);
+        }}
         data-testid={`doc-${node.path}`}
         className={`flex h-[30px] w-full items-center gap-1 px-2 text-left text-sm focus:outline-none focus-visible:bg-active ${
           isCurrent ? 'bg-active font-semibold text-accent' : `text-ink-soft hover:bg-hoverbg ${selectedBgClass}`
-        } ${isDragging ? 'opacity-50' : ''}`}
+        } ${isDragging ? 'opacity-50' : ''} ${isParentDropTarget && !isCurrent ? 'bg-accent-soft' : ''}`}
       >
         <span className="inline-block w-3" aria-hidden="true" />
         <span aria-hidden="true">📄</span>
