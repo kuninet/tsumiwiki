@@ -726,7 +726,10 @@ describe('FolderTree', () => {
         fireEvent.dragEnd(rootDoc);
       });
 
-      it('同一親の兄弟文書行の dragOver では preventDefault が呼ばれない(canDropOn=false)', async () => {
+      it('同一親の兄弟文書行の dragOver でも preventDefault は呼ばれる(#171: Safari 対策)、ただし dropEffect=none で禁止表示に', async () => {
+        // Safari は初回 dragenter/dragover で preventDefault が無いとその要素を drop 不可と
+        // 決めるため、内部 D&D 中は常に preventDefault する。落とせないケースは dropEffect=none で
+        // カーソル表示を「禁止」にし、drop 側の canDropOn で API 発火を弾く
         stubFetchRecording();
         renderRecording();
         const rootDoc = (await screen.findByText('ルート文書')).closest('button')!;
@@ -736,8 +739,29 @@ describe('FolderTree', () => {
         fireEvent.dragEnter(otherRootDoc);
         const evt = createEvent.dragOver(otherRootDoc);
         fireEvent(otherRootDoc, evt);
-        expect(evt.defaultPrevented).toBe(false);
+        expect(evt.defaultPrevented).toBe(true);
+        // dropEffect の実効(禁止カーソル)は jsdom の DataTransfer が dropEffect を持たないので
+        // 検証できない。preventDefault が呼ばれることと、drop 後に API 発火が抑制されること
+        // (既存の no-op テスト)で挙動を担保する
         fireEvent.dragEnd(rootDoc);
+      });
+
+      it('#171: 外部 D&D(dragStart 未経由 / draggedPath===null)の dragOver では preventDefault されない — 将来 OS ファイル drop 対応時の保護', async () => {
+        stubFetchRecording();
+        renderRecording();
+        // フォルダAを展開して doc 行(親フォルダあり)と folder 行の両方でチェック
+        fireEvent.click(await screen.findByText('フォルダA'));
+        const folderRow = (await screen.findByText('フォルダA')).closest('button')!;
+        const docRow = (await screen.findByText('子文書')).closest('button')!;
+
+        // dragStart を呼ばずにいきなり dragOver を送る = 外部由来のドラッグ想定
+        const evt1 = createEvent.dragOver(docRow);
+        fireEvent(docRow, evt1);
+        expect(evt1.defaultPrevented).toBe(false);
+
+        const evt2 = createEvent.dragOver(folderRow);
+        fireEvent(folderRow, evt2);
+        expect(evt2.defaultPrevented).toBe(false);
       });
 
       it('フォルダを自分の配下の子文書行にドロップしても no-op(祖先→子孫は禁止)', async () => {
