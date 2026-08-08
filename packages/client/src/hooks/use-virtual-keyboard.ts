@@ -17,6 +17,19 @@ import { useEffect, useState } from 'react';
 
 const TOUCH_QUERY = '(hover: none) and (pointer: coarse)';
 export const KEYBOARD_THRESHOLD_PX = 150;
+// iPhone Safari 系(iPhone を含む WebKit/CriOS/FxiOS 等)では、変換候補行の上に
+// AutoFill/Passkey/入力支援バー(約1行)が visualViewport の外側に重ねて描画され、
+// ツールバーがその裏に隠れる。iPad(UA が Mac 扱いで isIPhone に該当しない)は影響なし。
+// iPhone 判定時のみバッファを加算する(#175 FU)。実測 44〜52px の帯を想定して 52px。
+// バーが出ないケース(iCloud キーチェーン無効化・AutoFill 無効)ではその分だけ
+// ツールバーが浮く見た目になるが、隠れて操作不能になる方が実害が大きいため許容する。
+export const IPHONE_EXTRA_BOTTOM_PX = 52;
+
+// iPad は UA が Mac 扱いなので `iPhone` の有無だけを見れば iPhone を確実に狙える。
+function isIPhone(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /iPhone/i.test(navigator.userAgent);
+}
 
 export interface VirtualKeyboardState {
   /** タッチのみの端末で仮想キーボードが表示中 (= ツールバーを浮かせるべき状態) */
@@ -65,9 +78,10 @@ export function useVirtualKeyboard(): VirtualKeyboardState {
   }, [isTouch]);
 
   const visible = isTouch && keyboardOffset > 0;
+  const extra = visible && isIPhone() ? IPHONE_EXTRA_BOTTOM_PX : 0;
   return {
     visible,
-    bottomOffset: visible ? keyboardOffset : 0,
+    bottomOffset: visible ? keyboardOffset + extra : 0,
     isTouch,
     keyboardOffset,
   };
