@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { IPHONE_EXTRA_BOTTOM_PX, useVirtualKeyboard } from './use-virtual-keyboard';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useVirtualKeyboard } from './use-virtual-keyboard';
 
 interface StubMQL {
   matches: boolean;
@@ -44,15 +44,21 @@ function stubMatchMedia(initial: boolean): () => StubMQL {
 interface StubVV {
   height: number;
   offsetTop: number;
+  scale: number;
   listeners: Record<string, Array<() => void>>;
   addEventListener: (t: string, l: () => void) => void;
   removeEventListener: (t: string, l: () => void) => void;
 }
 
-function stubVisualViewport(initial: { height: number; offsetTop?: number }): StubVV {
+function stubVisualViewport(initial: {
+  height: number;
+  offsetTop?: number;
+  scale?: number;
+}): StubVV {
   const vv: StubVV = {
     height: initial.height,
     offsetTop: initial.offsetTop ?? 0,
+    scale: initial.scale ?? 1,
     listeners: {},
     addEventListener: (t, l) => {
       (vv.listeners[t] ??= []).push(l);
@@ -69,22 +75,11 @@ function stubVisualViewport(initial: { height: number; offsetTop?: number }): St
 }
 
 describe('useVirtualKeyboard', () => {
-  // jsdom 既定の UA を退避し、UA を書き換える it が失敗しても後続テストに漏れないよう
-  // afterEach で無条件に戻す(Object.defineProperty は vi.unstubAllGlobals で戻せないため)
-  let originalUA = '';
-  beforeAll(() => {
-    originalUA = window.navigator.userAgent;
-  });
-
   afterEach(() => {
     vi.unstubAllGlobals();
     Object.defineProperty(window, 'visualViewport', {
       configurable: true,
       value: undefined,
-    });
-    Object.defineProperty(window.navigator, 'userAgent', {
-      configurable: true,
-      value: originalUA,
     });
     cleanup();
   });
@@ -211,37 +206,85 @@ describe('useVirtualKeyboard', () => {
     expect(result.current.bottomOffset).toBe(0);
   });
 
-  it('iPhone(UA 判定)では入力支援バー分バッファを bottomOffset に加算する', () => {
-    // iPhone Safari UA を模す(iPadOS は UA が Mac 扱いなので `iPhone` 文字列で確実に区別できる)
-    const iphoneUA =
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1';
-    Object.defineProperty(window.navigator, 'userAgent', {
-      configurable: true,
-      value: iphoneUA,
-    });
+  it('pinch zoom(scale > 1)時は vv.height を scale で正規化してキーボード分だけ検出する', () => {
+    // scale=2 でズームイン → vv.height は CSS px 表示なので layout viewport の半分
+    // (400)を返す。scale を掛けないと 800 - 400 = 400 を「キーボード」と誤検出する。
+    // 実際にはキーボードが 300px 出ている状態: vv.height = (800-300)/2 = 250
     stubMatchMedia(true);
-    stubVisualViewport({ height: 500 });
+    stubVisualViewport({ height: 250, scale: 2 });
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
 
     const { result } = renderHook(() => useVirtualKeyboard());
-    // keyboardOffset は生の 300px、bottomOffset はそこにバッファ分を加算
+    // 250 * 2 = 500 → 800 - 500 = 300 が真のキーボード高さ
     expect(result.current.keyboardOffset).toBe(300);
-    expect(result.current.bottomOffset).toBe(300 + IPHONE_EXTRA_BOTTOM_PX);
   });
 
-  it('iPad(Mac UA)では iPhone バッファを加算しない', () => {
-    // iPadOS Safari の UA は Mac 扱い。iPhone 文字列を含まないので加算されない
-    const ipadUA =
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15';
-    Object.defineProperty(window.navigator, 'userAgent', {
-      configurable: true,
-      value: ipadUA,
-    });
+  it('バウンススクロールで offsetTop が負になっても keyboardOffset を過大計算しない', () => {
+    // iOS Safari rubber-band: vv.offsetTop が一時的に負(例 -30)になり、その値のまま
+    // resize が固定される既知挙動。負のまま計算すると keyboardOffset = 800-(500+(-30))=330
+    // と過大化してツールバーが吊り上がる。Math.max(0, offsetTop) で真値 300 を保つ。
     stubMatchMedia(true);
-    stubVisualViewport({ height: 500 });
+    stubVisualViewport({ height: 500, offsetTop: -30 });
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
 
     const { result } = renderHook(() => useVirtualKeyboard());
-    expect(result.current.bottomOffset).toBe(300);
+    expect(result.current.keyboardOffset).toBe(300);
+  });
+
+  it('pinch zoom で scale > 1 だがキーボード無しなら 0 を返す(誤検出しない)', () => {
+    // scale=2 ノーキーボード: vv.height = 400 (layout 800 / 2), scale=2
+    // 400 * 2 = 800 → 800 - 800 = 0
+    stubMatchMedia(true);
+    stubVisualViewport({ height: 400, scale: 2 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+
+    const { result } = renderHook(() => useVirtualKeyboard());
+    expect(result.current.keyboardOffset).toBe(0);
+    expect(result.current.visible).toBe(false);
+  });
+
+  it('scale が 0 / 未定義でも 1 に fallback して過大検出しない', () => {
+    stubMatchMedia(true);
+    // 破損値: scale=0(実装バグ想定)。0 で掛けると vv.height*0=0 → offset=innerHeight で
+    // 常に閾値超過 → キーボード出っぱなし誤検知になる。防御して 1 扱い。
+    stubVisualViewport({ height: 800, scale: 0 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+
+    const { result } = renderHook(() => useVirtualKeyboard());
+    expect(result.current.keyboardOffset).toBe(0);
+    expect(result.current.visible).toBe(false);
+  });
+
+  it('resize 遷移で scale / offsetTop の変化が正しく反映される', () => {
+    // 遷移カバレッジ: (1) scale=1 & offsetTop=0 で通常キーボード → (2) scale=2 & offsetTop=0 で
+    // ピンチ拡大 → (3) offsetTop=-30 でバウンス → (4) offsetTop=0 で復元、を順に emit して
+    // 各段階で keyboardOffset が正しい値を保つことを確認する。
+    stubMatchMedia(true);
+    const vv = stubVisualViewport({ height: 500 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+
+    const { result } = renderHook(() => useVirtualKeyboard());
+    expect(result.current.keyboardOffset).toBe(300); // (1)
+
+    act(() => {
+      vv.height = 250;
+      vv.scale = 2;
+      vv.listeners.resize?.forEach((l) => l());
+    });
+    expect(result.current.keyboardOffset).toBe(300); // (2) 250*2=500 → 800-500=300
+
+    act(() => {
+      vv.height = 500;
+      vv.scale = 1;
+      vv.offsetTop = -30;
+      vv.listeners.resize?.forEach((l) => l());
+    });
+    expect(result.current.keyboardOffset).toBe(300); // (3) clamp で -30 → 0 扱い
+
+    act(() => {
+      vv.offsetTop = 0;
+      vv.listeners.resize?.forEach((l) => l());
+    });
+    expect(result.current.keyboardOffset).toBe(300); // (4) 復元
   });
 });

@@ -613,8 +613,16 @@ export function DocView({
         onClick={handleContainerClick}
         // #175: 仮想キーボード直上に貼り付いた floating ツールバー(高さ 40px)の分と
         // キーボード高さを scroll 領域の下端に空けておかないと、フォーカス行がツールバー裏に隠れる。
+        // paddingBottom はコンテンツをその分持ち上げる用。scrollPaddingBottom は iOS Safari の
+        // contenteditable auto-scroll が「その帯を避けてキャレットを見せる」ようにするためで、
+        // これがないと caret が浮きツールバー裏へ回り込む(#175 FU3)。
         style={
-          keyboardBottomOffset > 0 ? { paddingBottom: `${keyboardBottomOffset + 40}px` } : undefined
+          keyboardBottomOffset > 0
+            ? {
+                paddingBottom: `${keyboardBottomOffset + 40}px`,
+                scrollPaddingBottom: `${keyboardBottomOffset + 40}px`,
+              }
+            : undefined
         }
       >
         {/* コンテンツ幅は最大760pxで、狭くなるにつれ padding→本文ブロック順に自動追従する。

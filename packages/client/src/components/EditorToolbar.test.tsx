@@ -186,6 +186,8 @@ describe('EditorToolbar', () => {
 
     expect(container.dataset.floating).toBe('false');
     expect(container.style.position).toBe('');
+    // 通常フロー時はプレースホルダで元の 40px 高さを維持する(#177 FU 回帰防止)
+    expect(screen.getByTestId('editor-toolbar-slot').className).toContain('h-10');
 
     editor.destroy();
     vi.unstubAllGlobals();
@@ -227,8 +229,9 @@ describe('EditorToolbar', () => {
     expect(container.style.bottom).toBe('300px');
     // z-index は既存 z-40 群より上、モーダル z-80 より下(#175)
     expect(container.style.zIndex).toBe('45');
-    // プレースホルダで元の 40px 高さを確保している
-    expect(screen.getByTestId('editor-toolbar-slot').className).toContain('h-10');
+    // floating 中はプレースホルダを潰してスクロール可能領域を広げる(#177 FU)
+    expect(screen.getByTestId('editor-toolbar-slot').className).toContain('h-0');
+    expect(screen.getByTestId('editor-toolbar-slot').className).not.toContain('h-10');
 
     editor.destroy();
     vi.unstubAllGlobals();
@@ -267,6 +270,8 @@ describe('EditorToolbar', () => {
 
     expect(container.dataset.floating).toBe('false');
     expect(container.style.position).toBe('');
+    // 通常フロー時はプレースホルダで元の 40px 高さを維持する(#177 FU 回帰防止)
+    expect(screen.getByTestId('editor-toolbar-slot').className).toContain('h-10');
 
     editor.destroy();
     vi.unstubAllGlobals();

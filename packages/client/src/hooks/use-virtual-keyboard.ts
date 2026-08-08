@@ -17,19 +17,11 @@ import { useEffect, useState } from 'react';
 
 const TOUCH_QUERY = '(hover: none) and (pointer: coarse)';
 export const KEYBOARD_THRESHOLD_PX = 150;
-// iPhone Safari 系(iPhone を含む WebKit/CriOS/FxiOS 等)では、変換候補行の上に
-// AutoFill/Passkey/入力支援バー(約1行)が visualViewport の外側に重ねて描画され、
-// ツールバーがその裏に隠れる。iPad(UA が Mac 扱いで isIPhone に該当しない)は影響なし。
-// iPhone 判定時のみバッファを加算する(#175 FU)。実測 44〜52px の帯を想定して 52px。
-// バーが出ないケース(iCloud キーチェーン無効化・AutoFill 無効)ではその分だけ
-// ツールバーが浮く見た目になるが、隠れて操作不能になる方が実害が大きいため許容する。
-export const IPHONE_EXTRA_BOTTOM_PX = 52;
-
-// iPad は UA が Mac 扱いなので `iPhone` の有無だけを見れば iPhone を確実に狙える。
-function isIPhone(): boolean {
-  if (typeof navigator === 'undefined') return false;
-  return /iPhone/i.test(navigator.userAgent);
-}
+// 過去に iPhone 用の追加バッファ(AutoFill/Passkey/入力支援バーが visualViewport 外に
+// 重ねて描画される問題への対策)を持っていたが、iOS 26 実機検証でバー出現が不安定
+// (pinch/scroll/操作状況で出入りする)、固定バッファはバー無し時の空きが目立つと
+// 判断され撤去。将来 iOS が visualViewport にバー分を含める、または VirtualKeyboard API
+// が iOS Safari で使えるようになれば再導入検討(#175 FU 実機フィードバック)。
 
 export interface VirtualKeyboardState {
   /** タッチのみの端末で仮想キーボードが表示中 (= ツールバーを浮かせるべき状態) */
@@ -65,7 +57,21 @@ export function useVirtualKeyboard(): VirtualKeyboardState {
     if (typeof window === 'undefined' || !window.visualViewport) return;
     const vv = window.visualViewport;
     const update = () => {
-      const offset = window.innerHeight - (vv.height + vv.offsetTop);
+      // pinch zoom(vv.scale != 1)時は vv.height/offsetTop は visual viewport の
+      // CSS px 表示なのでレイアウト viewport の px と単位が合わない。scale を掛けて
+      // レイアウト viewport の座標系に揃えないと、ズーム量が「キーボード分」として
+      // 誤検出される。offsetTop はレイアウト座標そのものなので掛けない。ピンチは
+      // vv.width/height を変えるため resize イベントで拾える(個別購読不要)。
+      // iOS Safari のバウンススクロール中は vv.offsetTop が一時的にマイナスになり、
+      // その値のまま resize が固定される既知挙動があるため 0 でクランプする(負の値だと
+      // keyboardOffset が過大に計算されツールバーが上へ吊り上がったまま残る)。
+      // scale は仕様上正の実数だが、実装バグ / polyfill で 0 を返す事故に備えて 1 に fallback。
+      // TODO: ピンチズーム中に下方向 pan した場合(offsetTop > 0)はキーボード分から
+      // pan 量を差し引く方向に働くため、キーボード裏へツールバーが埋もれる可能性がある。
+      // ピンチ + キーボード + 下パンの同時発生は頻度が低いため現状は割り切り(#175 FU)。
+      const scale = vv.scale && vv.scale > 0 ? vv.scale : 1;
+      const offsetTop = Math.max(0, vv.offsetTop);
+      const offset = Math.max(0, window.innerHeight - (vv.height * scale + offsetTop));
       setKeyboardOffset(offset > KEYBOARD_THRESHOLD_PX ? offset : 0);
     };
     update();
@@ -78,10 +84,9 @@ export function useVirtualKeyboard(): VirtualKeyboardState {
   }, [isTouch]);
 
   const visible = isTouch && keyboardOffset > 0;
-  const extra = visible && isIPhone() ? IPHONE_EXTRA_BOTTOM_PX : 0;
   return {
     visible,
-    bottomOffset: visible ? keyboardOffset + extra : 0,
+    bottomOffset: visible ? keyboardOffset : 0,
     isTouch,
     keyboardOffset,
   };
