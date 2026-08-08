@@ -10,6 +10,7 @@ import { createEditorExtensions } from '../editor/markdown';
 import { parseMarkdownFragment } from '../editor/parse-fragment';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
+import { useVirtualKeyboard } from '../hooks/use-virtual-keyboard';
 import { titleFromPath } from '../lib/doc-path';
 import { handleWikilinkClick } from '../lib/handle-wikilink-click';
 import { removeInlineTag, renameInlineTag } from '../lib/inline-tag-rewrite';
@@ -101,6 +102,8 @@ export function DocView({
   const editorChromeVisible = useUIStore((s) => s.editorChromeVisible);
   const showEditorChrome = useUIStore((s) => s.showEditorChrome);
   const resetEditorChrome = useUIStore((s) => s.resetEditorChrome);
+  // #175: 仮想キーボード出現時に scroll 領域下端へ空ける px 数
+  const { bottomOffset: keyboardBottomOffset } = useVirtualKeyboard();
   const { data: tree } = useTree();
 
   const wikilinkDocsRef = useRef<DocSummary[]>([]);
@@ -371,7 +374,9 @@ export function DocView({
       editor
         .chain()
         .focus()
-        .insertContent([{ type: 'text', marks: [{ type: 'link', attrs: { href: url } }], text: url }])
+        .insertContent([
+          { type: 'text', marks: [{ type: 'link', attrs: { href: url } }], text: url },
+        ])
         .run();
     } else {
       editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
@@ -395,7 +400,10 @@ export function DocView({
       }
     }
     if (inserted > 0) {
-      showToast('success', inserted === 1 ? '画像を挿入しました' : `${inserted}件の画像を挿入しました`);
+      showToast(
+        'success',
+        inserted === 1 ? '画像を挿入しました' : `${inserted}件の画像を挿入しました`,
+      );
     }
   }
 
@@ -438,8 +446,7 @@ export function DocView({
     // indexOf + slice で「最初のマーカーで分割し、残り本文は post 側に保持する」
     const cursorIdx = expanded.indexOf(CURSOR_MARKER);
     const preRaw = cursorIdx === -1 ? expanded : expanded.slice(0, cursorIdx);
-    const postRaw =
-      cursorIdx === -1 ? '' : expanded.slice(cursorIdx + CURSOR_MARKER.length);
+    const postRaw = cursorIdx === -1 ? '' : expanded.slice(cursorIdx + CURSOR_MARKER.length);
 
     const pre = parseMarkdownFragment(preRaw);
     const post = parseMarkdownFragment(postRaw);
@@ -453,12 +460,7 @@ export function DocView({
 
     // 1 chain / 1 transaction にまとめる(中#5 / #12: undo 1 回で完全 revert)
     const combined = [...pre.content, ...post.content];
-    editor
-      .chain()
-      .focus()
-      .insertContentAt(insertAt, combined)
-      .setTextSelection(cursorAt)
-      .run();
+    editor.chain().focus().insertContentAt(insertAt, combined).setTextSelection(cursorAt).run();
 
     showToast('success', 'テンプレートを適用しました');
   }
@@ -593,7 +595,15 @@ export function DocView({
         />
       )}
 
-      <div className="flex-1 overflow-auto" onClick={handleContainerClick}>
+      <div
+        className="flex-1 overflow-auto"
+        onClick={handleContainerClick}
+        // #175: 仮想キーボード直上に貼り付いた floating ツールバー(高さ 40px)の分と
+        // キーボード高さを scroll 領域の下端に空けておかないと、フォーカス行がツールバー裏に隠れる。
+        style={
+          keyboardBottomOffset > 0 ? { paddingBottom: `${keyboardBottomOffset + 40}px` } : undefined
+        }
+      >
         {/* コンテンツ幅は最大760pxで、狭くなるにつれ padding→本文ブロック順に自動追従する。
             記事幅がビューポート幅を超えないよう `max-w-full` を保険で入れる */}
         <div className="mx-auto max-w-[min(760px,100%)] px-4 py-4 sm:px-6 lg:px-8">
