@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { useVirtualKeyboard } from './use-virtual-keyboard';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { IPHONE_EXTRA_BOTTOM_PX, useVirtualKeyboard } from './use-virtual-keyboard';
 
 interface StubMQL {
   matches: boolean;
@@ -69,11 +69,22 @@ function stubVisualViewport(initial: { height: number; offsetTop?: number }): St
 }
 
 describe('useVirtualKeyboard', () => {
+  // jsdom 既定の UA を退避し、UA を書き換える it が失敗しても後続テストに漏れないよう
+  // afterEach で無条件に戻す(Object.defineProperty は vi.unstubAllGlobals で戻せないため)
+  let originalUA = '';
+  beforeAll(() => {
+    originalUA = window.navigator.userAgent;
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     Object.defineProperty(window, 'visualViewport', {
       configurable: true,
       value: undefined,
+    });
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value: originalUA,
     });
     cleanup();
   });
@@ -198,5 +209,39 @@ describe('useVirtualKeyboard', () => {
     const { result } = renderHook(() => useVirtualKeyboard());
     expect(result.current.isTouch).toBe(true);
     expect(result.current.bottomOffset).toBe(0);
+  });
+
+  it('iPhone(UA 判定)では入力支援バー分バッファを bottomOffset に加算する', () => {
+    // iPhone Safari UA を模す(iPadOS は UA が Mac 扱いなので `iPhone` 文字列で確実に区別できる)
+    const iphoneUA =
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1';
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value: iphoneUA,
+    });
+    stubMatchMedia(true);
+    stubVisualViewport({ height: 500 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+
+    const { result } = renderHook(() => useVirtualKeyboard());
+    // keyboardOffset は生の 300px、bottomOffset はそこにバッファ分を加算
+    expect(result.current.keyboardOffset).toBe(300);
+    expect(result.current.bottomOffset).toBe(300 + IPHONE_EXTRA_BOTTOM_PX);
+  });
+
+  it('iPad(Mac UA)では iPhone バッファを加算しない', () => {
+    // iPadOS Safari の UA は Mac 扱い。iPhone 文字列を含まないので加算されない
+    const ipadUA =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15';
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value: ipadUA,
+    });
+    stubMatchMedia(true);
+    stubVisualViewport({ height: 500 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+
+    const { result } = renderHook(() => useVirtualKeyboard());
+    expect(result.current.bottomOffset).toBe(300);
   });
 });
