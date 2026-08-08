@@ -157,6 +157,14 @@ export function DocView({
       session.updateBody(e.storage.markdown.getMarkdown() as string);
     },
     editorProps: {
+      // iPadOS Safari の外部キーボードでは IME 変換中の Space も keydown として
+      // JS に届く。ProseMirror にそのまま処理させると内部で preventDefault され、
+      // WebKit の IME 候補送りが奪われるため、変換中の Space だけ PM の既定ハンドラを
+      // バイパスして WebKit の IME に処理を委ねる(composition の text 反映は beforeinput
+      // 経由なのでそちらは触らない)
+      handleDOMEvents: {
+        keydown: (_view, event) => event.isComposing && event.key === ' ',
+      },
       handleDrop: (_view, event) => {
         const files = Array.from(event.dataTransfer?.files ?? []).filter((f) =>
           f.type.startsWith(IMAGE_MIME_PREFIX),
@@ -206,7 +214,12 @@ export function DocView({
   useEffect(() => {
     if (!editor || session.mode !== 'edit') return;
     const dom = editor.view.dom;
-    const handler = () => showEditorChrome();
+    // IME 変換中の keydown で発火すると、iPadOS Safari で編集ツールバーの出現に伴う
+    // レイアウトシフトが起き、外部キーボードの Space による変換候補選択移動が奪われる
+    const handler = (e: Event) => {
+      if (e instanceof KeyboardEvent && e.isComposing) return;
+      showEditorChrome();
+    };
     dom.addEventListener('click', handler);
     dom.addEventListener('keydown', handler);
     dom.addEventListener('touchstart', handler);
