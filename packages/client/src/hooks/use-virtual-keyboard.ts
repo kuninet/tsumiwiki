@@ -20,10 +20,13 @@ export const KEYBOARD_THRESHOLD_PX = 150;
 // iPhone Safari 系(iPhone を含む WebKit/CriOS/FxiOS 等)では、変換候補行の上に
 // AutoFill/Passkey/入力支援バー(約1行)が visualViewport の外側に重ねて描画され、
 // ツールバーがその裏に隠れる。iPad(UA が Mac 扱いで isIPhone に該当しない)は影響なし。
-// iPhone 判定時のみバッファを加算する(#175 FU)。実測 44〜52px の帯を想定して 52px。
+// iPhone 判定時のみバッファを加算する(#175 FU / #177 実機フィードバック反映)。
+// バッファ値は iPhone iOS 26 Safari 実機での目視合わせ。52px ではツールバー下部が
+// まだ隠れることが確認されたため 64px に引き上げた(iPhone SE / mini / landscape や
+// iCloud キーチェーン+Passkey 併用時のバー変動については追加検証が望ましい)。
 // バーが出ないケース(iCloud キーチェーン無効化・AutoFill 無効)ではその分だけ
 // ツールバーが浮く見た目になるが、隠れて操作不能になる方が実害が大きいため許容する。
-export const IPHONE_EXTRA_BOTTOM_PX = 52;
+export const IPHONE_EXTRA_BOTTOM_PX = 64;
 
 // iPad は UA が Mac 扱いなので `iPhone` の有無だけを見れば iPhone を確実に狙える。
 function isIPhone(): boolean {

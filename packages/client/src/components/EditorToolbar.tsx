@@ -145,9 +145,10 @@ export function EditorToolbar({
   }
 
   return (
-    // 外側は常に 40px の枠を確保するプレースホルダ。
-    // floating 中は内側が position:fixed に抜けるため、レイアウトジャンプを防ぐ役割。
-    <div className="h-10 shrink-0" data-testid="editor-toolbar-slot">
+    // 通常フロー時は 40px の枠を確保するプレースホルダとして機能する。floating 時は
+    // 内側が position:fixed で抜けるので、プレースホルダ自体を 0 にしてエディタ本体の
+    // スクロール可能領域を広げる(#177 実機フィードバック反映)。
+    <div className={floating ? 'h-0 shrink-0' : 'h-10 shrink-0'} data-testid="editor-toolbar-slot">
       <div
         data-testid="editor-toolbar"
         data-floating={String(floating)}
