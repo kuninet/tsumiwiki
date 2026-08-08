@@ -48,7 +48,9 @@ describe('EditorToolbar', () => {
     const editor = createTestEditor('本文');
     const onOpenLinkDialog = vi.fn();
 
-    render(<EditorToolbar editor={editor} onOpenLinkDialog={onOpenLinkDialog} onPickImage={vi.fn()} />);
+    render(
+      <EditorToolbar editor={editor} onOpenLinkDialog={onOpenLinkDialog} onPickImage={vi.fn()} />,
+    );
     fireEvent.click(screen.getByRole('button', { name: 'リンク(Ctrl/Cmd+K)' }));
 
     expect(onOpenLinkDialog).toHaveBeenCalledTimes(1);
@@ -141,7 +143,8 @@ describe('EditorToolbar', () => {
       (screen.getByRole('button', { name: 'インデント追加(Tab)' }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(
-      (screen.getByRole('button', { name: 'インデント戻し(Shift+Tab)' }) as HTMLButtonElement).disabled,
+      (screen.getByRole('button', { name: 'インデント戻し(Shift+Tab)' }) as HTMLButtonElement)
+        .disabled,
     ).toBe(true);
 
     editor.destroy();
@@ -157,6 +160,136 @@ describe('EditorToolbar', () => {
     expect(container.className).toContain('flex-nowrap');
     expect(container.className).toContain('overflow-x-auto');
     expect(container.className).not.toContain('flex-wrap');
+
+    editor.destroy();
+  });
+
+  it('デスクトップ(非タッチ)ではツールバーが通常フローのまま', () => {
+    // matchMedia が false = hover 可能なデスクトップ想定
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => true,
+        onchange: null,
+      })),
+    );
+
+    const editor = createTestEditor('');
+    render(<EditorToolbar editor={editor} onOpenLinkDialog={vi.fn()} onPickImage={vi.fn()} />);
+    const container = screen.getByTestId('editor-toolbar');
+
+    expect(container.dataset.floating).toBe('false');
+    expect(container.style.position).toBe('');
+
+    editor.destroy();
+    vi.unstubAllGlobals();
+  });
+
+  it('タッチ端末で仮想キーボード表示中はツールバーが fixed でキーボード直上に貼り付く', () => {
+    // (hover: none) and (pointer: coarse) にマッチさせる
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn().mockImplementation((query: string) => ({
+        matches: true,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => true,
+        onchange: null,
+      })),
+    );
+    // visualViewport が縮小している = キーボードが出ている状態
+    Object.defineProperty(window, 'visualViewport', {
+      configurable: true,
+      value: {
+        height: 500,
+        offsetTop: 0,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      },
+    });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+
+    const editor = createTestEditor('');
+    render(<EditorToolbar editor={editor} onOpenLinkDialog={vi.fn()} onPickImage={vi.fn()} />);
+    const container = screen.getByTestId('editor-toolbar');
+
+    expect(container.dataset.floating).toBe('true');
+    expect(container.style.position).toBe('fixed');
+    expect(container.style.bottom).toBe('300px');
+    // z-index は既存 z-40 群より上、モーダル z-80 より下(#175)
+    expect(container.style.zIndex).toBe('45');
+    // プレースホルダで元の 40px 高さを確保している
+    expect(screen.getByTestId('editor-toolbar-slot').className).toContain('h-10');
+
+    editor.destroy();
+    vi.unstubAllGlobals();
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined });
+  });
+
+  it('タッチ端末でも仮想キーボードが閉じている間はツールバーが通常フロー', () => {
+    // 外部キーボード接続時など、visualViewport が縮小していないケース
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn().mockImplementation((query: string) => ({
+        matches: true,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => true,
+        onchange: null,
+      })),
+    );
+    Object.defineProperty(window, 'visualViewport', {
+      configurable: true,
+      value: {
+        height: 800,
+        offsetTop: 0,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      },
+    });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+
+    const editor = createTestEditor('');
+    render(<EditorToolbar editor={editor} onOpenLinkDialog={vi.fn()} onPickImage={vi.fn()} />);
+    const container = screen.getByTestId('editor-toolbar');
+
+    expect(container.dataset.floating).toBe('false');
+    expect(container.style.position).toBe('');
+
+    editor.destroy();
+    vi.unstubAllGlobals();
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined });
+  });
+
+  it('ツールバーボタンは pointerdown(touch) で preventDefault し editor blur を防ぐ', () => {
+    const editor = createTestEditor('本文');
+
+    render(<EditorToolbar editor={editor} onOpenLinkDialog={vi.fn()} onPickImage={vi.fn()} />);
+    const bold = screen.getByRole('button', { name: '太字' });
+
+    // touch: preventDefault される
+    const touchEvent = new Event('pointerdown', { bubbles: true, cancelable: true });
+    Object.defineProperty(touchEvent, 'pointerType', { value: 'touch' });
+    bold.dispatchEvent(touchEvent);
+    expect(touchEvent.defaultPrevented).toBe(true);
+
+    // mouse: pointerdown では preventDefault されない(mousedown 側で担保する)
+    const mouseEvent = new Event('pointerdown', { bubbles: true, cancelable: true });
+    Object.defineProperty(mouseEvent, 'pointerType', { value: 'mouse' });
+    bold.dispatchEvent(mouseEvent);
+    expect(mouseEvent.defaultPrevented).toBe(false);
 
     editor.destroy();
   });

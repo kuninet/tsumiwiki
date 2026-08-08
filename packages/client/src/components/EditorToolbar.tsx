@@ -15,8 +15,9 @@ import {
   Table,
   Workflow,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { useRef } from 'react';
+import { useVirtualKeyboard } from '../hooks/use-virtual-keyboard';
 
 // エディタツールバー(FR-EDIT-03・設計05章5.3)。編集モード時のみDocView上部に表示する。
 // 狭幅時: `sm` 未満はアイコンのみ、`sm` 以上はアイコン+ラベル。折返しはせず横スクロール。
@@ -56,8 +57,13 @@ function ToolbarButton({
       aria-label={title ?? label}
       aria-pressed={active}
       disabled={disabled}
-      // mousedownでpreventDefaultし、クリックしてもエディタの選択状態を失わないようにする
+      // mousedown/pointerdownでpreventDefaultし、クリックしてもエディタの選択状態を失わないようにする
+      // iOS Safariは `onMouseDown` だけではフォーカス遷移を抑止できず、タッチ操作で editor が blur
+      // → 仮想キーボード閉じ → 位置ズレでクリック空振り、が起こるため pointerdown も塞ぐ(#175)。
       onMouseDown={(e) => e.preventDefault()}
+      onPointerDown={(e) => {
+        if (e.pointerType === 'touch' || e.pointerType === 'pen') e.preventDefault();
+      }}
       onClick={onClick}
       className={`flex h-7 min-w-7 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 text-sm disabled:opacity-40 ${
         active ? 'bg-active text-accent' : `text-ink-soft ${disabled ? '' : 'hover:bg-hoverbg'}`
@@ -65,7 +71,9 @@ function ToolbarButton({
     >
       {icon}
       {icon ? (
-        <span className={['hidden sm:inline', labelClassName].filter(Boolean).join(' ')}>{label}</span>
+        <span className={['hidden sm:inline', labelClassName].filter(Boolean).join(' ')}>
+          {label}
+        </span>
       ) : (
         <span className={labelClassName}>{label}</span>
       )}
@@ -100,6 +108,14 @@ export function EditorToolbar({
   onOpenTemplateApply,
 }: EditorToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // #175: タッチ端末で仮想キーボードが出ている間は、ツールバーをキーボード直上へ貼り付ける。
+  // デスクトップ(hover 可 or ポインタ粗くない)は常に通常フロー。
+  // z-index 45: 既存の z-40 群(AppShell モバイルドロワー・DropZoneOverlay・SearchBox 等)より
+  // 上、モーダル z-80 (PromptDialog/LinkDialog/ConfirmDialog) より下に置く。
+  const { visible: floating, bottomOffset } = useVirtualKeyboard();
+  const floatingStyle: CSSProperties | undefined = floating
+    ? { position: 'fixed', bottom: `${bottomOffset}px`, left: 0, right: 0, zIndex: 45 }
+    : undefined;
 
   // 選択範囲の変化(見出し/太字等のトグル状態)にツールバーの表示を追随させる
   const active = useEditorState({
@@ -129,154 +145,166 @@ export function EditorToolbar({
   }
 
   return (
-    <div
-      data-testid="editor-toolbar"
-      className="flex h-10 flex-nowrap items-center gap-1 overflow-x-auto overscroll-x-contain border-y border-line bg-panel px-4 sm:px-6 lg:px-8"
-    >
-      <ToolbarButton
-        label="H1"
-        active={active.h1}
-        onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-      />
-      <ToolbarButton
-        label="H2"
-        active={active.h2}
-        onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-      />
-      <ToolbarButton
-        label="H3"
-        active={active.h3}
-        onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-      />
-      <Separator />
-      <ToolbarButton
-        label="B"
-        title="太字"
-        labelClassName="font-bold"
-        active={active.bold}
-        onClick={() => editor.chain().focus().toggleBold().run()}
-      />
-      <ToolbarButton
-        label="I"
-        title="斜体"
-        labelClassName="italic"
-        active={active.italic}
-        onClick={() => editor.chain().focus().toggleItalic().run()}
-      />
-      <ToolbarButton
-        label="S"
-        title="打消し"
-        labelClassName="line-through"
-        active={active.strike}
-        onClick={() => editor.chain().focus().toggleStrike().run()}
-      />
-      <Separator />
-      <ToolbarButton
-        icon={<IndentIncrease size={ICON_SIZE} aria-hidden="true" />}
-        label="インデント"
-        title="インデント追加(Tab)"
-        disabled={!active.canIndent}
-        onClick={() => {
-          const type = sinkableListItem(editor);
-          if (type) editor.chain().focus().sinkListItem(type).run();
-        }}
-      />
-      <ToolbarButton
-        icon={<IndentDecrease size={ICON_SIZE} aria-hidden="true" />}
-        label="戻す"
-        title="インデント戻し(Shift+Tab)"
-        disabled={!active.canOutdent}
-        onClick={() => {
-          const type = liftableListItem(editor);
-          if (type) editor.chain().focus().liftListItem(type).run();
-        }}
-      />
-      <Separator />
-      <ToolbarButton
-        icon={<List size={ICON_SIZE} aria-hidden="true" />}
-        label="箇条書き"
-        title="箇条書き"
-        active={active.bulletList}
-        onClick={() => editor.chain().focus().toggleBulletList().run()}
-      />
-      <ToolbarButton
-        icon={<ListOrdered size={ICON_SIZE} aria-hidden="true" />}
-        label="番号"
-        title="番号付きリスト"
-        active={active.orderedList}
-        onClick={() => editor.chain().focus().toggleOrderedList().run()}
-      />
-      <ToolbarButton
-        icon={<ListTodo size={ICON_SIZE} aria-hidden="true" />}
-        label="チェック"
-        title="チェックリスト"
-        active={active.taskList}
-        onClick={() => editor.chain().focus().toggleTaskList().run()}
-      />
-      <Separator />
-      <ToolbarButton
-        icon={<Table size={ICON_SIZE} aria-hidden="true" />}
-        label="表"
-        title="表を挿入(3x3)"
-        onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
-      />
-      <ToolbarButton
-        icon={<Code2 size={ICON_SIZE} aria-hidden="true" />}
-        label="コード"
-        title="コードブロック"
-        active={active.codeBlock}
-        onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-      />
-      <ToolbarButton
-        icon={<Quote size={ICON_SIZE} aria-hidden="true" />}
-        label="引用"
-        title="引用"
-        active={active.blockquote}
-        onClick={() => editor.chain().focus().toggleBlockquote().run()}
-      />
-      <ToolbarButton
-        icon={<Minus size={ICON_SIZE} aria-hidden="true" />}
-        label="区切り線"
-        title="区切り線"
-        onClick={() => editor.chain().focus().setHorizontalRule().run()}
-      />
-      <Separator />
-      <ToolbarButton
-        icon={<LinkIcon size={ICON_SIZE} aria-hidden="true" />}
-        label="リンク"
-        title="リンク(Ctrl/Cmd+K)"
-        active={active.link}
-        onClick={onOpenLinkDialog}
-      />
-      <ToolbarButton
-        icon={<ImageIcon size={ICON_SIZE} aria-hidden="true" />}
-        label="画像"
-        title="画像"
-        onClick={() => fileInputRef.current?.click()}
-      />
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/png,image/jpeg,image/gif,image/svg+xml,image/webp"
-        onChange={handleFileChange}
-        className="hidden"
-      />
-      <ToolbarButton
-        icon={<Workflow size={ICON_SIZE} aria-hidden="true" />}
-        label="Mermaid"
-        title="Mermaid"
-        onClick={() =>
-          editor.chain().focus().insertContent({ type: 'codeBlock', attrs: { language: 'mermaid' } }).run()
-        }
-      />
-      {onOpenTemplateApply && (
+    // 外側は常に 40px の枠を確保するプレースホルダ。
+    // floating 中は内側が position:fixed に抜けるため、レイアウトジャンプを防ぐ役割。
+    <div className="h-10 shrink-0" data-testid="editor-toolbar-slot">
+      <div
+        data-testid="editor-toolbar"
+        data-floating={String(floating)}
+        style={floatingStyle}
+        className="flex h-10 flex-nowrap items-center gap-1 overflow-x-auto overscroll-x-contain border-y border-line bg-panel px-4 sm:px-6 lg:px-8"
+      >
         <ToolbarButton
-          icon={<FileText size={ICON_SIZE} aria-hidden="true" />}
-          label="テンプレ適用"
-          title="テンプレート適用(挿入/追記)"
-          onClick={onOpenTemplateApply}
+          label="H1"
+          active={active.h1}
+          onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
         />
-      )}
+        <ToolbarButton
+          label="H2"
+          active={active.h2}
+          onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+        />
+        <ToolbarButton
+          label="H3"
+          active={active.h3}
+          onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+        />
+        <Separator />
+        <ToolbarButton
+          label="B"
+          title="太字"
+          labelClassName="font-bold"
+          active={active.bold}
+          onClick={() => editor.chain().focus().toggleBold().run()}
+        />
+        <ToolbarButton
+          label="I"
+          title="斜体"
+          labelClassName="italic"
+          active={active.italic}
+          onClick={() => editor.chain().focus().toggleItalic().run()}
+        />
+        <ToolbarButton
+          label="S"
+          title="打消し"
+          labelClassName="line-through"
+          active={active.strike}
+          onClick={() => editor.chain().focus().toggleStrike().run()}
+        />
+        <Separator />
+        <ToolbarButton
+          icon={<IndentIncrease size={ICON_SIZE} aria-hidden="true" />}
+          label="インデント"
+          title="インデント追加(Tab)"
+          disabled={!active.canIndent}
+          onClick={() => {
+            const type = sinkableListItem(editor);
+            if (type) editor.chain().focus().sinkListItem(type).run();
+          }}
+        />
+        <ToolbarButton
+          icon={<IndentDecrease size={ICON_SIZE} aria-hidden="true" />}
+          label="戻す"
+          title="インデント戻し(Shift+Tab)"
+          disabled={!active.canOutdent}
+          onClick={() => {
+            const type = liftableListItem(editor);
+            if (type) editor.chain().focus().liftListItem(type).run();
+          }}
+        />
+        <Separator />
+        <ToolbarButton
+          icon={<List size={ICON_SIZE} aria-hidden="true" />}
+          label="箇条書き"
+          title="箇条書き"
+          active={active.bulletList}
+          onClick={() => editor.chain().focus().toggleBulletList().run()}
+        />
+        <ToolbarButton
+          icon={<ListOrdered size={ICON_SIZE} aria-hidden="true" />}
+          label="番号"
+          title="番号付きリスト"
+          active={active.orderedList}
+          onClick={() => editor.chain().focus().toggleOrderedList().run()}
+        />
+        <ToolbarButton
+          icon={<ListTodo size={ICON_SIZE} aria-hidden="true" />}
+          label="チェック"
+          title="チェックリスト"
+          active={active.taskList}
+          onClick={() => editor.chain().focus().toggleTaskList().run()}
+        />
+        <Separator />
+        <ToolbarButton
+          icon={<Table size={ICON_SIZE} aria-hidden="true" />}
+          label="表"
+          title="表を挿入(3x3)"
+          onClick={() =>
+            editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+          }
+        />
+        <ToolbarButton
+          icon={<Code2 size={ICON_SIZE} aria-hidden="true" />}
+          label="コード"
+          title="コードブロック"
+          active={active.codeBlock}
+          onClick={() => editor.chain().focus().toggleCodeBlock().run()}
+        />
+        <ToolbarButton
+          icon={<Quote size={ICON_SIZE} aria-hidden="true" />}
+          label="引用"
+          title="引用"
+          active={active.blockquote}
+          onClick={() => editor.chain().focus().toggleBlockquote().run()}
+        />
+        <ToolbarButton
+          icon={<Minus size={ICON_SIZE} aria-hidden="true" />}
+          label="区切り線"
+          title="区切り線"
+          onClick={() => editor.chain().focus().setHorizontalRule().run()}
+        />
+        <Separator />
+        <ToolbarButton
+          icon={<LinkIcon size={ICON_SIZE} aria-hidden="true" />}
+          label="リンク"
+          title="リンク(Ctrl/Cmd+K)"
+          active={active.link}
+          onClick={onOpenLinkDialog}
+        />
+        <ToolbarButton
+          icon={<ImageIcon size={ICON_SIZE} aria-hidden="true" />}
+          label="画像"
+          title="画像"
+          onClick={() => fileInputRef.current?.click()}
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/svg+xml,image/webp"
+          onChange={handleFileChange}
+          className="hidden"
+        />
+        <ToolbarButton
+          icon={<Workflow size={ICON_SIZE} aria-hidden="true" />}
+          label="Mermaid"
+          title="Mermaid"
+          onClick={() =>
+            editor
+              .chain()
+              .focus()
+              .insertContent({ type: 'codeBlock', attrs: { language: 'mermaid' } })
+              .run()
+          }
+        />
+        {onOpenTemplateApply && (
+          <ToolbarButton
+            icon={<FileText size={ICON_SIZE} aria-hidden="true" />}
+            label="テンプレ適用"
+            title="テンプレート適用(挿入/追記)"
+            onClick={onOpenTemplateApply}
+          />
+        )}
+      </div>
     </div>
   );
 }
