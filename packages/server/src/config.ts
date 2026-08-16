@@ -19,6 +19,8 @@ export interface AppConfig {
   staticRoot: string | null;
   logLevel: string;
   logFile: string | null;
+  mcpEnabled: boolean;
+  mcpToken: string | null;
 }
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'];
@@ -71,6 +73,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     throw new Error(`LOG_LEVEL は ${LOG_LEVELS.join(' / ')} のいずれかで指定してください: ${logLevel}`);
   }
 
+  // Remote MCP(issue #190)。既定は無効。有効化時は固定Bearerトークンを必須とし、
+  // 短いトークンでの誤運用を防ぐためfail-secureで長さも検証する
+  const mcpEnabled = env.MCP_ENABLED === 'true';
+  const mcpToken = env.MCP_TOKEN ?? null;
+  if (mcpEnabled && (mcpToken == null || mcpToken.length < 32)) {
+    throw new Error('MCP_ENABLED=true のときは MCP_TOKEN を 32 文字以上で設定してください');
+  }
+
   return {
     libraryPath,
     port: intOf(env.PORT, 3000, 'PORT', 65535),
@@ -89,6 +99,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     staticRoot: resolveStaticRoot(env.STATIC_ROOT),
     logLevel,
     logFile: env.LOG_FILE ?? null,
+    mcpEnabled,
+    mcpToken,
   };
 }
 

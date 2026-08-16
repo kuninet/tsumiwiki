@@ -13,7 +13,7 @@ import { InvalidPathError, isProtectedPath, normalizeRelPath, resolveInLibrary }
 import type { DraftService } from './draft-service.js';
 import type { GitAuthor, GitService } from './git-service.js';
 import type { IndexerService } from './indexer-service.js';
-import type { LockService } from './lock-service.js';
+import { DocLockedError, type LockService } from './lock-service.js';
 import { parseDocMeta } from './markdown-meta.js';
 
 // 文書・フォルダ操作(FR-DOC / 設計03章)
@@ -391,6 +391,45 @@ export class DocService {
     await this.indexer.indexFile(normalized);
     // 明示保存に成功したら本人の下書きは不要になる(FR-EDIT-08)
     this.drafts.removeOwn(normalized, userId);
+    const after = await stat(abs);
+    return { updatedAt: after.mtime.toISOString() };
+  }
+
+  // MCP経由の保存(issue #190)。呼び出しユーザーの概念がないため、UI編集ロックの
+  // 保持は要求しない代わりに、誰かが有効なロックを保持中(=UIで編集中)なら拒否する
+  // (MCPからの上書きで進行中の編集を潰さないための安全策)。下書き削除も行わない。
+  async saveDocMcp(
+    relPath: string,
+    body: string,
+    tags: string[] | undefined,
+    baseUpdatedAt: string,
+    author: GitAuthor,
+  ): Promise<{ updatedAt: string }> {
+    const normalized = this.validateDocPath(relPath);
+    const abs = resolveInLibrary(this.libraryPath, normalized);
+    const lock = this.locks.getActive(normalized);
+    if (lock) throw new DocLockedError(lock);
+
+    let current: string;
+    let st: Awaited<ReturnType<typeof stat>>;
+    try {
+      st = await stat(abs);
+      current = await readFile(abs, 'utf8');
+    } catch {
+      throw new DocNotFoundError(normalized);
+    }
+    // 競合検知: 取得時点のupdatedAtと現在のmtimeが一致しなければ拒否(設計03章)
+    if (st.mtime.toISOString() !== baseUpdatedAt) {
+      throw new DocConflictError(
+        'この文書は取得後に変更されています。内容を退避してから再読み込みしてください',
+      );
+    }
+
+    // 保存はLFに統一する(NFR-COMP-03。CRLF文書も保存時にLF化する)
+    const content = this.composeContent(current, body, tags).replace(/\r\n/g, '\n');
+    await this.writeAtomic(abs, content);
+    await this.tryCommit([normalized], `edit: ${normalized}`, author);
+    await this.indexer.indexFile(normalized);
     const after = await stat(abs);
     return { updatedAt: after.mtime.toISOString() };
   }

@@ -6,6 +6,7 @@ import type { HealthResponse } from '@tsumiwiki/shared';
 import type { AppConfig } from './config';
 import type { AppDatabase } from './db';
 import { authPlugin } from './plugins/auth.js';
+import { registerMcpRoutes } from './mcp/register.js';
 import { registerAttachmentRoutes } from './routes/attachments.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerDocRoutes } from './routes/docs.js';
@@ -116,6 +117,13 @@ export function buildApp(options: BuildAppOptions) {
     instance.register(templatesRoutes);
   });
 
+  // Remote MCPエンドポイント(issue #190)。未設定・falseなら既存動作に一切影響しない
+  if (config.mcpEnabled) {
+    app.register(async (instance) => {
+      await registerMcpRoutes(instance);
+    });
+  }
+
   // クライアントの静的配信(本番の単一ポート運用。設計01章1.4)
   if (config.staticRoot) {
     app.register(fastifyStatic, {
@@ -128,6 +136,12 @@ export function buildApp(options: BuildAppOptions) {
     app.setNotFoundHandler((req, reply) => {
       const lower = req.url.toLowerCase();
       if (lower.startsWith('/api/')) {
+        return reply
+          .code(404)
+          .send({ error: { code: 'NOT_FOUND', message: 'エンドポイントがありません' } });
+      }
+      // MCP無効時にMCPクライアントへHTMLを返さない(切り戻し運用時の誤動作防止。issue #190)
+      if (lower === '/mcp' || lower.startsWith('/mcp?') || lower.startsWith('/mcp/')) {
         return reply
           .code(404)
           .send({ error: { code: 'NOT_FOUND', message: 'エンドポイントがありません' } });
