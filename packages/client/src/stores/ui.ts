@@ -15,7 +15,7 @@ interface UIState {
   sidebarTab: SidebarTab;
   expandedFolders: Set<string>;
   selectedTags: string[];
-  // AppShellのサイドバーフッター「+ 新規文書」や Ctrl+N ショートカットから
+  // AppShellのサイドバーフッターの📝ボタンや Ctrl+N ショートカットから
   // FolderTree の新規文書ダイアログを開かせるための要求。
   // nonce は毎回インクリメントし、folder に初期フォルダを載せる
   // (nonce だけでは連続要求で同じ folder を再指定できないため)

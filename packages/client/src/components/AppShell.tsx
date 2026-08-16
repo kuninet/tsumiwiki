@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useCreateOrOpenTodayNote } from '../api/daily-notes';
+import { ApiRequestError } from '../api/client';
+import { useCreateNoteByDate, useCreateOrOpenTodayNote } from '../api/daily-notes';
 import { useApplyTemplate } from '../api/templates';
 import { useMediaQuery } from '../hooks/use-media-query';
 import { useNewDocShortcut } from '../hooks/use-new-doc-shortcut';
@@ -8,6 +9,7 @@ import { useTabSwitchShortcut } from '../hooks/use-tab-switch-shortcut';
 import { useTabsBootCleanup } from '../hooks/use-tabs-boot-cleanup';
 import { docUrl } from '../lib/doc-path';
 import { useUIStore } from '../stores/ui';
+import { DatePickerDialog } from './DatePickerDialog';
 import { FolderTree } from './FolderTree';
 import { Header } from './Header';
 import { StatusBar } from './StatusBar';
@@ -35,14 +37,34 @@ export function AppShell() {
 
   const navigate = useNavigate();
   const createOrOpenTodayNote = useCreateOrOpenTodayNote();
+  const createNoteByDate = useCreateNoteByDate();
   const applyTemplate = useApplyTemplate();
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
 
   function handleOpenTodayNote() {
     // タブ化(#133)以降、新規文書を開いても現在の dirty タブは残るので確認不要
     createOrOpenTodayNote.mutate(undefined, {
       onSuccess: (res) => navigate(docUrl(res.path)),
     });
+  }
+
+  function handleConfirmDate(date: string) {
+    createNoteByDate.mutate(
+      { date },
+      {
+        onSuccess: (res) => {
+          setDatePickerOpen(false);
+          navigate(docUrl(res.path));
+        },
+        onError: (err) => {
+          // #189: 409 DAILY_NOTE_EXISTS のときだけダイアログを残し、日付を選び直せるようにする。
+          // それ以外(500, VALIDATION_ERROR, ネットワーク断など)は閉じる — トーストで通知は済んでいる
+          if (err instanceof ApiRequestError && err.code === 'DAILY_NOTE_EXISTS') return;
+          setDatePickerOpen(false);
+        },
+      },
+    );
   }
 
   function handleOpenTemplatePicker() {
@@ -144,39 +166,56 @@ export function AppShell() {
             <div className="flex-1 overflow-y-auto">
               {sidebarTab === 'folder' ? <FolderTree /> : <TagPane />}
             </div>
-            <div className="flex h-[38px] flex-shrink-0 border-t border-line text-sm text-ink-soft">
+            {/* #189: ボタン数が増えラベル併記だと窮屈になるため、フッター群はアイコンのみ表示に統一。
+                ラベルは aria-label(SR用)と title(ホバー時ツールチップ)に残す */}
+            <div className="flex h-[38px] flex-shrink-0 border-t border-line text-base text-ink-soft">
               <button
                 type="button"
                 onClick={handleOpenTodayNote}
                 disabled={createOrOpenTodayNote.isPending}
                 aria-busy={createOrOpenTodayNote.isPending}
-                className="flex flex-1 items-center justify-center gap-1 hover:bg-hoverbg disabled:cursor-progress disabled:opacity-50"
+                aria-label="今日の日誌を開く(なければ作成)"
+                className="flex flex-1 items-center justify-center hover:bg-hoverbg disabled:cursor-progress disabled:opacity-50"
                 title="今日の日誌を開く(なければ作成)"
               >
-                <span aria-hidden="true">📓</span> 今日の日誌
+                <span aria-hidden="true">📓</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDatePickerOpen(true)}
+                aria-label="日付を指定して日誌を作成"
+                className="flex flex-1 items-center justify-center border-l border-line hover:bg-hoverbg"
+                title="日付を指定して日誌を作成"
+              >
+                <span aria-hidden="true">📅</span>
               </button>
               <button
                 type="button"
                 onClick={handleOpenTemplatePicker}
                 disabled={applyTemplate.isPending}
                 aria-busy={applyTemplate.isPending}
-                className="flex flex-1 items-center justify-center gap-1 border-l border-line hover:bg-hoverbg disabled:cursor-progress disabled:opacity-50"
+                aria-label="テンプレートから新規作成"
+                className="flex flex-1 items-center justify-center border-l border-line hover:bg-hoverbg disabled:cursor-progress disabled:opacity-50"
                 title="テンプレートから新規作成"
               >
-                <span aria-hidden="true">📄</span> テンプレから新規
+                <span aria-hidden="true">📄</span>
               </button>
               <button
                 type="button"
                 onClick={() => requestCreateDoc()}
-                className="flex flex-1 items-center justify-center gap-1 border-l border-line hover:bg-hoverbg"
+                aria-label="新規文書"
+                className="flex flex-1 items-center justify-center border-l border-line hover:bg-hoverbg"
+                title="新規文書"
               >
-                <span aria-hidden="true">+</span> 新規文書
+                <span aria-hidden="true">📝</span>
               </button>
               <Link
                 to="/trash"
-                className="flex flex-1 items-center justify-center gap-1 border-l border-line hover:bg-hoverbg"
+                aria-label="ごみ箱"
+                className="flex flex-1 items-center justify-center border-l border-line hover:bg-hoverbg"
+                title="ごみ箱"
               >
-                🗑 ごみ箱
+                <span aria-hidden="true">🗑</span>
               </Link>
             </div>
             {!isMobile && (
@@ -229,6 +268,17 @@ export function AppShell() {
               },
             );
           }}
+        />
+      )}
+
+      {/* #189: 毎回 unmount して初期日付を「今日」にリセットする(TemplatePickerDialog と同じ流儀)。
+          常時 mount していると useState の初回評価が持ち越され、再オープン時に前回の日付が残る */}
+      {datePickerOpen && (
+        <DatePickerDialog
+          open
+          busy={createNoteByDate.isPending}
+          onCancel={() => setDatePickerOpen(false)}
+          onConfirm={handleConfirmDate}
         />
       )}
 

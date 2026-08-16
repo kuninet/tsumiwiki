@@ -172,3 +172,106 @@ describe('デイリーノートAPI', () => {
     }
   }, 30_000);
 });
+
+describe('デイリーノートAPI(日付指定)', () => {
+  it('未認証は401', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/daily-notes/by-date',
+      headers: CSRF,
+      payload: { date: '2020-01-01' },
+    });
+    expect(res.statusCode).toBe(401);
+  }, 20_000);
+
+  it('date が不正な形式なら400', async () => {
+    for (const bad of ['', '2026-1-1', '2026-13-01', '2026/01/01']) {
+      const res = await apiAs(yamada, 'POST', '/api/daily-notes/by-date', { date: bad });
+      expect(res.statusCode).toBe(400);
+    }
+  }, 30_000);
+
+  it('実在しない暦日(2月30日・平年うるう日)は400で拒否される', async () => {
+    // 正規表現は通るが new Date() の overflow で別月に振り替わるケース。
+    // regex を将来緩めた時にこの検証層のデグレを拾えるよう独立ケースとして残す
+    for (const bad of ['2026-02-30', '2021-02-29', '2026-04-31']) {
+      const res = await apiAs(yamada, 'POST', '/api/daily-notes/by-date', { date: bad });
+      expect(res.statusCode).toBe(400);
+    }
+  }, 30_000);
+
+  it('存在しない日付を指定すると新規作成される', async () => {
+    const res = await apiAs(yamada, 'POST', '/api/daily-notes/by-date', { date: '2020-01-01' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ path: '日記/2020-01-01.md' });
+
+    const tree = await apiAs(yamada, 'GET', '/api/tree');
+    expect(tree.json().docs.map((d: { path: string }) => d.path)).toContain('日記/2020-01-01.md');
+  }, 30_000);
+
+  it('同じ日付を2回叩くと2回目は409 DAILY_NOTE_EXISTS', async () => {
+    const first = await apiAs(yamada, 'POST', '/api/daily-notes/by-date', { date: '2021-05-10' });
+    expect(first.statusCode).toBe(200);
+
+    const second = await apiAs(yamada, 'POST', '/api/daily-notes/by-date', { date: '2021-05-10' });
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error.code).toBe('DAILY_NOTE_EXISTS');
+  }, 30_000);
+
+  it('todayで作成済みの今日をby-dateで指定すると409になる', async () => {
+    const todayRes = await apiAs(yamada, 'POST', '/api/daily-notes/today');
+    expect(todayRes.statusCode).toBe(200);
+    expect(todayRes.json().created).toBe(true);
+
+    const now = new Date();
+    const p = (n: number) => String(n).padStart(2, '0');
+    const todayStr = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+
+    const byDateRes = await apiAs(yamada, 'POST', '/api/daily-notes/by-date', { date: todayStr });
+    expect(byDateRes.statusCode).toBe(409);
+    expect(byDateRes.json().error.code).toBe('DAILY_NOTE_EXISTS');
+  }, 30_000);
+
+  it('テンプレを設定していれば指定日付で変数展開して作成する', async () => {
+    await apiAs(admin, 'POST', '/api/docs', { folder: '_templates', title: '日誌' });
+    const tmplPath = '_templates/日誌.md';
+    await apiAs(admin, 'POST', '/api/locks', { path: tmplPath });
+    const tmplBody = '---\ndate: {{date}}\n---\n\n# {{title}}\n\n担当: {{user}}\n\n本日の記録:\n';
+    const getRes = await apiAs(admin, 'GET', `/api/docs?path=${encodeURIComponent(tmplPath)}`);
+    await apiAs(admin, 'PUT', '/api/docs', {
+      path: tmplPath,
+      body: tmplBody,
+      tags: [],
+      baseUpdatedAt: getRes.json().updatedAt,
+    });
+
+    await apiAs(admin, 'PUT', '/api/library/settings', {
+      templates: { folder: '_templates' },
+      dailyNotes: {
+        folder: '日記',
+        template: tmplPath,
+        filenamePattern: 'YYYY-MM-DD',
+      },
+    });
+
+    const res = await apiAs(yamada, 'POST', '/api/daily-notes/by-date', { date: '2020-03-15' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().path).toBe('日記/2020-03-15.md');
+
+    const doc = await apiAs(yamada, 'GET', `/api/docs?path=${encodeURIComponent(res.json().path)}`);
+    const body = doc.json().body;
+    expect(body).toContain('# 2020-03-15');
+    expect(body).toContain('担当: 山田');
+    expect(body).toContain('date: 2020-03-15');
+  }, 30_000);
+
+  it('filenamePatternがサブフォルダを含む場合も指定日付で階層に作成される', async () => {
+    await apiAs(admin, 'PUT', '/api/library/settings', {
+      templates: { folder: '_templates' },
+      dailyNotes: { folder: '日記', template: '', filenamePattern: 'YYYY/MM/DD' },
+    });
+    const res = await apiAs(yamada, 'POST', '/api/daily-notes/by-date', { date: '2020-03-15' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().path).toBe('日記/2020/03/15.md');
+  }, 30_000);
+});

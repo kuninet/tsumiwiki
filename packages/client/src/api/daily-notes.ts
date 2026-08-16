@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import type { DailyNoteByDateRequest } from '@tsumiwiki/shared';
 import { TREE_QUERY_KEY } from './docs';
 import { ALL_HISTORY_QUERY_KEY } from './history';
 import { ApiRequestError, api } from './client';
@@ -25,6 +26,26 @@ export function useCreateOrOpenTodayNote() {
     },
     onError: (err) => {
       showToast('error', err instanceof ApiRequestError ? err.message : '日誌を開けませんでした');
+    },
+  });
+}
+
+// #189: 日付を指定して日誌を作成する。既存日誌がある日付を指定した場合はサーバーが409を返す
+// (呼び出し側でダイアログを閉じずに残す判断に使う)。
+
+export function useCreateNoteByDate() {
+  const queryClient = useQueryClient();
+  const showToast = useToastStore((s) => s.show);
+  return useMutation({
+    mutationFn: (body: DailyNoteByDateRequest) =>
+      api<{ path: string }>('POST', '/api/daily-notes/by-date', body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
+      showToast('success', '日誌を作成しました');
+    },
+    onError: (err) => {
+      showToast('error', err instanceof ApiRequestError ? err.message : '日誌を作成できませんでした');
     },
   });
 }

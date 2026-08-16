@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUIStore } from '../stores/ui';
@@ -21,10 +21,10 @@ function stubMatchMedia(matches: boolean) {
   );
 }
 
-function renderAppShell() {
+function renderAppShell(byDateHandler?: (body: unknown) => { status: number; json: unknown }) {
   vi.stubGlobal(
     'fetch',
-    vi.fn((url: string) => {
+    vi.fn((url: string, init?: RequestInit) => {
       if (url.startsWith('/api/auth/me')) {
         return Promise.resolve({
           ok: true,
@@ -41,6 +41,11 @@ function renderAppShell() {
           status: 200,
           json: () => Promise.resolve({ folders: [], docs: [] }),
         });
+      }
+      if (url === '/api/daily-notes/by-date' && byDateHandler) {
+        const body = init?.body ? JSON.parse(init.body as string) : undefined;
+        const { status, json } = byDateHandler(body);
+        return Promise.resolve({ ok: status < 400, status, json: () => Promise.resolve(json) });
       }
       return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ tags: [] }) });
     }),
@@ -99,6 +104,92 @@ describe('AppShell (デスクトップ)', () => {
     renderAppShell();
     await screen.findByRole('button', { name: 'ユーザーメニュー(太郎)' });
     expect(screen.getByTestId('sidebar-resize-handle')).toBeTruthy();
+  });
+
+  it('日付指定ボタン→ダイアログでOK→APIを呼びナビゲートしてダイアログが閉じる', async () => {
+    const byDateHandler = vi.fn().mockReturnValue({
+      status: 200,
+      json: { path: '日誌/2026-08-10.md' },
+    });
+    renderAppShell(byDateHandler);
+    await screen.findByRole('button', { name: 'ユーザーメニュー(太郎)' });
+
+    fireEvent.click(screen.getByRole('button', { name: '日付を指定して日誌を作成' }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('日付'), { target: { value: '2026-08-10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }));
+
+    await screen.findByText('文書');
+    expect(byDateHandler).toHaveBeenCalledWith({ date: '2026-08-10' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('日付指定で409(既存日誌あり)の場合はダイアログを閉じずに残す', async () => {
+    const byDateHandler = vi.fn().mockReturnValue({
+      status: 409,
+      json: {
+        error: { code: 'DAILY_NOTE_EXISTS', message: '指定した日付の日誌は既に存在します' },
+      },
+    });
+    renderAppShell(byDateHandler);
+    await screen.findByRole('button', { name: 'ユーザーメニュー(太郎)' });
+
+    fireEvent.click(screen.getByRole('button', { name: '日付を指定して日誌を作成' }));
+    fireEvent.change(screen.getByLabelText('日付'), { target: { value: '2026-08-10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }));
+
+    await waitFor(() => expect(byDateHandler).toHaveBeenCalled());
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('日付指定ダイアログは開き直すと初期値が今日に戻る(前回の選択が持ち越されない)', async () => {
+    // #189 レビュー M2: DatePickerDialog は AppShell 側で条件レンダリングにすることで
+    // 毎回 unmount → 再マウント時に useState 初期値(今日)が再評価される。
+    // fake timers は他のテスト(モバイル系)の Promise 解決に影響するため使わず、
+    // 実行時の今日を取得して比較する
+    const initialToday = (() => {
+      const d = new Date();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${d.getFullYear()}-${m}-${day}`;
+    })();
+
+    renderAppShell();
+    await screen.findByRole('button', { name: 'ユーザーメニュー(太郎)' });
+
+    // 1回目: 開いて別日に変更、キャンセルで閉じる
+    fireEvent.click(screen.getByRole('button', { name: '日付を指定して日誌を作成' }));
+    const firstInput = screen.getByLabelText('日付') as HTMLInputElement;
+    expect(firstInput.value).toBe(initialToday);
+    fireEvent.change(firstInput, { target: { value: '2020-01-01' } });
+    expect(firstInput.value).toBe('2020-01-01');
+    fireEvent.click(screen.getByRole('button', { name: 'キャンセル' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    // 2回目: 再度開くと初期値が今日に戻る(2020-01-01 が残っていない)
+    fireEvent.click(screen.getByRole('button', { name: '日付を指定して日誌を作成' }));
+    const secondInput = screen.getByLabelText('日付') as HTMLInputElement;
+    expect(secondInput.value).toBe(initialToday);
+  });
+
+  it('日付指定で409以外のエラー(500等)はダイアログを閉じる', async () => {
+    // #189 レビュー M1: 409 だけ残す・それ以外は閉じる(トーストで通知は済む)
+    const byDateHandler = vi.fn().mockReturnValue({
+      status: 500,
+      json: {
+        error: { code: 'INTERNAL_ERROR', message: 'サーバーエラー' },
+      },
+    });
+    renderAppShell(byDateHandler);
+    await screen.findByRole('button', { name: 'ユーザーメニュー(太郎)' });
+
+    fireEvent.click(screen.getByRole('button', { name: '日付を指定して日誌を作成' }));
+    fireEvent.change(screen.getByLabelText('日付'), { target: { value: '2026-08-10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }));
+
+    await waitFor(() => expect(byDateHandler).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 });
 
