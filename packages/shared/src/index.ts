@@ -254,6 +254,18 @@ export const LIBRARY_SETTINGS_DEFAULTS: LibrarySettings = {
   dailyNotes: { folder: '日記', template: '', filenamePattern: 'YYYY-MM-DD' },
 };
 
+// ---- #189: 日付指定日誌 API ----
+
+// POST /api/daily-notes/by-date のリクエスト。date は 'YYYY-MM-DD' 形式。
+// クライアントの <input type="date"> が返す値をそのまま渡す想定。
+// タイムゾーンはクライアント側のローカルTZで解釈された日付をそのまま採用する
+// (サーバー実行環境のTZに依存しない = 過去日を指定した時にサーバーTZの日付跨ぎで
+// 別日になる事故を防ぐ)。
+export const dailyNoteByDateRequestSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付は YYYY-MM-DD 形式で指定してください'),
+});
+export type DailyNoteByDateRequest = z.infer<typeof dailyNoteByDateRequestSchema>;
+
 // ---- #84 Phase B: テンプレート API ----
 
 export const templateSummarySchema = z.object({

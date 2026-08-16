@@ -147,7 +147,7 @@ function NewDocSettings() {
     <section className="mt-8 max-w-md space-y-3">
       <h2 className="text-sm font-bold text-ink">新規文書の作成先</h2>
       <p className="text-xs text-ink-faint">
-        Ctrl+N(⌘N)や「+新規文書」で新しく文書を作るとき、どのフォルダを初期値にするかを選びます。
+        Ctrl+N(⌘N)やサイドバー下部の📝ボタンで新しく文書を作るとき、どのフォルダを初期値にするかを選びます。
       </p>
       <div className="space-y-2">
         {radio(
