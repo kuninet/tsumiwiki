@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { DocResponse, User } from '@tsumiwiki/shared';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
@@ -55,6 +55,32 @@ function renderDocView(doc: DocResponse = DOC, currentUser: User = CURRENT_USER)
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
         <DocView doc={doc} currentUser={currentUser} />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-pathname">{location.pathname}</div>;
+}
+
+function renderDocViewWithProbe(doc: DocResponse) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/doc/メモ.md']}>
+        <Routes>
+          <Route
+            path="/doc/*"
+            element={
+              <>
+                <DocView doc={doc} currentUser={CURRENT_USER} />
+                <LocationProbe />
+              </>
+            }
+          />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -394,6 +420,84 @@ describe('DocView', () => {
       expect(screen.queryByText('外部で更新された本文')).toBeNull();
     });
     expect(screen.getByText('本文です')).toBeTruthy();
+  });
+
+  it('自動編集モード中でも本文中の wikilink クリックで遷移する(#193)', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/tree': {
+        folders: [],
+        docs: [{ path: '設計.md', title: '設計', folder: '', updatedAt: '2026-07-01T00:00:00+09:00' }],
+      },
+    });
+    renderDocViewWithProbe({ ...DOC, body: '[[設計]] を参照' });
+
+    // #51: 開いた瞬間に auto-startEditing が走るので、保存ボタンが表示されるまで待つ
+    await screen.findByRole('button', { name: /保存/ });
+
+    const wikilinkSpan = document.querySelector('span[data-type="wikilink"][data-target="設計"]');
+    expect(wikilinkSpan).not.toBeNull();
+    fireEvent.click(wikilinkSpan!);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-pathname').textContent).toBe('/doc/%E8%A8%AD%E8%A8%88.md');
+    });
+  });
+
+  it('編集中(dirty)に wikilink クリックで遷移すると、unmount 時 flush で PUT /api/drafts が飛ぶ(#193)', async () => {
+    // #193 の WHY コメント(DocView.tsx: 編集中の dirty は use-editing-session のアンマウント時
+    // flush で draft 保存されるため SPA 遷移で失われない)を実挙動として固定するテスト。
+    // Route を 2 本に分けて遷移で必ず DocView がアンマウントされるようにする(cleanup の flushOnLeave 経路を検証)
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/tree': {
+        folders: [],
+        docs: [{ path: '設計.md', title: '設計', folder: '', updatedAt: '2026-07-01T00:00:00+09:00' }],
+      },
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/doc/メモ.md']}>
+          <Routes>
+            <Route
+              path="/doc/メモ.md"
+              element={
+                <>
+                  <DocView doc={{ ...DOC, body: '[[設計]] を参照' }} currentUser={CURRENT_USER} />
+                  <LocationProbe />
+                </>
+              }
+            />
+            <Route path="/doc/*" element={<LocationProbe />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // 自動編集モードへ入るのを待つ
+    await screen.findByRole('button', { name: /保存/ });
+
+    // タグチップ × で dirty=true にする(fixture の DOC.tags: ['設計'])
+    fireEvent.click(screen.getByRole('button', { name: 'タグ #設計 を削除' }));
+    await waitFor(() => {
+      const saveBtn = screen.getByRole('button', { name: /保存/ }) as HTMLButtonElement;
+      expect(saveBtn.disabled).toBe(false);
+    });
+
+    const wikilinkSpan = document.querySelector('span[data-type="wikilink"][data-target="設計"]');
+    fireEvent.click(wikilinkSpan!);
+
+    // 遷移で DocView がアンマウントされ、flushOnLeave が PUT /api/drafts を投げる
+    await waitFor(() => {
+      expect(screen.getByTestId('location-pathname').textContent).toBe('/doc/%E8%A8%AD%E8%A8%88.md');
+    });
+    await waitFor(() => {
+      expect(calls.some((c) => c.method === 'PUT' && c.path === '/api/drafts')).toBe(true);
+    });
   });
 });
 
