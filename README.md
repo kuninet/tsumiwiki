@@ -22,6 +22,7 @@ TsumiWikiは、ObsidianライクなWYSIWYG Markdownエディタを備えた、�
 
 - [要件定義ドキュメント](docs/要件定義/README.md)
 - [基本設計ドキュメント](docs/設計/README.md)
+- [MCPセットアップガイド](docs/連携/MCPセットアップガイド.md) — Claude Desktop / Claude Code から Remote MCP 経由で操作
 
 ## 開発
 
