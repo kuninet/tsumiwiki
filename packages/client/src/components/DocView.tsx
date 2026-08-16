@@ -480,16 +480,23 @@ export function DocView({
 
   // wikilinkクリックでの遷移(FR-OBS-02)とfile://・UNCリンクの「パスをコピー」(FR-LINK-02)
   function handleContainerClick(e: ReactMouseEvent<HTMLDivElement>) {
-    // 編集モード中のクリックはカーソル移動として扱い、遷移・コピーはしない(本文側の従来挙動を維持)。
-    // 差分表示側(HistoryPanel > DiffView)は別コンテナで onClick を独自に持ち、この gate の
-    // 影響を受けずに wikilink 遷移する(#96)
-    if (sessionRef.current.mode !== 'view') return;
     const target = e.target as HTMLElement;
 
-    // #96: wikilink 分岐は本文と差分で共通ヘルパを使う。DocView は view モード時のみ通す
+    // wikilink は atom ノードで内部にカーソルを置く意味がない。
+    // #51 で文書オープン直後に自動編集モード化するため、モード分岐すると
+    // 編集モード中はクリックが遷移せずカーソル移動として吸われてしまう。
+    // → モードに関わらず常に遷移として扱う。編集中の dirty は
+    //   use-editing-session のアンマウント時 flush で draft 保存されるため
+    //   SPA 遷移で失われない(#96 共通ヘルパを利用)
     if (handleWikilinkClick(target, wikilinkDocsRef.current, navigate, showToast)) {
+      // 遷移が navigate → DocView アンマウント → PM 破棄と進むので、ここで
+      // PM の click ハンドラを止める必要はない(preventDefault は no-op)
       return;
     }
+
+    // 以降(file://・UNC のパスコピー、http(s) の新規タブ)は閲覧モードのみ。
+    // 編集モードでは本文中の生 <a> はカーソル移動として扱う従来挙動を維持
+    if (sessionRef.current.mode !== 'view') return;
 
     const anchorEl = target.closest('a');
     if (anchorEl) {
