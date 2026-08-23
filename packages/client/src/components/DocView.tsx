@@ -264,7 +264,9 @@ export function DocView({
         void current.save();
         return;
       }
-      if (isMod && e.key.toLowerCase() === 'k') {
+      // Mod+Shift+K は wikilink サジェスト(#195)。ProseMirror の keymap は
+      // preventDefault するが stopPropagation しないので window まで届く
+      if (isMod && !e.shiftKey && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         showEditorChrome();
         setLinkDialogVisible(true);

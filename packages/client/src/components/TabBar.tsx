@@ -7,6 +7,7 @@ import {
 } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { docUrl, titleFromPath } from '../lib/doc-path';
+import { isMac } from '../lib/platform';
 import { useDragStore } from '../stores/drag';
 import {
   getActivePaneActiveIdFromState,
@@ -36,11 +37,6 @@ interface CtxMenuState {
 
 interface Props {
   paneId?: PaneId;
-}
-
-function isMac(): boolean {
-  if (typeof navigator === 'undefined') return false;
-  return /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 }
 
 export function TabBar({ paneId }: Props = {}) {
