@@ -136,6 +136,79 @@ describe('FolderTree', () => {
     expect(await screen.findByTestId('inline-rename-input')).toBeTruthy();
   });
 
+  it('#212 サブフォルダを持つフォルダをリネームしても、展開状態が新パスに追従して子が消えない', async () => {
+    // ネスト構造: 親 → 親/子 → 親/子/メモ.md
+    const nested = {
+      folders: ['親', '親/子'],
+      docs: [
+        { path: '親/子/メモ.md', title: 'メモ', folder: '親/子', updatedAt: '2026-08-23T00:00:00+09:00' },
+      ],
+    };
+    const nestedAfter = {
+      folders: ['新親', '新親/子'],
+      docs: [
+        { path: '新親/子/メモ.md', title: 'メモ', folder: '新親/子', updatedAt: '2026-08-23T00:00:00+09:00' },
+      ],
+    };
+    let renamed = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        const method = (init?.method ?? 'GET').toUpperCase();
+        const [reqPath] = url.split('?');
+        const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+        if (method === 'GET' && reqPath === '/api/tree') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve(renamed ? nestedAfter : nested),
+          });
+        }
+        if (method === 'POST' && reqPath === '/api/folders/move') {
+          const b = body as { newPath: string };
+          renamed = true;
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ path: b.newPath }),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+      }),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<FolderTree />} />
+            <Route path="/doc/*" element={<FolderTree />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // 親を展開して子を表示させる
+    fireEvent.click(await screen.findByText('親'));
+    expect(await screen.findByText('子')).toBeTruthy();
+
+    // 親を F2 でインラインリネーム、新親 に変更
+    const parentRow = screen.getByText('親').closest('button')!;
+    parentRow.focus();
+    fireEvent.keyDown(parentRow, { key: 'F2' });
+    const input = await screen.findByTestId('inline-rename-input');
+    fireEvent.change(input, { target: { value: '新親' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    // 新パスで名前が反映され、なおかつ展開状態が付け替えられて子が見えたままである
+    await waitFor(() => expect(screen.getByText('新親')).toBeTruthy());
+    expect(screen.queryByText('親')).toBeNull();
+    // 子(新親/子)はサブフォルダ名として表示されている必要がある
+    expect(screen.getByText('子')).toBeTruthy();
+    expect(useUIStore.getState().expandedFolders.has('新親')).toBe(true);
+    expect(useUIStore.getState().expandedFolders.has('親')).toBe(false);
+  });
+
   it('Deleteキーで削除確認ダイアログが開く', async () => {
     renderFolderTree();
     const docRow = (await screen.findByText('ルート文書')).closest('button')!;
