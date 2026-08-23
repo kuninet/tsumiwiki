@@ -126,7 +126,10 @@
   border-radius: var(--radius-sm);
 }
 
-/* コードブロック(pre>code)。インラインcodeの背景色をpre内で打ち消す */
+/* コードブロック(pre>code)。インラインcodeの背景色をpre内で打ち消す。
+   #213: 長い1行や折り返し不可のコードで親コンテナを押し広げないよう、
+   max-width を親幅で頭打ちにし、あふれ分は横スクロールに逃がす。
+   本文最大幅を「全幅」(#212) にしたときのワイド環境でも隣接ペインを壊さない */
 .ProseMirror pre {
   font-family: var(--font-mono);
   font-size: 13px;
@@ -134,6 +137,8 @@
   border: 1px solid var(--color-line);
   border-radius: var(--radius-lg);
   padding: 0.875rem;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .ProseMirror pre code {
@@ -226,6 +231,14 @@
 .code-block-view .mermaid-loading {
   color: var(--color-ink-faint);
   font-size: 0.85em;
+}
+
+/* #213: tiptap の Table 拡張は表を `.tableWrapper` div で包む。
+   幅の広い表があってもラッパ側で横スクロールに逃がすことで、
+   親コンテナ(本文最大幅)を押し広げないようにする */
+.ProseMirror .tableWrapper {
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 .ProseMirror table {
