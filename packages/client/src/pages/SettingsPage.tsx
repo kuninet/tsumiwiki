@@ -3,7 +3,11 @@ import { useMe } from '../api/auth';
 import { ApiRequestError } from '../api/client';
 import { changeMyPassword } from '../api/users';
 import { useToastStore } from '../stores/toast';
-import { useUserSettingsStore, type NewDocPolicy } from '../stores/user-settings';
+import {
+  useUserSettingsStore,
+  type ContentWidth,
+  type NewDocPolicy,
+} from '../stores/user-settings';
 
 // 個人設定画面(SC-06・デザインhandoff components.md)。アカウント情報表示とパスワード変更
 
@@ -112,6 +116,7 @@ export function SettingsPage() {
       </form>
 
       <NewDocSettings />
+      <ContentWidthSettings />
     </div>
   );
 }
@@ -174,6 +179,46 @@ function NewDocSettings() {
           />
         </label>
       )}
+    </section>
+  );
+}
+
+// #212: 本文最大幅設定。編集/閲覧共通で適用。モバイル幅(< 768px)は
+// ラッパ側の max-width が viewport に頭打ちになるため実質 100% となる
+function ContentWidthSettings() {
+  const contentWidth = useUserSettingsStore((s) => s.contentWidth);
+  const setContentWidth = useUserSettingsStore((s) => s.setContentWidth);
+
+  function radio(value: ContentWidth, label: string, description: string) {
+    return (
+      <label className="flex cursor-pointer items-start gap-2 rounded border border-line p-3 text-sm hover:bg-hoverbg">
+        <input
+          type="radio"
+          name="content-width"
+          value={value}
+          checked={contentWidth === value}
+          onChange={() => setContentWidth(value)}
+          className="mt-1"
+        />
+        <span>
+          <span className="font-medium text-ink">{label}</span>
+          <span className="mt-0.5 block text-xs text-ink-faint">{description}</span>
+        </span>
+      </label>
+    );
+  }
+
+  return (
+    <section className="mt-8 max-w-md space-y-3">
+      <h2 className="text-sm font-bold text-ink">本文の最大幅</h2>
+      <p className="text-xs text-ink-faint">
+        編集画面と閲覧画面の本文の最大幅を切り替えます。狭い画面ではこの上限に関わらず画面幅に収まります。
+      </p>
+      <div className="space-y-2">
+        {radio('normal', '標準(760px)', '読みやすさ重視。既定')}
+        {radio('wide', '広め(1040px)', 'コードや表を扱うときに余裕を持たせる')}
+        {radio('full', '全幅', 'ペイン幅いっぱいまで広げる(左右分割時は各ペインの幅)')}
+      </div>
     </section>
   );
 }

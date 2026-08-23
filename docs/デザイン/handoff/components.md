@@ -106,7 +106,7 @@ Tailwind クラスは `handoff/tailwind.config.js` のトークンを前提と�
 ### DocViewer / DocEditor
 
 - 両者とも Tiptap を使う。Viewer は `editable: false`。
-- 記事幅は `max-w-content mx-auto px-8`（760px）
+- 記事幅は個人設定(#212)で 3 段階から選ぶ: **標準** 760px / **広め** 1040px / **全幅**(親コンテナ幅まで)。既定は標準。狭い画面ではラッパ側の max-width が viewport 幅で頭打ちになる
 - 見出し・段落・リスト・callout・コードブロック・表・Mermaid・wikilink のスタイルは下記「コンテンツスタイル」参照。
 
 ### StatusBar

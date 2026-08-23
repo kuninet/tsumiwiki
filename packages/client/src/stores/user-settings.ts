@@ -12,11 +12,17 @@ import { persist } from 'zustand/middleware';
 
 export type NewDocPolicy = 'same-folder' | 'fixed-folder' | 'root';
 
+// #212: 編集/閲覧の本文最大幅。モバイル(<768px)では常に 100%(ここでは
+// ラッパの max-width のみを制御し、モバイル分岐は CSS の viewport 相対値で吸収)
+export type ContentWidth = 'normal' | 'wide' | 'full';
+
 interface UserSettingsState {
   newDocPolicy: NewDocPolicy;
   fixedFolder: string;
+  contentWidth: ContentWidth;
   setNewDocPolicy: (policy: NewDocPolicy) => void;
   setFixedFolder: (folder: string) => void;
+  setContentWidth: (width: ContentWidth) => void;
 }
 
 export const useUserSettingsStore = create<UserSettingsState>()(
@@ -24,12 +30,36 @@ export const useUserSettingsStore = create<UserSettingsState>()(
     (set) => ({
       newDocPolicy: 'same-folder',
       fixedFolder: '',
+      contentWidth: 'normal',
       setNewDocPolicy: (newDocPolicy) => set({ newDocPolicy }),
       setFixedFolder: (fixedFolder) => set({ fixedFolder }),
+      setContentWidth: (contentWidth) => set({ contentWidth }),
     }),
     { name: 'tsumiwiki-user-settings' },
   ),
 );
+
+// DocView の本文ラッパに適用する Tailwind max-width クラス。
+// - normal: 760px(既定)/ wide: 1040px を上限とし、viewport 幅より広くはしない
+// - full: 制約なし(親コンテナ幅まで広がる)
+// いずれもモバイル幅では上限が viewport 幅で抑えられ、既存挙動を維持する。
+//
+// 実装メモ: Tailwind v4 の source scanner が拾えるよう、各 case は動的組み立て
+// (テンプレートリテラル連結)を避け完全な文字列リテラルを返す。既存の
+// `--spacing-content: 760px` トークン(index.css)や `max-w-[760px]`
+// (SettingsPage 見出しラッパ)と数値が重複するが、選択肢ごとに任意 arbitrary value
+// を並べるためあえてリテラルで持たせている。トークン統合は別 issue で扱う
+export function contentWidthMaxClass(width: ContentWidth): string {
+  switch (width) {
+    case 'wide':
+      return 'max-w-[min(1040px,100%)]';
+    case 'full':
+      return 'max-w-full';
+    case 'normal':
+    default:
+      return 'max-w-[min(760px,100%)]';
+  }
+}
 
 /** ポリシーに従って新規文書作成の初期フォルダを解決する。
  *  - same-folder: activeDocPath があればそのフォルダ、無ければ ''
