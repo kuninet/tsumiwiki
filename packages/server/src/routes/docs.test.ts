@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
 import { openDatabase } from '../db/index.js';
@@ -650,5 +650,58 @@ describe('レビュー指摘の回帰テスト', () => {
     const created = await api('POST', '/api/docs', { folder: '', title: 'ファイル先客' });
     const res = await api('POST', '/api/folders', { path: created.json().path });
     expect(res.statusCode).toBe(400);
+  }, 20_000);
+});
+
+describe('文書側索引反映のbest-effort化 (issue #203)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('保存時に索引更新(indexFile)が失敗しても保存自体は200で成功する', async () => {
+    const created = await api('POST', '/api/docs', { folder: '', title: '索引失敗保存' });
+    const docPath = created.json().path;
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent(docPath)}`);
+
+    vi.spyOn(app.indexerService, 'indexFile').mockRejectedValueOnce(new Error('索引DB書き込み失敗'));
+
+    const saved = await saveDoc({
+      path: docPath,
+      body: '索引が失敗しても本文は保存される',
+      tags: ['タグ'],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+
+    const raw = await readFile(join(lib, docPath), 'utf8');
+    expect(raw).toContain('索引が失敗しても本文は保存される');
+  }, 20_000);
+
+  it('移動時に索引更新(moveFile)が失敗してもロック・下書きは新パスへ付け替わる', async () => {
+    const created = await api('POST', '/api/docs', { folder: '', title: '索引失敗移動' });
+    const docPath = created.json().path;
+
+    // ロック取得+下書き保存(移動後にrepathされることを確認するための準備)
+    await api('POST', '/api/locks', { path: docPath });
+    await api('PUT', '/api/drafts', { path: docPath, content: '下書き本文' });
+
+    vi.spyOn(app.indexerService, 'moveFile').mockRejectedValueOnce(new Error('索引DB書き込み失敗'));
+
+    const moved = await api('POST', '/api/docs/move', {
+      path: docPath,
+      newFolder: '移動先',
+      newTitle: '索引失敗移動後',
+    });
+    expect(moved.statusCode).toBe(200);
+    const newPath = moved.json().path;
+    expect(newPath).toBe('移動先/索引失敗移動後.md');
+
+    // ロックが新パスへ付け替わっている(旧パスはロックなし扱いになる)
+    expect(app.lockService.getActive(newPath)).not.toBeNull();
+    expect(app.lockService.getActive(docPath)).toBeNull();
+
+    // 下書きも新パスへ付け替わっている
+    const draft = await api('GET', `/api/drafts?path=${encodeURIComponent(newPath)}`);
+    expect(draft.json().draft?.content).toBe('下書き本文');
   }, 20_000);
 });
