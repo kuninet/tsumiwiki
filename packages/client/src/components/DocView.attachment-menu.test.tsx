@@ -509,4 +509,71 @@ describe('DocView の画像管理メニュー(#199)', () => {
     });
     expect(screen.queryByRole('menu')).toBeNull();
   });
+
+  it('#211: PDFの管理メニューには「拡大表示」があり、選択するとライトボックスが開く', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/attachments/resolve': { path: 'report.pdf', name: 'report.pdf' },
+    });
+    renderDocView({ ...DOC, body: '![[report.pdf]]\n' });
+
+    await screen.findByRole('button', { name: /保存/ });
+    const pdfFrame = await waitFor(() => {
+      const el = document.querySelector('.obsidian-embed-pdf-wrapper .attachment-frame--persistent');
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    fireEvent.contextMenu(pdfFrame, { clientX: 10, clientY: 20 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: '拡大表示' }));
+
+    const dialog = await screen.findByRole('dialog');
+    const iframe = dialog.querySelector('iframe');
+    expect(iframe).toBeTruthy();
+    expect(iframe!.getAttribute('src')).toBe('/api/files/report.pdf');
+  });
+
+  it('#211: PDF埋め込みの `#page=N` は拡大表示のiframe srcにも引き継がれる(レビュー重大#5)', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/attachments/resolve': { path: 'report.pdf', name: 'report.pdf' },
+    });
+    renderDocView({ ...DOC, body: '![[report.pdf#page=3]]\n' });
+
+    await screen.findByRole('button', { name: /保存/ });
+    const pdfFrame = await waitFor(() => {
+      const el = document.querySelector('.obsidian-embed-pdf-wrapper .attachment-frame--persistent');
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    fireEvent.contextMenu(pdfFrame, { clientX: 10, clientY: 20 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: '拡大表示' }));
+
+    const dialog = await screen.findByRole('dialog');
+    const iframe = dialog.querySelector('iframe');
+    expect(iframe!.getAttribute('src')).toBe('/api/files/report.pdf#page=3');
+  });
+
+  it('#211: 画像埋め込みをクリックするとライトボックスが開く', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+    });
+    renderDocView();
+
+    await screen.findByRole('button', { name: /保存/ });
+    const img = await waitFor(() => {
+      const el = document.querySelector('.obsidian-embed-image img');
+      expect(el).toBeTruthy();
+      return el as HTMLImageElement;
+    });
+    const originalSrc = img.getAttribute('src');
+    fireEvent.click(img);
+
+    const dialog = await screen.findByRole('dialog');
+    const lightboxImg = dialog.querySelector('img');
+    expect(lightboxImg).toBeTruthy();
+    expect(lightboxImg!.getAttribute('src')).toBe(originalSrc);
+  });
 });
