@@ -337,15 +337,31 @@ export type AttachmentReferencesResponse = z.infer<typeof attachmentReferencesRe
 
 export const renameAttachmentRequestSchema = z.object({
   path: z.string().min(1),
-  newName: z.string().min(1),
+  // ファイル名は255byte(UTF-8)を超えるとファイルシステムに書けない環境がある(NFR-COMP-04)。
+  // 文字数上限(200)はそれとは別の緩い防御(明らかに異常な入力の早期拒否)
+  newName: z.string().min(1).max(200),
 });
 export type RenameAttachmentRequest = z.infer<typeof renameAttachmentRequestSchema>;
+
+// 1文書内で実際に書き換えたtarget文字列の一覧(重複除く)。
+// from/toは`|alias`・`#anchor`・`?query`・`"title"`を除いたtarget本体(trim後)
+export const attachmentReplacementSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+});
+export type AttachmentReplacement = z.infer<typeof attachmentReplacementSchema>;
 
 export const renameAttachmentResponseSchema = z.object({
   path: z.string(), // 新しい相対パス
   name: z.string(), // 新しいファイル名
-  // 参照を書き換えた文書と、その書き換え後mtime(呼び出し側のキャッシュ更新用)
-  rewrittenDocs: z.array(z.object({ path: z.string(), updatedAt: z.string() })),
+  // 参照を書き換えた文書と、その書き換え後mtime(呼び出し側のキャッシュ更新用)・実際の置換一覧
+  rewrittenDocs: z.array(
+    z.object({
+      path: z.string(),
+      updatedAt: z.string(),
+      replacements: z.array(attachmentReplacementSchema),
+    }),
+  ),
 });
 export type RenameAttachmentResponse = z.infer<typeof renameAttachmentResponseSchema>;
 

@@ -275,16 +275,19 @@
 }
 
 /* #199: 画像の管理メニュー(名前変更/削除/パスをコピー)の起動口。
-   画像を包む相対配置のフレームに「⋯」ボタンを重ねる。ホバー/フォーカスで表示、
-   ホバー操作のない端末(タッチ)では常時薄く表示してタップで開けるようにする */
-.attachment-frame {
+   画像を包む相対配置のフレームに「⋯」ボタンを重ねる。既定は非表示かつクリック不可
+   (pointer-events:none)にし、ホバー/フォーカス/ホバー操作のない端末(タッチ)でのみ
+   表示・操作可能にする。opacityだけ切り替えてpointer-eventsを据え置くと、タッチ端末で
+   ボタンが「見えているのに押せない」事故になるため、必ず両方セットで切り替える(中#6)。
+   セレクタは周囲の規則に合わせて.ProseMirror配下にスコープする */
+.ProseMirror .attachment-frame {
   position: relative;
   display: inline-block;
   max-width: 100%;
   vertical-align: bottom;
 }
 
-.attachment-menu-button {
+.ProseMirror .attachment-menu-button {
   position: absolute;
   top: 6px;
   right: 6px;
@@ -302,18 +305,24 @@
   line-height: 1;
   cursor: pointer;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.15s ease;
 }
 
-.attachment-frame:hover .attachment-menu-button,
-.attachment-menu-button:focus-visible {
-  opacity: 1;
+/* タッチ端末など「ホバー操作ができない」場合は常時表示・操作可能にする。
+   下の:hover/:focus-visible規則と同じ値を設定するだけなので、詳細度・記述順が
+   入れ替わっても実質的な競合は起きない(:focus-visibleを上書きして消してしまわない) */
+@media (hover: none) {
+  .ProseMirror .attachment-menu-button {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
-@media (hover: none) {
-  .attachment-menu-button {
-    opacity: 0.6;
-  }
+.ProseMirror .attachment-frame:hover .attachment-menu-button,
+.ProseMirror .attachment-menu-button:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* wikilink入力補完のポップアップ(document.bodyへ直接追加される自作コンポーネント) */

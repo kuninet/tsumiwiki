@@ -9,6 +9,9 @@ interface ConfirmDialogProps {
   onCancel: () => void;
   // 破壊的操作は既定のdanger、下書き復元など非破壊にはprimaryを指定する
   variant?: 'danger' | 'primary';
+  // #199: 削除確認で参照文書数の取得中など、確定操作をまだ受け付けられない間は
+  // 確定ボタンを無効化する(中#7)。省略時はfalse(既定挙動互換)
+  confirmDisabled?: boolean;
 }
 
 export function ConfirmDialog({
@@ -19,11 +22,12 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   variant = 'danger',
+  confirmDisabled = false,
 }: ConfirmDialogProps) {
   const confirmClass =
     variant === 'primary'
-      ? 'rounded bg-accent px-3 py-1.5 text-sm text-white hover:bg-accent-hover'
-      : 'rounded bg-danger px-3 py-1.5 text-sm text-white hover:bg-danger-hover';
+      ? 'rounded bg-accent px-3 py-1.5 text-sm text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50'
+      : 'rounded bg-danger px-3 py-1.5 text-sm text-white hover:bg-danger-hover disabled:cursor-not-allowed disabled:opacity-50';
   return (
     <div
       role="dialog"
@@ -41,7 +45,12 @@ export function ConfirmDialog({
           >
             {cancelLabel}
           </button>
-          <button type="button" onClick={onConfirm} className={confirmClass}>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={confirmDisabled}
+            className={confirmClass}
+          >
             {confirmLabel}
           </button>
         </div>

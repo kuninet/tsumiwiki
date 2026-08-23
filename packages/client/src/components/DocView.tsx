@@ -20,10 +20,11 @@ import { parseMarkdownFragment } from '../editor/parse-fragment';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
 import { useVirtualKeyboard } from '../hooks/use-virtual-keyboard';
+import { dispatchAttachmentChanged } from '../lib/attachment-events';
 import { titleFromPath } from '../lib/doc-path';
 import { handleWikilinkClick } from '../lib/handle-wikilink-click';
 import { removeInlineTag, renameInlineTag } from '../lib/inline-tag-rewrite';
-import { isAbsoluteUrl, parseEmbedTarget } from '../lib/resolve-embed-src';
+import { parseEmbedTarget } from '../lib/resolve-embed-src';
 import { saveBadge } from '../lib/save-badge';
 import { registerTabActions } from '../lib/tab-actions-registry';
 import { useEditStore } from '../stores/edit';
@@ -89,39 +90,35 @@ function formatUpdatedAt(iso: string): { date: string; time: string } {
 
 const IMAGE_MIME_PREFIX = 'image/';
 
-// #199 添付リネーム: エディタ内ノードの basename 置換用ヘルパー(純関数)。
-// サーバー側の書き換え(findAttachmentReferences)と違い、クライアント側は
-// 「表示中のエディタに写っているノードの見た目を追従させる」だけが目的のため、
-// resolveAttachmentは呼ばずbasename一致(大文字小文字無視)という単純な規則にとどめる
-function basenameOf(pathOrTarget: string): string {
-  const withoutQueryOrHash = pathOrTarget.split(/[?#]/, 1)[0] ?? '';
-  const idx = withoutQueryOrHash.lastIndexOf('/');
-  return idx === -1 ? withoutQueryOrHash : withoutQueryOrHash.slice(idx + 1);
-}
+// #199 添付リネーム: サーバーが返す replacements(その文書で実際に書き換えた
+// target→新target。trim済み・`|alias`・`#anchor`・`?query`・`"title"`を含まない)を
+// そのままエディタ内ノードにも適用するためのヘルパー(純関数)。
+// Opusレビュー重大1: 以前はbasename一致(大文字小文字無視)の単純な規則で書き換えていたが、
+// 同名で別実体(別フォルダ等)の添付まで誤って書き換えてしまうバグがあった。
+// サーバーが「この文書で実際に書き換えた対応」を返すようになったため、それに厳密一致した
+// ノードだけを書き換える(一致しないノードには一切触れない)
 
-// `![[dir/old.png|300]]` の `dir/old.png` 部分のbasenameだけを新名に差し替える。
-// `#anchor`・`|サイズ or 別名` はそのまま保持する
-function rewriteEmbedTargetBasename(target: string, newName: string): string {
+// `![[ old.png |300]]` のfile部分(from・trim済み)をtoに置き換える。
+// file前後の空白・`#anchor`・`|サイズ or 別名` はそのまま保持する
+function rewriteEmbedTargetFile(target: string, to: string): string {
   const pipeIdx = target.indexOf('|');
   const rawFile = pipeIdx === -1 ? target : target.slice(0, pipeIdx);
   const pipePart = pipeIdx === -1 ? '' : target.slice(pipeIdx); // '|'込み
   const hashIdx = rawFile.indexOf('#');
-  const file = hashIdx === -1 ? rawFile : rawFile.slice(0, hashIdx);
+  const fileWithoutAnchor = hashIdx === -1 ? rawFile : rawFile.slice(0, hashIdx);
   const anchorPart = hashIdx === -1 ? '' : rawFile.slice(hashIdx); // '#'込み
-  const dirIdx = file.lastIndexOf('/');
-  const dir = dirIdx === -1 ? '' : file.slice(0, dirIdx + 1);
-  return `${dir}${newName}${anchorPart}${pipePart}`;
+  const leadingWs = /^\s*/.exec(fileWithoutAnchor)?.[0] ?? '';
+  const trailingWs = /\s*$/.exec(fileWithoutAnchor)?.[0] ?? '';
+  return `${leadingWs}${to}${trailingWs}${anchorPart}${pipePart}`;
 }
 
-// `![alt](sub/old.png)` の `sub/old.png` 部分のbasenameだけを新名に差し替える。
-// `?query`・`#anchor` はそのまま保持する
-function rewriteImageSrcBasename(src: string, newName: string): string {
+// `![alt](sub/old.png "title")` のsrc部分(from。`?query`・`#anchor`を含む場合はそこまで)を
+// toに置き換える。`?query`・`#anchor` はそのまま保持する("title" はProseMirror側で
+// 別属性(node.attrs.title)に分離されているためsrcには含まれない)
+function rewriteImageSrcFile(src: string, to: string): string {
   const hashOrQueryIdx = src.search(/[?#]/);
-  const base = hashOrQueryIdx === -1 ? src : src.slice(0, hashOrQueryIdx);
   const suffix = hashOrQueryIdx === -1 ? '' : src.slice(hashOrQueryIdx);
-  const dirIdx = base.lastIndexOf('/');
-  const dir = dirIdx === -1 ? '' : base.slice(0, dirIdx + 1);
-  return `${dir}${newName}${suffix}`;
+  return `${to}${suffix}`;
 }
 
 export function DocView({
@@ -146,9 +143,11 @@ export function DocView({
   const [renameDialog, setRenameDialog] = useState<{
     resolved: { path: string; name: string };
   } | null>(null);
+  // referenceDocs: null は「参照文書を確認中」(中#7: 確認ダイアログは先に出し、
+  // 取得できたら本文と確定ボタンの有効化を追随させる)
   const [deleteDialog, setDeleteDialog] = useState<{
     resolved: { path: string; name: string };
-    referenceDocs: string[];
+    referenceDocs: string[] | null;
   } | null>(null);
 
   const navigate = useNavigate();
@@ -549,36 +548,55 @@ export function DocView({
       .catch(() => showToast('error', 'コピーに失敗しました'));
   }
 
-  async function handleOpenDeleteAttachmentDialog() {
+  // 中#7: ダイアログを先に表示し(「参照を確認しています…」)、参照一覧が届いたら
+  // referenceDocsを差し替える。確定ボタンはreferenceDocsがnullの間は無効(下のJSX側)
+  function handleOpenDeleteAttachmentDialog() {
     if (!attachmentMenu) return;
     const { resolved } = attachmentMenu;
-    try {
-      const { docs } = await fetchAttachmentReferences(resolved.path);
-      setDeleteDialog({ resolved, referenceDocs: docs });
-    } catch {
-      // 参照一覧の取得に失敗しても削除確認自体は表示する(件数の案内文だけ省略される)
-      setDeleteDialog({ resolved, referenceDocs: [] });
-    }
+    setDeleteDialog({ resolved, referenceDocs: null });
+    fetchAttachmentReferences(resolved.path)
+      .then(({ docs }) => {
+        setDeleteDialog((current) =>
+          current && current.resolved.path === resolved.path
+            ? { ...current, referenceDocs: docs }
+            : current,
+        );
+      })
+      .catch(() => {
+        // 参照一覧の取得に失敗しても削除確認自体は表示する(件数の案内文だけ省略される)
+        setDeleteDialog((current) =>
+          current && current.resolved.path === resolved.path
+            ? { ...current, referenceDocs: [] }
+            : current,
+        );
+      });
   }
 
   async function handleConfirmDeleteAttachment() {
-    if (!deleteDialog) return;
+    if (!deleteDialog || deleteDialog.referenceDocs === null) return;
     const { resolved } = deleteDialog;
     setDeleteDialog(null);
     try {
       await deleteAttachment(resolved.path);
       showToast('success', 'ごみ箱へ移動しました');
-      // エディタ内のノードはそのまま残す(Obsidianと同じ。次回表示時に404→チップ/壊れた画像アイコンになる)
+      // エディタ内のノードはそのまま残す(Obsidianと同じ。次回表示時に404→チップ/壊れた画像アイコンになる)。
+      // ただしブラウザは一度成功した<img src>を再取得しないため、表示中のNodeViewには
+      // 「実体が変わった」ことを明示的に伝えて再取得させる(実機確認の指摘対応)
+      dispatchAttachmentChanged([resolved.name]);
     } catch (err) {
       showToast('error', err instanceof ApiRequestError ? err.message : '削除に失敗しました');
     }
   }
 
-  // エディタ内の該当ノード(obsidianEmbed / image)のbasenameを新名に置換する。
-  // ProseMirrorトランザクションを直接dispatchし、この1回だけonUpdateのdirty化を抑止する
+  // サーバーから返る replacements(この文書で実際に書き換えたtarget→新target)に厳密一致する
+  // ノード(obsidianEmbed / image)だけをProseMirrorトランザクションで置換する。
+  // 一致が無ければ何もしない。戻り値は実際に置換したかどうか(呼び出し側のキャッシュ更新判定に使う)。
+  // dispatch前にsuppressNextUpdateRefを立て、この1回だけonUpdateのdirty化を抑止する
   // (#199: サーバー側で既にファイルを書き換え済みのため、この置換自体は未保存編集として扱わない)
-  function applyAttachmentRenameToEditor(oldName: string, newName: string) {
-    if (!editor || editor.isDestroyed) return;
+  function applyAttachmentReplacementsToEditor(
+    replacements: { from: string; to: string }[],
+  ): boolean {
+    if (!editor || editor.isDestroyed || replacements.length === 0) return false;
     const { state } = editor;
     let tr = state.tr;
     let changed = false;
@@ -586,8 +604,9 @@ export function DocView({
       if (node.type.name === 'obsidianEmbed') {
         const target = node.attrs.target as string;
         const { file } = parseEmbedTarget(target);
-        if (basenameOf(file).toLowerCase() === oldName.toLowerCase()) {
-          const nextTarget = rewriteEmbedTargetBasename(target, newName);
+        const hit = replacements.find((r) => r.from === file.trim());
+        if (hit) {
+          const nextTarget = rewriteEmbedTargetFile(target, hit.to);
           if (nextTarget !== target) {
             tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, target: nextTarget });
             changed = true;
@@ -595,8 +614,10 @@ export function DocView({
         }
       } else if (node.type.name === 'image') {
         const src = node.attrs.src as string;
-        if (!isAbsoluteUrl(src) && basenameOf(src).toLowerCase() === oldName.toLowerCase()) {
-          const nextSrc = rewriteImageSrcBasename(src, newName);
+        const base = (src.split(/[?#]/, 1)[0] ?? '').trim();
+        const hit = replacements.find((r) => r.from === base);
+        if (hit) {
+          const nextSrc = rewriteImageSrcFile(src, hit.to);
           if (nextSrc !== src) {
             tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: nextSrc });
             changed = true;
@@ -604,9 +625,10 @@ export function DocView({
         }
       }
     });
-    if (!changed) return;
+    if (!changed) return false;
     suppressNextUpdateRef.current = true;
     editor.view.dispatch(tr);
+    return true;
   }
 
   async function handleConfirmRenameAttachment(newName: string) {
@@ -625,16 +647,24 @@ export function DocView({
       return;
     }
 
-    applyAttachmentRenameToEditor(resolved.name, result.name);
-
-    // rewrittenDocsに現在文書が含まれていれば、React QueryキャッシュのupdatedAtとbodyを更新する
-    // (use-editing-session.tsの保存後のキャッシュ更新と同じやり方。次の保存で競合にならないように)
+    // 現在文書がrewrittenDocsに含まれないときはエディタに一切触らない(Opusレビュー重大1)
     const own = result.rewrittenDocs.find((d) => d.path === doc.path);
-    if (own && editor && !editor.isDestroyed) {
-      const nextBody = editor.storage.markdown.getMarkdown() as string;
-      queryClient.setQueryData<DocResponse | undefined>(docQueryKey(doc.path), (old) =>
-        old ? { ...old, updatedAt: own.updatedAt, body: nextBody } : old,
-      );
+    if (own) {
+      const changed = applyAttachmentReplacementsToEditor(own.replacements);
+      // React Queryキャッシュの更新(use-editing-session.tsの保存後の更新と同じやり方)。
+      // updatedAtはeditorの有無・置換有無に関わらず更新する(次の保存で競合にならないように)。
+      // bodyは実際に置換した場合だけ最新のMarkdownで更新する(軽微14)
+      queryClient.setQueryData<DocResponse | undefined>(docQueryKey(doc.path), (old) => {
+        if (!old) return old;
+        if (changed && editor && !editor.isDestroyed) {
+          return {
+            ...old,
+            updatedAt: own.updatedAt,
+            body: editor.storage.markdown.getMarkdown() as string,
+          };
+        }
+        return { ...old, updatedAt: own.updatedAt };
+      });
     }
     // 他の開いているタブの文書は無効化して次回表示時に再取得させる
     for (const rewritten of result.rewrittenDocs) {
@@ -642,6 +672,9 @@ export function DocView({
         queryClient.invalidateQueries({ queryKey: docQueryKey(rewritten.path) });
       }
     }
+    // ブラウザは一度成功した<img src>を再取得しないため、旧名のまま表示中の
+    // 他のNodeView(別タブ・ペイン等)にも実体が変わったことを伝える(実機確認の指摘対応)
+    dispatchAttachmentChanged([resolved.name]);
 
     showToast('success', `名前を変更しました(${result.rewrittenDocs.length}件の文書の参照を更新)`);
   }
@@ -940,7 +973,7 @@ export function DocView({
               onSelect: () => setRenameDialog({ resolved: attachmentMenu.resolved }),
             },
             { label: 'パスをコピー', onSelect: handleCopyAttachmentPath },
-            { label: '削除', onSelect: () => void handleOpenDeleteAttachmentDialog(), danger: true },
+            { label: '削除', onSelect: handleOpenDeleteAttachmentDialog, danger: true },
           ]}
           onClose={() => setAttachmentMenu(null)}
         />
@@ -961,13 +994,16 @@ export function DocView({
         <ConfirmDialog
           title="画像の削除"
           message={
-            deleteDialog.referenceDocs.filter((d) => d !== doc.path).length > 0
-              ? `${deleteDialog.resolved.name} をごみ箱へ移動します。他の${
-                  deleteDialog.referenceDocs.filter((d) => d !== doc.path).length
-                }文書からも参照されています。参照は書き換えません(表示されなくなります)。`
-              : `${deleteDialog.resolved.name} をごみ箱へ移動します。`
+            deleteDialog.referenceDocs === null
+              ? '参照を確認しています…'
+              : deleteDialog.referenceDocs.filter((d) => d !== doc.path).length > 0
+                ? `${deleteDialog.resolved.name} をごみ箱へ移動します。他の${
+                    deleteDialog.referenceDocs.filter((d) => d !== doc.path).length
+                  }文書からも参照されています。参照は書き換えません(表示されなくなります)。`
+                : `${deleteDialog.resolved.name} をごみ箱へ移動します。`
           }
           confirmLabel="削除"
+          confirmDisabled={deleteDialog.referenceDocs === null}
           onConfirm={() => void handleConfirmDeleteAttachment()}
           onCancel={() => setDeleteDialog(null)}
         />

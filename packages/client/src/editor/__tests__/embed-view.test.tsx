@@ -242,4 +242,36 @@ describe('ObsidianEmbedWithPreview の画像メニュー(#199)', () => {
       expect(document.querySelector('.attachment-frame')).toBeNull();
     });
   });
+
+  it('tsumiwiki:attachment-changedでbasenameが一致すると再取得され、失敗表示もリセットされる(実機確認対応)', async () => {
+    render(<TestEditorWithMenu content={'![[a.png]]'} docPath={'文書.md'} onOpenAttachmentMenu={vi.fn()} />);
+    let img: HTMLImageElement;
+    await waitFor(() => {
+      const el = document.querySelector('.obsidian-embed-image img');
+      expect(el).toBeTruthy();
+      img = el as HTMLImageElement;
+    });
+    const originalSrc = img!.getAttribute('src');
+    // 一旦失敗チップにしてから、無関係な名前のイベントでは何も起きないことを確認
+    img!.dispatchEvent(new Event('error'));
+    await waitFor(() => {
+      expect(document.querySelector('.obsidian-embed-image img')).toBeNull();
+    });
+    window.dispatchEvent(
+      new CustomEvent('tsumiwiki:attachment-changed', { detail: { names: ['other.png'] } }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.querySelector('.obsidian-embed-image img')).toBeNull();
+
+    // 一致する名前のイベントで失敗表示が解け、キャッシュバスター付きで再取得される
+    window.dispatchEvent(
+      new CustomEvent('tsumiwiki:attachment-changed', { detail: { names: ['a.png'] } }),
+    );
+    await waitFor(() => {
+      const el = document.querySelector('.obsidian-embed-image img');
+      expect(el).toBeTruthy();
+      img = el as HTMLImageElement;
+    });
+    expect(img!.getAttribute('src')).toBe(`${originalSrc}&v=1`);
+  });
 });

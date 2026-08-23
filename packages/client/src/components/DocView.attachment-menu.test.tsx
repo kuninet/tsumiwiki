@@ -16,7 +16,7 @@ import { DocView } from './DocView';
 const DOC: DocResponse = {
   path: 'メモ.md',
   frontmatter: {},
-  tags: [],
+  tags: ['設計'],
   body: '![[old.png|300]]\n\n![](sub/old.png)\n',
   updatedAt: '2026-08-01T00:00:00+09:00',
   lock: null,
@@ -65,6 +65,17 @@ function renderDocView(doc: DocResponse = DOC) {
   );
 }
 
+async function openEmbedMenuAndClick(itemName: string) {
+  await screen.findByRole('button', { name: /保存/ });
+  const embedFrame = await waitFor(() => {
+    const el = document.querySelector('.obsidian-embed-image .attachment-frame');
+    expect(el).toBeTruthy();
+    return el as HTMLElement;
+  });
+  fireEvent.contextMenu(embedFrame, { clientX: 10, clientY: 20 });
+  fireEvent.click(await screen.findByRole('menuitem', { name: itemName }));
+}
+
 describe('DocView の画像管理メニュー(#199)', () => {
   afterEach(() => {
     cleanup();
@@ -74,7 +85,7 @@ describe('DocView の画像管理メニュー(#199)', () => {
     useUIStore.getState().resetEditorChrome();
   });
 
-  it('右クリック→名前を変更で、リネームAPIを呼びエディタ内のembed/image両ノードのファイル名が置き換わる', async () => {
+  it('右クリック→名前を変更で、リネームAPIを呼びreplacementsに厳密一致するノードだけ書き換わる(重大1)', async () => {
     const calls = stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
       'GET /api/drafts': { draft: null },
@@ -82,28 +93,20 @@ describe('DocView の画像管理メニュー(#199)', () => {
       'POST /api/attachments/rename': {
         path: 'new.png',
         name: 'new.png',
-        rewrittenDocs: [{ path: 'メモ.md', updatedAt: '2026-08-23T00:00:00+09:00' }],
+        rewrittenDocs: [
+          {
+            path: 'メモ.md',
+            updatedAt: '2026-08-23T00:00:00+09:00',
+            // `![](sub/old.png)` は別実体(別フォルダの画像)なのでサーバーは書き換えない。
+            // replacementsにも含まれないため、エディタ側もbasenameだけでは書き換えてはいけない
+            replacements: [{ from: 'old.png', to: 'new.png' }],
+          },
+        ],
       },
     });
     renderDocView();
 
-    // 自動編集モードに入るのを待つ
-    await screen.findByRole('button', { name: /保存/ });
-
-    const embedFrame = await waitFor(() => {
-      const el = document.querySelector('.obsidian-embed-image .attachment-frame');
-      expect(el).toBeTruthy();
-      return el as HTMLElement;
-    });
-    fireEvent.contextMenu(embedFrame, { clientX: 10, clientY: 20 });
-
-    await waitFor(() => {
-      expect(
-        calls.some((c) => c.method === 'GET' && c.path === '/api/attachments/resolve'),
-      ).toBe(true);
-    });
-
-    fireEvent.click(await screen.findByRole('menuitem', { name: '名前を変更' }));
+    await openEmbedMenuAndClick('名前を変更');
 
     const input = await screen.findByLabelText('新しいファイル名');
     expect((input as HTMLInputElement).value).toBe('old.png');
@@ -118,27 +121,120 @@ describe('DocView の画像管理メニュー(#199)', () => {
       expect(renameCall!.body).toEqual({ path: 'old.png', newName: 'new.png' });
     });
 
-    // embedノード: `![[old.png|300]]` → target=new.png(サイズ|300は保持)
+    // embedノード: `![[old.png|300]]` → target=new.png(サイズ|300は保持、replacementsに一致)。
+    // 削除/リネーム後のtsumiwiki:attachment-changedイベント(実機確認対応)により
+    // キャッシュバスター`&v=`が付くことがあるためtoContainで検証する
     await waitFor(() => {
       const img = document.querySelector('.obsidian-embed-image img') as HTMLImageElement | null;
       expect(img).toBeTruthy();
-      expect(img!.getAttribute('src')).toBe(
+      expect(img!.getAttribute('src')).toContain(
         `/api/embed?target=${encodeURIComponent('new.png')}&from=${encodeURIComponent('メモ.md')}`,
       );
       expect(img!.getAttribute('width')).toBe('300');
     });
 
-    // 標準画像ノード: `![](sub/old.png)` → src=sub/new.png(フォルダ部分は保持)
-    await waitFor(() => {
-      const img = document.querySelector('.tiptap-image img') as HTMLImageElement | null;
-      expect(img).toBeTruthy();
-      expect(img!.getAttribute('src')).toBe(`/api/files/sub/new.png`);
-    });
+    // 標準画像ノード: `![](sub/old.png)` はreplacementsに含まれないため書き換わらない(重大1の回帰)。
+    // basenameが同じ'old.png'のためtsumiwiki:attachment-changedのキャッシュバスターは付き得るが、
+    // パス自体(sub/old.png)は変わらないことを見る
+    const img = document.querySelector('.tiptap-image img') as HTMLImageElement | null;
+    expect(img).toBeTruthy();
+    expect(img!.getAttribute('src')).toContain('/api/files/sub/old.png');
+    expect(img!.getAttribute('src')).not.toContain('new.png');
 
     await waitFor(() => {
       expect(useToastStore.getState().toast?.message).toBe(
         '名前を変更しました(1件の文書の参照を更新)',
       );
+    });
+  });
+
+  it('現在文書がrewrittenDocsに含まれないときはエディタ・キャッシュに一切触らない(重大1)', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/attachments/resolve': { path: 'old.png', name: 'old.png' },
+      'POST /api/attachments/rename': {
+        path: 'new.png',
+        name: 'new.png',
+        // 現在文書(メモ.md)を含まないレスポンス
+        rewrittenDocs: [
+          {
+            path: '他の文書.md',
+            updatedAt: '2026-08-23T00:00:00+09:00',
+            replacements: [{ from: 'old.png', to: 'new.png' }],
+          },
+        ],
+      },
+    });
+    renderDocView();
+
+    await openEmbedMenuAndClick('名前を変更');
+    const input = await screen.findByLabelText('新しいファイル名');
+    fireEvent.change(input, { target: { value: 'new.png' } });
+    fireEvent.click(screen.getByRole('button', { name: '変更' }));
+
+    await waitFor(() => {
+      expect(useToastStore.getState().toast?.message).toBe(
+        '名前を変更しました(1件の文書の参照を更新)',
+      );
+    });
+
+    // 現在文書のノード・更新日時表示は変わらない
+    const img = document.querySelector('.obsidian-embed-image img') as HTMLImageElement | null;
+    expect(img).toBeTruthy();
+    expect(img!.getAttribute('src')).toContain(encodeURIComponent('old.png'));
+    expect(screen.getByText('2026/08/01')).toBeTruthy();
+  });
+
+  it('リネーム後はdirtyにならず、その後の編集で保存するとPUTのbodyに新しいファイル名が反映される(軽微14含む)', async () => {
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/attachments/resolve': { path: 'old.png', name: 'old.png' },
+      'POST /api/attachments/rename': {
+        path: 'new.png',
+        name: 'new.png',
+        rewrittenDocs: [
+          {
+            path: 'メモ.md',
+            updatedAt: '2026-08-23T00:00:00+09:00',
+            replacements: [{ from: 'old.png', to: 'new.png' }],
+          },
+        ],
+      },
+      'PUT /api/docs': { updatedAt: '2026-08-23T00:10:00+09:00' },
+    });
+    renderDocView();
+
+    await openEmbedMenuAndClick('名前を変更');
+    const input = await screen.findByLabelText('新しいファイル名');
+    fireEvent.change(input, { target: { value: 'new.png' } });
+    fireEvent.click(screen.getByRole('button', { name: '変更' }));
+
+    await waitFor(() => {
+      const img = document.querySelector('.obsidian-embed-image img') as HTMLImageElement | null;
+      expect(img?.getAttribute('src')).toContain(encodeURIComponent('new.png'));
+    });
+
+    // リネーム直後はdirtyにならない(保存ボタンは無効のまま)
+    const saveBtn = screen.getByRole('button', { name: /保存/ }) as HTMLButtonElement;
+    expect(saveBtn.disabled).toBe(true);
+
+    // 別の編集(タグ削除)でdirty化してから保存する。ここでcontentRef(保存対象の本文)が
+    // リネーム前のまま(syncBodyが効いていない)だと、保存でnew.pngへの参照が失われ
+    // サーバー側の書き換えを上書きしてしまう
+    fireEvent.click(screen.getByRole('button', { name: 'タグ #設計 を削除' }));
+    await waitFor(() => {
+      expect((screen.getByRole('button', { name: /保存/ }) as HTMLButtonElement).disabled).toBe(
+        false,
+      );
+    });
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+
+    await waitFor(() => {
+      const saveCall = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs');
+      expect(saveCall).toBeTruthy();
+      expect(saveCall!.body).toMatchObject({ body: '![[new.png|300]]\n\n![](sub/old.png)' });
     });
   });
 
@@ -172,14 +268,7 @@ describe('DocView の画像管理メニュー(#199)', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderDocView();
 
-    await screen.findByRole('button', { name: /保存/ });
-    const embedFrame = await waitFor(() => {
-      const el = document.querySelector('.obsidian-embed-image .attachment-frame');
-      expect(el).toBeTruthy();
-      return el as HTMLElement;
-    });
-    fireEvent.contextMenu(embedFrame, { clientX: 10, clientY: 20 });
-    fireEvent.click(await screen.findByRole('menuitem', { name: '名前を変更' }));
+    await openEmbedMenuAndClick('名前を変更');
     const input = await screen.findByLabelText('新しいファイル名');
     fireEvent.change(input, { target: { value: 'dup.png' } });
     fireEvent.click(screen.getByRole('button', { name: '変更' }));
@@ -189,27 +278,73 @@ describe('DocView の画像管理メニュー(#199)', () => {
     });
   });
 
-  it('削除確認に他文書からの参照数が出て、確定するとDELETE /api/attachmentsを呼ぶ', async () => {
+  it('削除確認は先に「参照を確認しています…」を出し、確定ボタンは結果が届くまで無効(中7)', async () => {
+    let resolveReferences: ((v: { docs: string[] }) => void) | undefined;
+    const referencesPromise = new Promise<{ docs: string[] }>((resolve) => {
+      resolveReferences = resolve;
+    });
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.startsWith('/api/attachments/references')) {
+        return referencesPromise.then((data) => ({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(data),
+        }));
+      }
+      if (url.startsWith('/api/attachments/resolve')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ path: 'old.png', name: 'old.png' }),
+        });
+      }
+      if (url.startsWith('/api/locks') && method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ lock: { userId: 1, displayName: '太郎' } }),
+        });
+      }
+      if (url.startsWith('/api/attachments') && method === 'DELETE') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ draft: null }) });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderDocView();
+
+    await openEmbedMenuAndClick('削除');
+
+    expect(await screen.findByText('参照を確認しています…')).toBeTruthy();
+    const confirmBtn = screen.getByRole('button', { name: '削除' }) as HTMLButtonElement;
+    expect(confirmBtn.disabled).toBe(true);
+
+    resolveReferences?.({ docs: ['メモ.md', '他の文書.md'] });
+
+    await screen.findByText(/他の1文書からも参照されています/);
+    await waitFor(() => {
+      expect((screen.getByRole('button', { name: '削除' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      );
+    });
+  });
+
+  it('削除確定でDELETE /api/attachmentsを呼び、成功トーストを表示する', async () => {
     const calls = stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
       'GET /api/drafts': { draft: null },
       'GET /api/attachments/resolve': { path: 'old.png', name: 'old.png' },
-      'GET /api/attachments/references': { docs: ['メモ.md', '他の文書.md'] },
+      'GET /api/attachments/references': { docs: ['メモ.md'] },
     });
     renderDocView();
 
-    await screen.findByRole('button', { name: /保存/ });
-    const embedFrame = await waitFor(() => {
-      const el = document.querySelector('.obsidian-embed-image .attachment-frame');
-      expect(el).toBeTruthy();
-      return el as HTMLElement;
+    await openEmbedMenuAndClick('削除');
+    await waitFor(() => {
+      expect((screen.getByRole('button', { name: '削除' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      );
     });
-    fireEvent.contextMenu(embedFrame, { clientX: 10, clientY: 20 });
-    fireEvent.click(await screen.findByRole('menuitem', { name: '削除' }));
-
-    expect(
-      await screen.findByText(/他の1文書からも参照されています/),
-    ).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '削除' }));
 
     await waitFor(() => {
@@ -218,6 +353,33 @@ describe('DocView の画像管理メニュー(#199)', () => {
     await waitFor(() => {
       expect(useToastStore.getState().toast?.message).toBe('ごみ箱へ移動しました');
     });
+  });
+
+  it('削除成功時、実機確認の指摘対応としてtsumiwiki:attachment-changedイベントを発火する', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/attachments/resolve': { path: 'old.png', name: 'old.png' },
+      'GET /api/attachments/references': { docs: [] },
+    });
+    const listener = vi.fn();
+    window.addEventListener('tsumiwiki:attachment-changed', listener);
+    renderDocView();
+
+    await openEmbedMenuAndClick('削除');
+    await waitFor(() => {
+      expect((screen.getByRole('button', { name: '削除' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      );
+    });
+    fireEvent.click(screen.getByRole('button', { name: '削除' }));
+
+    await waitFor(() => {
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+    const event = listener.mock.calls[0][0] as CustomEvent<{ names: string[] }>;
+    expect(event.detail.names).toEqual(['old.png']);
+    window.removeEventListener('tsumiwiki:attachment-changed', listener);
   });
 
   it('パスをコピーでclipboardへ書き込む', async () => {
@@ -233,14 +395,7 @@ describe('DocView の画像管理メニュー(#199)', () => {
     });
     renderDocView();
 
-    await screen.findByRole('button', { name: /保存/ });
-    const embedFrame = await waitFor(() => {
-      const el = document.querySelector('.obsidian-embed-image .attachment-frame');
-      expect(el).toBeTruthy();
-      return el as HTMLElement;
-    });
-    fireEvent.contextMenu(embedFrame, { clientX: 10, clientY: 20 });
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'パスをコピー' }));
+    await openEmbedMenuAndClick('パスをコピー');
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith('old.png');

@@ -1,6 +1,11 @@
 import Image from '@tiptap/extension-image';
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react';
-import { type MouseEvent as ReactMouseEvent, useState } from 'react';
+import { type MouseEvent as ReactMouseEvent, useEffect, useState } from 'react';
+import {
+  ATTACHMENT_CHANGED_EVENT,
+  type AttachmentChangedDetail,
+  withCacheBuster,
+} from '../../lib/attachment-events';
 import { imageFallbackSrc, isAbsoluteUrl, resolveImageSrc } from '../../lib/resolve-embed-src';
 import type { TsumiwikiDocStorage } from '../doc-storage';
 
@@ -11,6 +16,12 @@ import type { TsumiwikiDocStorage } from '../doc-storage';
 //
 // #199: 画像の管理メニュー(名前変更/削除/パスをコピー)。絶対URL、および
 // フォールバックも失敗した「壊れた画像」状態には出さない
+
+function basenameOf(pathOrSrc: string): string {
+  const withoutQueryOrHash = pathOrSrc.split(/[?#]/, 1)[0] ?? '';
+  const idx = withoutQueryOrHash.lastIndexOf('/');
+  return idx === -1 ? withoutQueryOrHash : withoutQueryOrHash.slice(idx + 1);
+}
 
 function ImageView({ node, editor }: NodeViewProps) {
   const src = node.attrs.src as string;
@@ -29,9 +40,30 @@ function ImageView({ node, editor }: NodeViewProps) {
   // フォールバックも失敗し「壊れた画像アイコン」のまま表示している状態(brokenSrcと同じ理由でtarget差し替えに追随)
   const [brokenSrc, setBrokenSrc] = useState<string | null>(null);
   const broken = brokenSrc === src;
+  // #199実機確認: 削除/リネーム後、ブラウザが同じURLの<img>を再取得しないため
+  // 古い画像が残り続ける不具合への対応。ATTACHMENT_CHANGED_EVENTを受けたら
+  // このノードのbasenameが対象に含まれる場合だけ再取得(キャッシュバスター付与)する
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    function handleAttachmentChanged(e: Event) {
+      const detail = (e as CustomEvent<AttachmentChangedDetail>).detail;
+      if (!detail?.names.some((name) => name.toLowerCase() === basenameOf(src).toLowerCase())) {
+        return;
+      }
+      setFailedSrc(null);
+      setBrokenSrc(null);
+      setReloadKey((k) => k + 1);
+    }
+    window.addEventListener(ATTACHMENT_CHANGED_EVENT, handleAttachmentChanged);
+    return () => window.removeEventListener(ATTACHMENT_CHANGED_EVENT, handleAttachmentChanged);
+  }, [src]);
 
   const fallback = imageFallbackSrc(src, docPath);
-  const currentSrc = stage === 'primary' ? resolveImageSrc(src, docFolder) : (fallback ?? src);
+  const resolvedSrc = stage === 'primary' ? resolveImageSrc(src, docFolder) : (fallback ?? src);
+  const currentSrc = isAbsoluteUrl(resolvedSrc)
+    ? resolvedSrc
+    : withCacheBuster(resolvedSrc, reloadKey);
 
   function handleError() {
     if (stage === 'primary' && fallback !== null) {
@@ -70,6 +102,7 @@ function ImageView({ node, editor }: NodeViewProps) {
             type="button"
             className="attachment-menu-button"
             aria-label="画像メニュー"
+            aria-haspopup="menu"
             contentEditable={false}
             onClick={handleMenuButtonClick}
           >

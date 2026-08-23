@@ -175,8 +175,9 @@ export function registerAttachmentRoutes(app: FastifyInstance): void {
 
   // 削除: ごみ箱へ移動する(参照文書は書き換えない。Obsidianと同じ挙動)
   app.delete('/api/attachments', async (req, reply) => {
-    const { path: attachmentPath } = req.query as { path?: string };
-    if (!attachmentPath) {
+    const { path: attachmentPath } = req.query as { path?: unknown };
+    // クエリ重複(?path=a&path=b)はfastifyが配列を渡すため文字列以外は拒否する
+    if (typeof attachmentPath !== 'string' || !attachmentPath) {
       return sendError(reply, 400, 'VALIDATION_ERROR', 'pathを指定してください');
     }
     return handling(reply, async () => {

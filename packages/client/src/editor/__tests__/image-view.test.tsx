@@ -222,4 +222,46 @@ describe('ImageWithResolvedSrc の画像メニュー(#199)', () => {
       expect(document.querySelector('.attachment-menu-button')).toBeNull();
     });
   });
+
+  it('tsumiwiki:attachment-changedでbasenameが一致すると再取得され、壊れた画像状態もリセットされる(実機確認対応)', async () => {
+    render(
+      <TestEditorWithMenu
+        content={'![alt](sub/a.png)'}
+        docFolder={'フォルダ'}
+        docPath={'フォルダ/文書.md'}
+        onOpenAttachmentMenu={vi.fn()}
+      />,
+    );
+    let img: HTMLImageElement;
+    await waitFor(() => {
+      const el = document.querySelector('.tiptap-image img');
+      expect(el).toBeTruthy();
+      img = el as HTMLImageElement;
+    });
+    // primary→fallback→壊れた画像状態まで進める
+    img!.dispatchEvent(new Event('error'));
+    await waitFor(() => {
+      expect(img!.getAttribute('src')).toContain('/api/embed');
+    });
+    img!.dispatchEvent(new Event('error'));
+    await waitFor(() => {
+      expect(document.querySelector('.attachment-menu-button')).toBeNull();
+    });
+
+    // 無関係な名前のイベントでは何も起きない
+    window.dispatchEvent(
+      new CustomEvent('tsumiwiki:attachment-changed', { detail: { names: ['other.png'] } }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.querySelector('.attachment-menu-button')).toBeNull();
+
+    // 一致する名前(basename)のイベントで壊れた状態が解け、primaryから再取得される
+    window.dispatchEvent(
+      new CustomEvent('tsumiwiki:attachment-changed', { detail: { names: ['a.png'] } }),
+    );
+    await waitFor(() => {
+      expect(img!.getAttribute('src')).toBe(`/api/files/${encodeURIComponent('フォルダ')}/sub/a.png?v=1`);
+    });
+    expect(document.querySelector('.attachment-menu-button')).toBeTruthy();
+  });
 });

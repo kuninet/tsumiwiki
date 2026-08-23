@@ -62,4 +62,28 @@ describe('extractLinkTargets', () => {
   it('ヒットなしは空配列', () => {
     expect(extractLinkTargets('ただの本文です')).toEqual([]);
   });
+
+  it('前後に空白があるtargetはtrimして抽出する(軽微8)', () => {
+    expect(extractLinkTargets('![[ image.png ]]')).toEqual(['image.png']);
+  });
+
+  it('【中2】フェンス(```)内の参照は抽出しない', () => {
+    const body = ['```', '![[in-fence.png]]', '```', '![[out-fence.png]]'].join('\n');
+    expect(extractLinkTargets(body)).toEqual(['out-fence.png']);
+  });
+
+  it('【中2】フェンス(~~~)内の参照も抽出しない', () => {
+    const body = ['~~~', '![[in-fence.png]]', '~~~', '![[out-fence.png]]'].join('\n');
+    expect(extractLinkTargets(body)).toEqual(['out-fence.png']);
+  });
+
+  it('【中2】インラインコード(`...`)内の参照は抽出しない', () => {
+    const body = '`![[in-code.png]]` と ![[out-code.png]]';
+    expect(extractLinkTargets(body)).toEqual(['out-code.png']);
+  });
+
+  it('【中2】インデントのみのコードブロックは対象外(通常どおり抽出される)', () => {
+    const body = '    ![[indented.png]]';
+    expect(extractLinkTargets(body)).toEqual(['indented.png']);
+  });
 });

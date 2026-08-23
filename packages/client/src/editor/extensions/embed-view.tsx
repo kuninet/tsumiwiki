@@ -1,5 +1,10 @@
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react';
-import { type MouseEvent as ReactMouseEvent, useState } from 'react';
+import { type MouseEvent as ReactMouseEvent, useEffect, useState } from 'react';
+import {
+  ATTACHMENT_CHANGED_EVENT,
+  type AttachmentChangedDetail,
+  withCacheBuster,
+} from '../../lib/attachment-events';
 import { embedSrc, isAbsoluteUrl, parseEmbedTarget } from '../../lib/resolve-embed-src';
 import type { TsumiwikiDocStorage } from '../doc-storage';
 import { ObsidianEmbed } from './embed';
@@ -21,6 +26,11 @@ function isImageTarget(file: string): boolean {
   return IMAGE_EXTENSIONS.has(file.slice(dot).toLowerCase());
 }
 
+function basenameOf(pathOrTarget: string): string {
+  const idx = pathOrTarget.lastIndexOf('/');
+  return idx === -1 ? pathOrTarget : pathOrTarget.slice(idx + 1);
+}
+
 function ObsidianEmbedView({ node, editor }: NodeViewProps) {
   const target = node.attrs.target as string;
   const { file, width, height } = parseEmbedTarget(target);
@@ -29,6 +39,23 @@ function ObsidianEmbedView({ node, editor }: NodeViewProps) {
   // 描画と同時に失敗状態が解ける(image-viewと同じ方式)
   const [failedTarget, setFailedTarget] = useState<string | null>(null);
   const failed = failedTarget === target;
+  // #199実機確認: 削除/リネーム後、ブラウザが同じURLの<img>を再取得しないため
+  // 古い画像が残り続ける不具合への対応。ATTACHMENT_CHANGED_EVENTを受けたら
+  // このノードのbasenameが対象に含まれる場合だけ再取得(キャッシュバスター付与)する
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    function handleAttachmentChanged(e: Event) {
+      const detail = (e as CustomEvent<AttachmentChangedDetail>).detail;
+      if (!detail?.names.some((name) => name.toLowerCase() === basenameOf(file).toLowerCase())) {
+        return;
+      }
+      setFailedTarget(null);
+      setReloadKey((k) => k + 1);
+    }
+    window.addEventListener(ATTACHMENT_CHANGED_EVENT, handleAttachmentChanged);
+    return () => window.removeEventListener(ATTACHMENT_CHANGED_EVENT, handleAttachmentChanged);
+  }, [file]);
 
   if (!isImageTarget(file)) {
     return (
@@ -41,6 +68,7 @@ function ObsidianEmbedView({ node, editor }: NodeViewProps) {
   const docStorage = editor.storage.tsumiwikiDoc as TsumiwikiDocStorage | undefined;
   const docPath = docStorage?.path ?? '';
   const showMenu = !isAbsoluteUrl(file);
+  const src = isAbsoluteUrl(file) ? embedSrc(file, docPath) : withCacheBuster(embedSrc(file, docPath), reloadKey);
 
   function openMenu(x: number, y: number) {
     docStorage?.openAttachmentMenu?.({ target: file, kind: 'embed', x, y });
@@ -66,7 +94,7 @@ function ObsidianEmbedView({ node, editor }: NodeViewProps) {
       ) : (
         <span className="attachment-frame" onContextMenu={handleContextMenu}>
           <img
-            src={embedSrc(file, docPath)}
+            src={src}
             alt={file}
             width={width}
             height={height}
@@ -77,6 +105,7 @@ function ObsidianEmbedView({ node, editor }: NodeViewProps) {
               type="button"
               className="attachment-menu-button"
               aria-label="画像メニュー"
+              aria-haspopup="menu"
               contentEditable={false}
               onClick={handleMenuButtonClick}
             >

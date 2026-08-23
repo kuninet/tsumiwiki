@@ -96,9 +96,14 @@
 | GET | `/api/files/*` | ライブラリ内ファイルのraw配信(画像表示用)。Markdownは対象外。`Content-Disposition` と MIME を適切に設定 |
 | GET | `/api/embed?target=&from=` | Obsidian同等のファイル名索引(`attachment_index`。issue #198)による解決+配信。`target`(`![[target]]`相当)を`from`(参照元文書パス)のフォルダ起点で解決: パス指定時の完全パス一致→同フォルダ優先→共通祖先が深い方→パスが浅い方→辞書順。未解決は404。配信自体は`/api/files/*`と同条件(`.md`・`.trash`・保護パスは対象外) |
 | GET | `/api/attachments/resolve?target=&from=` | `/api/embed`と同じ規則で解決し、実パスとファイル名を`{path, name}`で返す(配信はしない)。未解決404、`target`が非文字列/空は400 |
-| GET | `/api/attachments/references?path=` | 指定した添付(相対パス)を参照している文書パス一覧`{docs}`。`path`は存在しなくても200で空配列(削除確認前の存在チェック目的では使わない)。不正パスは400 |
-| POST | `/api/attachments/rename` | `{path, newName}` → `{path, name, rewrittenDocs}`。添付ファイルの名前変更(issue #199)。ライブラリ全文書を走査し、この添付を参照している`![[X]]`・`[[X]]`・`![alt](X)`・`[text](X)`のtarget部分(basenameのみ。フォルダ・`|alias`・`#anchor`・`"title"`は保持)を新ファイル名へ書き換え、添付のrenameと合わせて**1コミット**にまとめる。参照文書のフロントマターには触れず、改行コードもCRLF/LFとも保持する(`saveDoc`のLF統一とは方針が異なる)。**ロック中の文書でも書き換える**(リンク整合を優先。編集者の保存はbaseUpdatedAt不一致で`CONFLICT`検知され、既存の競合解消フローで再保存できる)。書き換え途中で失敗した場合は書き換え済み文書を元に戻してから例外を投げる。同名衝突409、拡張子変更・不正なファイル名(`/`・`\`・制御文字・先頭`.`・Windows予約名)は400、未存在404。大文字小文字のみの変更は許可 |
-| DELETE | `/api/attachments?path=` | `.trash/`へ移動+コミット。**参照文書は書き換えない**(Obsidianと同じ挙動。参照元では表示が404→失敗チップになる)。`{ok: true}` |
+| GET | `/api/attachments/references?path=` | 指定した添付(相対パス)を参照している文書パス一覧`{docs}`。`path`は存在しなくても200で空配列(削除確認前の存在チェック目的では使わない)。ライブラリ全文書を読むO(N)実装(下記の注意点を参照)。`.trash`配下・`.md`・非画像拡張子(`.pdf`等)・トラバーサル(`../`)は400 |
+| POST | `/api/attachments/rename` | `{path, newName}` → `{path, name, rewrittenDocs}`。添付ファイルの名前変更(issue #199)。ライブラリ全文書を走査し(O(N)。下記参照)、この添付を参照している`![[X]]`・`[[X]]`・`![alt](X)`・`[text](X)`のtarget部分(basenameのみ。フォルダ・`|alias`・`#anchor`・`"title"`は保持。前後空白はtrimしてから比較)を新ファイル名へ書き換え、添付のrenameと合わせて**1コミット**にまとめる。**コードブロック(```/~~~フェンス)・インラインコード(`` ` ``)の内側は検出・書き換えの対象外**(インデントのみのコードブロックは対象外でよい仕様のため未対応)。参照文書のフロントマターには触れず、改行コードもCRLF/LFとも保持する(`saveDoc`のLF統一とは方針が異なる)。**ロック中の文書でも書き換える**(リンク整合を優先。編集者の保存はbaseUpdatedAt不一致で`CONFLICT`検知され、既存の競合解消フローで再保存できる)。参照文書の書き換え・添付本体のrenameのいずれかが途中で失敗した場合は、書き換え済み文書とrename済みのファイル名を両方とも元に戻してから例外を投げる。同名衝突409、`newName`が空・200文字超・UTF-8で255byte超・`/`・`\`・制御文字・`: * ? " < > \|`・先頭`.`・末尾`.`/空白・Windows予約名(拡張子を除いたstemが対象)・拡張子変更は400、パス自体が`.trash`配下・`.md`・非画像拡張子(`.pdf`等)・トラバーサルの場合も400、未存在404。拡張子省略時は元の拡張子を補う。大文字小文字のみの変更は許可(衝突チェックはスキップし、一時ファイル名を経由してrenameする) |
+| DELETE | `/api/attachments?path=` | `.trash/`へ移動+コミット。**参照文書は書き換えない**(Obsidianと同じ挙動。参照元では表示が404→失敗チップになる)。`{ok: true}`。`path`が未指定・配列(`?path=a&path=b`)は400、`.trash`配下・`.md`・非画像拡張子・トラバーサルも400 |
+
+補足:
+- `rewrittenDocs[].replacements`: その文書で実際に書き換えたtarget文字列の一覧(重複除く)。`from`/`to`は`|alias`・`#anchor`・`?query`・`"title"`を除いたtarget本体(trim後)。例: `![[ old.png |300]]` → `{from: 'old.png', to: 'new.png'}`、`![](議事録/old.png "t")` → `{from: '議事録/old.png', to: '議事録/new.png'}`
+- 既知の制約: `%20`等のURLエンコードを含むMarkdownリンクは書き換え対象外(target文字列はURLデコードしない設計のため。`/api/embed`の解決仕様=issue #198と同じ制約)
+- `references`・`rename`は対象添付の参照有無を判定するためライブラリ内の全`.md`を読む(`findExclusiveAttachments`と同じO(N)方針)。ライブラリ規模が大きい場合は応答が遅くなりうる。将来`doc_index`に添付参照リストを持たせて逆引きをO(1)化することを検討する(TODO #160)
 
 ### ごみ箱(FR-DOC-07)
 
