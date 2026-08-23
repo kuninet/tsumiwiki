@@ -92,8 +92,8 @@
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| POST | `/api/attachments?docPath=` | multipart `{file}`(docPathはクエリ。フィールド順非依存)→ 添付フォルダに保存+コミットし、参照名を返す |
-| GET | `/api/files/*` | ライブラリ内ファイルのraw配信(画像表示用)。Markdownは対象外。`Content-Disposition` と MIME を適切に設定 |
+| POST | `/api/attachments?docPath=` | multipart `{file}`(docPathはクエリ。フィールド順非依存)→ 添付フォルダに保存+コミットし、参照名を返す。対応形式: 画像(`png/jpg/jpeg/gif/svg/webp`)+ PDF(`pdf`。issue #204)。画像は`image-YYYYMMDDHHmmss.ext`で自動命名、PDFは元ファイル名のbasenameを尊重(危険文字置換。Obsidian互換) |
+| GET | `/api/files/*` | ライブラリ内ファイルのraw配信(画像・PDF表示用)。Markdownは対象外。`Content-Disposition` と MIME を適切に設定。CSPは画像/SVGが`default-src 'none'`(NFR-SEC-03)、PDFはブラウザ内蔵ビューアが自ページ内リソースを読み込めるよう`default-src 'self'`系の緩いCSPを使う |
 | GET | `/api/embed?target=&from=` | Obsidian同等のファイル名索引(`attachment_index`。issue #198)による解決+配信。`target`(`![[target]]`相当)を`from`(参照元文書パス)のフォルダ起点で解決: パス指定時の完全パス一致→同フォルダ優先→共通祖先が深い方→パスが浅い方→辞書順。未解決は404。配信自体は`/api/files/*`と同条件(`.md`・`.trash`・保護パスは対象外) |
 | GET | `/api/attachments/resolve?target=&from=` | `/api/embed`と同じ規則で解決し、実パスとファイル名を`{path, name}`で返す(配信はしない)。未解決404、`target`が非文字列/空は400 |
 | GET | `/api/attachments/references?path=` | 指定した添付(相対パス)を参照している文書パス一覧`{docs}`。`path`は存在しなくても200で空配列(削除確認前の存在チェック目的では使わない)。ライブラリ全文書を読むO(N)実装(下記の注意点を参照)。`.trash`配下・`.md`・非画像拡張子(`.pdf`等)・トラバーサル(`../`)は400 |

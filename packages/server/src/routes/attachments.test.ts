@@ -73,6 +73,7 @@ afterEach(async () => {
 });
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+const PDF = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF');
 
 describe('添付アップロード', () => {
   it('文書と同じフォルダへ保存され、attach:コミットが積まれる', async () => {
@@ -158,7 +159,13 @@ describe('ファイル配信', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toContain('image/png');
     expect(res.headers['x-content-type-options']).toBe('nosniff');
-    expect(res.headers['content-security-policy']).toContain("default-src 'none'");
+    {
+      const csp = parseCsp(res.headers['content-security-policy'] as string | undefined);
+      expect(csp['default-src']).toEqual(["'none'"]);
+      expect(csp['style-src']).toEqual(["'unsafe-inline'"]);
+      // 画像・SVG系にはPDF用のscript-src等が混入しないこと(緩めていない)
+      expect(csp['script-src']).toBeUndefined();
+    }
     expect(res.rawPayload.equals(PNG)).toBe(true);
   }, 30_000);
 
@@ -180,6 +187,22 @@ describe('ファイル配信', () => {
     expect(res.statusCode).toBe(401);
   }, 20_000);
 });
+
+
+// CSPヘッダを`;`区切りでディレクティブごとにパースする。値内空白は分割済みSet化。
+// 「toContain」検査は将来 CSP を緩めた変更を素通しするため、必ずこのヘルパで
+// 期待ディレクティブ集合と等価比較する
+function parseCsp(header: string | undefined): Record<string, string[]> {
+  const map: Record<string, string[]> = {};
+  if (!header) return map;
+  for (const raw of header.split(';')) {
+    const parts = raw.trim().split(/\s+/);
+    if (parts.length === 0 || !parts[0]) continue;
+    const name = parts[0].toLowerCase();
+    map[name] = parts.slice(1);
+  }
+  return map;
+}
 
 describe('レビュー指摘の回帰テスト', () => {
   const upload = (name: string, content: Buffer, target = docPath) => {
@@ -203,7 +226,12 @@ describe('レビュー指摘の回帰テスト', () => {
       headers: { cookie },
     });
     expect(res.headers['content-type']).toContain('image/svg+xml');
-    expect(res.headers['content-security-policy']).toContain("default-src 'none'");
+    {
+      const csp = parseCsp(res.headers['content-security-policy'] as string | undefined);
+      expect(csp['default-src']).toEqual(["'none'"]);
+      expect(csp['style-src']).toEqual(["'unsafe-inline'"]);
+      expect(csp['script-src']).toBeUndefined();
+    }
     expect(res.headers['content-disposition']).toBe('attachment');
   }, 30_000);
 
@@ -868,8 +896,9 @@ describe('Opusレビュー指摘の追加テスト(issue #199)', () => {
     expect(after).toContain('![[ロック後.png]]');
   }, 20_000);
 
-  it('【軽微11】.trash配下・.md・非画像拡張子(.pdf)・トラバーサルはresolve/references/rename/deleteとも拒否される', async () => {
-    const cases = ['.trash/x.png', '議事録/添付先.md', 'x.pdf', '../outside.png'];
+  it('【軽微11】.trash配下・.md・非対応拡張子(.txt)・トラバーサルはresolve/references/rename/deleteとも拒否される', async () => {
+    // #204: .pdf は添付として扱うようになったため、非対応拡張子の代表は .txt に変更
+    const cases = ['.trash/x.png', '議事録/添付先.md', 'x.txt', '../outside.png'];
     for (const p of cases) {
       const resolve = await api('GET', `/api/attachments/resolve?target=${encodeURIComponent(p)}`);
       expect([400, 404]).toContain(resolve.statusCode); // resolveは索引解決のためInvalidPath型ではなく未解決404もありうる
@@ -936,6 +965,104 @@ describe('Opusレビュー指摘の追加テスト(issue #199)', () => {
       expect(res.statusCode).toBe(400);
       // 利用者が原因を判断できる文言を返す(固定の「パスが不正です」ではない)
       expect(res.json().error.message).toContain('リンク記法');
+    }
+  }, 20_000);
+});
+
+describe('PDF添付(issue #204)', () => {
+  const upload = (name: string, content: Buffer, target = docPath) => {
+    const mp = multipart({}, { name, content });
+    return app.inject({
+      method: 'POST',
+      url: `/api/attachments?docPath=${encodeURIComponent(target)}`,
+      headers: { ...CSRF, cookie, ...mp.headers },
+      payload: mp.payload,
+    });
+  };
+
+  it('PDFアップロードが201で通り、元ファイル名を尊重した名前で保存される', async () => {
+    const res = await upload('報告書.pdf', PDF);
+    expect(res.statusCode).toBe(201);
+    const { fileName, path: relPath } = res.json();
+    expect(fileName).toBe('報告書.pdf');
+    expect(relPath).toBe(`議事録/${fileName}`);
+
+    const files = await readdir(join(lib, '議事録'));
+    expect(files).toContain(fileName);
+  }, 20_000);
+
+  it('同名PDFを再アップロードすると連番サフィックスが付く', async () => {
+    const first = await upload('重複.pdf', PDF);
+    expect(first.json().fileName).toBe('重複.pdf');
+    const second = await upload('重複.pdf', PDF);
+    expect(second.json().fileName).toBe('重複-2.pdf');
+  }, 20_000);
+
+  it('Windows予約文字を含むファイル名は_に置換される', async () => {
+    // multipartボディの生成が単純な文字列連結のため"(ダブルクォート)は使わない
+    // (Content-Dispositionのfilename値の区切りと衝突するため)
+    const res = await upload('a:b*c?d<e>f|g.pdf', PDF);
+    expect(res.statusCode).toBe(201);
+    expect(res.json().fileName).toBe('a_b_c_d_e_f_g.pdf');
+  }, 20_000);
+
+  it('パス区切りを含むファイル名はbasenameだけが使われる(ディレクトリ部分は無視)', async () => {
+    const res = await upload('sub/dir/実際の名前.pdf', PDF);
+    expect(res.statusCode).toBe(201);
+    expect(res.json().fileName).toBe('実際の名前.pdf');
+  }, 20_000);
+
+  it('先頭ドットの元名は隠しファイル化せず fileName に反映される', async () => {
+    // `.hidden.pdf` → `hidden.pdf`、`..pdf` / `...pdf` → `document.pdf`
+    const r1 = await upload('.hidden.pdf', PDF);
+    expect(r1.statusCode).toBe(201);
+    expect(r1.json().fileName).toBe('hidden.pdf');
+
+    const r2 = await upload('..pdf', PDF);
+    expect(r2.statusCode).toBe(201);
+    expect(r2.json().fileName).toBe('document.pdf');
+
+    const r3 = await upload('...pdf', PDF);
+    expect(r3.statusCode).toBe(201);
+    // 'document.pdf' は既存(r2)なので連番になる
+    expect(r3.json().fileName).toBe('document-2.pdf');
+  }, 30_000);
+
+  it('PDF配信のContent-Type/Content-Disposition/CSPが画像・SVGと異なる(緩いCSPでinline)', async () => {
+    const up = await upload('配信確認.pdf', PDF);
+    expect(up.statusCode).toBe(201);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/files/${up.json().path.split('/').map(encodeURIComponent).join('/')}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('application/pdf');
+    expect(res.headers['content-disposition']).toBe('inline');
+    {
+      const csp = parseCsp(res.headers['content-security-policy'] as string | undefined);
+      // PDFはブラウザ内蔵PDFビューアが動くよう'self'を許可。ワイルドカードは絶対に混ぜない
+      expect(csp['default-src']).toEqual(["'self'"]);
+      expect(csp['script-src']).toEqual(["'self'"]);
+      expect(csp['style-src']).toEqual(["'self'", "'unsafe-inline'"]);
+      expect(csp['img-src']).toEqual(["'self'", 'data:', 'blob:']);
+      expect(csp['font-src']).toEqual(["'self'", 'data:']);
+    }
+    expect(res.rawPayload.equals(PDF)).toBe(true);
+  }, 20_000);
+
+  it('画像はPDFと異なり従来どおりdefault-src \'none\'のまま', async () => {
+    const up = await upload('画像確認.png', PNG);
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/files/${up.json().path.split('/').map(encodeURIComponent).join('/')}`,
+      headers: { cookie },
+    });
+    {
+      const csp = parseCsp(res.headers['content-security-policy'] as string | undefined);
+      expect(csp['default-src']).toEqual(["'none'"]);
+      expect(csp['script-src']).toBeUndefined();
     }
   }, 20_000);
 });

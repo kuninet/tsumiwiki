@@ -107,6 +107,25 @@ describe('ImageWithResolvedSrc', () => {
     });
     expect(img!.getAttribute('src')).toBe(fallbackSrc);
   });
+
+  it('標準記法のPDFはiframeで表示する(#204)', async () => {
+    render(
+      <TestEditor
+        content={'![alt](sub/report.pdf)'}
+        docFolder={'フォルダ'}
+        docPath={'フォルダ/文書.md'}
+      />,
+    );
+    let iframe: HTMLIFrameElement;
+    await waitFor(() => {
+      const el = document.querySelector('.tiptap-image-pdf');
+      expect(el).toBeTruthy();
+      iframe = el as HTMLIFrameElement;
+    });
+    expect(iframe!.getAttribute('src')).toBe(
+      `/api/files/${encodeURIComponent('フォルダ')}/sub/report.pdf`,
+    );
+  });
 });
 
 // #199 画像の管理メニュー(右クリック・「⋯」ボタン)

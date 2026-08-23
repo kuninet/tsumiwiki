@@ -816,11 +816,25 @@ export class DocService {
 
   // ---- 添付(FR-IMG / FR-OBS-05) ----
 
-  // 添付として受け付ける拡張子(画像のみ。PDF等はFR-IMG-04=COULDで将来)
-  // 定義はlib/attachments.tsに集約(indexer-serviceと共有するため)
+  // 添付として受け付ける拡張子(画像 + PDF)。定義はlib/attachments.tsに集約
+  // (indexer-serviceと共有するため)
   static readonly ATTACHMENT_EXTENSIONS = ATTACHMENT_EXTENSIONS;
 
-  // 画像添付の保存(FR-IMG-01/02)。保存先は既定で文書と同じフォルダ、
+  // PDFの命名に使う元ファイル名のstemを無害化する。
+  //  - パス区切り・制御文字・Windows予約文字(\ / : * ? " < > |)を`_`に置換
+  //  - 先頭のドット列を除去(`.hidden.pdf`が Unix 隠しファイル化するのを防ぐ。
+  //    Obsidian でも `.` 始まりの添付は扱われない)
+  //  - 結果が空なら 'document' にフォールバック
+  private static sanitizePdfStem(originalName: string): string {
+    const basename = path.posix.basename(originalName.normalize('NFC'));
+    const stem = basename.slice(0, basename.length - path.posix.extname(basename).length);
+    const sanitized = stem
+      .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
+      .replace(/^\.+/, '');
+    return sanitized === '' ? 'document' : sanitized;
+  }
+
+  // 画像・PDF添付の保存(FR-IMG-01/02/04)。保存先は既定で文書と同じフォルダ、
   // 設定(ATTACHMENT_DIR_MODE)でフォルダ名指定も可能
   async addAttachment(
     docPath: string,
@@ -843,13 +857,20 @@ export class DocService {
     const absDir = dirNorm ? resolveInLibrary(this.libraryPath, dirNorm) : this.libraryPath;
     await mkdir(absDir, { recursive: true });
 
-    // image-YYYYMMDDHHmmss形式+衝突時は連番(要件05章5.1)
-    const d = new Date();
-    const p2 = (n: number) => String(n).padStart(2, '0');
-    const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
-    let fileName = `image-${stamp}${ext}`;
+    // 画像はimage-YYYYMMDDHHmmss形式、PDFは元ファイル名尊重(Obsidian互換)。
+    // いずれも衝突時は連番(要件05章5.1)
+    let baseName: string;
+    if (ext === '.pdf') {
+      baseName = DocService.sanitizePdfStem(originalName);
+    } else {
+      const d = new Date();
+      const p2 = (n: number) => String(n).padStart(2, '0');
+      const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+      baseName = `image-${stamp}`;
+    }
+    let fileName = `${baseName}${ext}`;
     for (let i = 2; !(await this.writeExclusive(path.join(absDir, fileName), data)); i++) {
-      fileName = `image-${stamp}-${i}${ext}`;
+      fileName = `${baseName}-${i}${ext}`;
     }
     const relPath = dirNorm ? `${dirNorm}/${fileName}` : fileName;
     await this.tryCommit([relPath], `attach: ${relPath}`, author);
