@@ -39,6 +39,16 @@ describe('想定外の例外のレスポンス(issue #206)', () => {
     expect(res.body).not.toContain('/Users/secret');
   });
 
+  it('Error 以外の値が throw されても 200 にならず 500 になる', async () => {
+    const app = buildTestApp();
+    app.get('/boom-object', async () => {
+      throw { statusCode: 418, message: 'teapot' };
+    });
+    const res = await app.inject({ method: 'GET', url: '/boom-object' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error.code).toBe('INTERNAL_ERROR');
+  });
+
   it('Fastify 由来の 4xx(不正な JSON)は従来どおり 400 のまま', async () => {
     const app = buildTestApp();
     const res = await app.inject({

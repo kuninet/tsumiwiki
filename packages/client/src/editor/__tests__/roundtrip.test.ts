@@ -121,11 +121,29 @@ describe('Markdown リンクの往復保全(issue #207)', () => {
       content: markdown,
     });
     try {
-      return JSON.stringify(editor.getJSON()).includes('"type":"link"');
+      let found = false;
+      editor.state.doc.descendants((node) => {
+        if (node.marks.some((m) => m.type.name === 'link')) found = true;
+      });
+      return found;
     } finally {
       editor.destroy();
     }
   }
+
+  it('許可外スキーム(tel: ftp: 等)はリンク化されないが原文は失われない', () => {
+    for (const source of ['[a](tel:+81)', '[a](ftp://x/y)', '[a](sms:123)', '[a](xmpp:x@y)']) {
+      expect(hasLinkMark(source), source).toBe(false);
+      // リテラル化(エスケープ)されるだけで URL 文字列は本文に残る
+      expect(roundtripMarkdown(source)).toContain(source.slice(source.indexOf('(') + 1, -1));
+    }
+  });
+
+  it('data: は画像(data:image)のみ許可し、それ以外はリンク化しない', () => {
+    // 注: data:image の <img> 自体は Image 拡張の既定(allowBase64: false)で保持されない(従来どおり)
+    expect(hasLinkMark('[a](data:image/png;base64,AAAA)')).toBe(true);
+    expect(hasLinkMark('[a](data:text/html;base64,AAAA)')).toBe(false);
+  });
 
   it('許可スキームと相対パスはリンクになる', () => {
     expect(hasLinkMark('[a](sub/old.png)')).toBe(true);

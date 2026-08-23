@@ -12,22 +12,9 @@ import { isAllowedLinkUrl } from '../../lib/allowed-link';
 // さらに markdown-it の既定 validateLink は `file:` を拒否するため、
 // 外部ファイルリンク(FR-LINK-02)が `\[a\](file:///...)` とリテラル化される。
 //
-// ここでは本アプリの許可スキーム(lib/allowed-link.ts: http/https/mailto/file と相対パス)に
-// 揃えた検証に置き換え、title を属性として保持し、markdown-it 側でも file: を通す。
-
-// ブラウザは URL のスキーム部に含まれる空白・制御文字を取り除いて解釈するため
-// (`java\nscript:` → `javascript:`)、検証前に同じ正規化をしてすり抜けを防ぐ。
-// markdown-it は実体参照(`&#9;` 等)を復号後にパーセントエンコードして渡してくるので、
-// 念のためデコードしてから判定する(不正なエンコードは原文のまま判定する)
-function normalizeForSchemeCheck(url: string): string {
-  let decoded = url;
-  try {
-    decoded = decodeURIComponent(url);
-  } catch {
-    // 不正なパーセントエンコードは復号せず原文で判定する
-  }
-  return decoded.replace(/[\s\u0000-\u001f\u007f]/g, '');
-}
+// ここでは本アプリの許可スキーム(lib/allowed-link.ts: http/https/mailto/file・相対パス・data:image)に
+// 揃えた検証に置き換え、title を属性として保持し、markdown-it 側も同じ判定にする。
+// 許可外スキーム(tel: 等)は両層で一致して拒否→markdown-it がリテラル化するため原文は消えない。
 
 export const LinkWithTitle = Link.extend({
   addAttributes() {
@@ -39,7 +26,7 @@ export const LinkWithTitle = Link.extend({
 }).configure({
   openOnClick: false,
   autolink: false,
-  isAllowedUri: (url) => isAllowedLinkUrl(normalizeForSchemeCheck(url)),
+  isAllowedUri: (url) => isAllowedLinkUrl(url),
 });
 
 interface MarkdownItWithValidateLink {
@@ -47,7 +34,9 @@ interface MarkdownItWithValidateLink {
 }
 
 // markdown-it の validateLink を差し替える(tiptap-markdown の parse.setup フックで呼ばれる)。
-// 既定は vbscript/javascript/file/data を拒否(data は画像のみ許可)。file: だけを許可に変える
+// Link 拡張の isAllowedUri と同じ許可集合にする。許可外はここでリテラル化されるため、
+// 「markdown-it が通して Link 拡張が落とす」経路(=原文が消える)が生じない。
+// 画像の src にも同じ判定が使われる(`![a](file:///...)` は <img> になる。FR-LINK-02 と同方針)
 export const MarkdownLinkSchemes = Extension.create({
   name: 'markdownLinkSchemes',
   addStorage() {
@@ -55,14 +44,7 @@ export const MarkdownLinkSchemes = Extension.create({
       markdown: {
         parse: {
           setup(markdownit: MarkdownItWithValidateLink) {
-            markdownit.validateLink = (url: string) => {
-              const normalized = normalizeForSchemeCheck(url).toLowerCase();
-              if (/^(vbscript|javascript):/.test(normalized)) return false;
-              if (/^data:/.test(normalized)) {
-                return /^data:image\/(gif|png|jpeg|webp);/.test(normalized);
-              }
-              return true;
-            };
+            markdownit.validateLink = (url: string) => isAllowedLinkUrl(url);
           },
         },
       },

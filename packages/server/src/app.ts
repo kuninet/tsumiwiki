@@ -62,8 +62,10 @@ export function buildApp(options: BuildAppOptions) {
   // 形式のまま、それ以外は固定文言の 500 にしてログにのみ詳細を残す
   app.setErrorHandler((err, req, reply) => {
     const statusCode = (err as { statusCode?: number }).statusCode;
-    if (statusCode !== undefined && statusCode >= 400 && statusCode < 500) {
-      return reply.send(err);
+    // reply.send() は Error インスタンス以外をエラーとして扱わない(200 になる)ため、
+    // 4xx の透過は Error かつ statusCode 付きのものに限定する
+    if (err instanceof Error && statusCode !== undefined && statusCode >= 400 && statusCode < 500) {
+      return reply.code(statusCode).send(err);
     }
     req.log.error({ err }, '未処理の例外');
     return reply
