@@ -181,20 +181,37 @@ describe('SearchBox', () => {
     expect(screen.queryByText('議事録', { selector: 'div' })).toBeNull();
   });
 
-  it('2文字以下では3文字以上を推奨するヒントを表示する', async () => {
+  it('2文字以下でも検索APIが呼ばれ結果が表示される', async () => {
+    stubFetch({
+      'GET /api/search': {
+        results: [{ path: '床屋.md', title: '床屋', snippet: '午後に<mark>床屋</mark>へ' }],
+      },
+    });
+    renderSearchBox();
+
+    fireEvent.change(screen.getByPlaceholderText('検索'), { target: { value: '床屋' } });
+
+    expect(await screen.findByText('床屋', { selector: 'div' })).toBeTruthy();
+  });
+
+  it('1文字でも検索APIが呼ばれ結果が表示される', async () => {
+    stubFetch({
+      'GET /api/search': {
+        results: [{ path: '買い物メモ.md', title: '買い物メモ', snippet: '牛乳と<mark>卵</mark>とパンを買う' }],
+      },
+    });
+    renderSearchBox();
+
+    fireEvent.change(screen.getByPlaceholderText('検索'), { target: { value: '卵' } });
+
+    expect(await screen.findByText('買い物メモ', { selector: 'div' })).toBeTruthy();
+  });
+
+  it('結果・タグとも0件のとき「見つかりませんでした」を表示する', async () => {
     stubFetch({ 'GET /api/search': { results: [] } });
     renderSearchBox();
 
     fireEvent.change(screen.getByPlaceholderText('検索'), { target: { value: 'ab' } });
-
-    expect(await screen.findByText('3文字以上を推奨します')).toBeTruthy();
-  });
-
-  it('3文字以上で結果・タグとも0件のとき「見つかりませんでした」を表示する', async () => {
-    stubFetch({ 'GET /api/search': { results: [] } });
-    renderSearchBox();
-
-    fireEvent.change(screen.getByPlaceholderText('検索'), { target: { value: 'abc' } });
 
     expect(await screen.findByText('見つかりませんでした')).toBeTruthy();
   });

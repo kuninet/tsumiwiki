@@ -176,7 +176,7 @@ TsumiWiki の全文検索は SQLite FTS5 trigram を使っています。
 
 - ファイル配置後、chokidar → sync → index 再構築で自動的に検索対象に入る
 - `/api/library/rescan` の返り値 `indexed`/`removed` で反映件数が分かる
-- FTS5 の特性上、**3文字未満のクエリはヒットしないことがある**(trigram のため)
+- `q` の各語が 3 文字以上なら trigram インデックス検索、1〜2 文字の語を含む場合は部分一致(LIKE)検索にフォールバックする(全文書走査のため大規模ライブラリでは遅くなる)
 
 ---
 

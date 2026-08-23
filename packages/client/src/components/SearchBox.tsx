@@ -11,7 +11,6 @@ import { useUIStore } from '../stores/ui';
 // 入力は300msデバウンスしてからuseSearchを呼ぶ
 
 const DEBOUNCE_MS = 300;
-const MIN_RECOMMENDED_LENGTH = 3; // trigramトークナイザの特性上、これ未満はヒットしないことがある
 const MAX_TAG_SUGGESTIONS = 8;
 
 type NavItem = { kind: 'doc'; path: string } | { kind: 'tag'; tag: string };
@@ -112,13 +111,7 @@ export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props,
     }
   }
 
-  const showHint = !isEmptyQuery && trimmed.length < MIN_RECOMMENDED_LENGTH;
-  const showNoResults =
-    !isEmptyQuery &&
-    trimmed.length >= MIN_RECOMMENDED_LENGTH &&
-    results &&
-    results.length === 0 &&
-    matchingTags.length === 0;
+  const showNoResults = !isEmptyQuery && results && results.length === 0 && matchingTags.length === 0;
 
   return (
     <div ref={containerRef} className="relative w-full max-w-[420px]">
@@ -174,7 +167,6 @@ export const SearchBox = forwardRef<HTMLInputElement>(function SearchBox(_props,
 
           {!isEmptyQuery && (
             <>
-              {showHint && <p className="px-3 py-2 text-xs text-ink-faint">3文字以上を推奨します</p>}
               {showNoResults && <p className="px-3 py-2 text-sm text-ink-faint">見つかりませんでした</p>}
 
               {results && results.length > 0 && (

@@ -15,8 +15,7 @@ export function useSearch(q: string) {
       );
       return results;
     },
-    // trigramの特性上3文字未満は実質ヒットしないため発火させない
-    enabled: trimmed.length >= 3,
+    enabled: trimmed.length >= 1,
     // タイプ中に前回結果を保持してフリッカーを防ぐ
     placeholderData: keepPreviousData,
   });

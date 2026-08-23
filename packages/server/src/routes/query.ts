@@ -9,7 +9,7 @@ export function registerQueryRoutes(app: FastifyInstance): void {
     if (!q || !q.trim()) {
       return sendError(reply, 400, 'VALIDATION_ERROR', '検索語を入力してください');
     }
-    // trigramトークナイザの特性上、3文字未満の語はヒットしないことがある
+    // 3文字未満の語はLIKEフォールバックで検索する(query-service参照)
     return { results: app.queryService.search(q.trim()) };
   });
 
