@@ -28,6 +28,8 @@ interface UIState {
   toggleSidebarCollapsed: () => void;
   setSidebarTab: (tab: SidebarTab) => void;
   toggleFolderExpanded: (path: string) => void;
+  // フォルダ移動・リネーム時の展開状態の付け替え。oldPath/配下の展開もまとめて newPath/配下に付け替える
+  repathExpandedFolder: (oldPath: string, newPath: string) => void;
   toggleTag: (tag: string) => void;
   clearTags: () => void;
   requestCreateDoc: (folder?: string) => void;
@@ -66,6 +68,25 @@ export const useUIStore = create<UIState>((set) => ({
         next.add(path);
       }
       return { expandedFolders: next };
+    }),
+  repathExpandedFolder: (oldPath, newPath) =>
+    set((s) => {
+      if (oldPath === newPath) return {};
+      const next = new Set<string>();
+      let changed = false;
+      const oldPrefix = `${oldPath}/`;
+      for (const p of s.expandedFolders) {
+        if (p === oldPath) {
+          next.add(newPath);
+          changed = true;
+        } else if (p.startsWith(oldPrefix)) {
+          next.add(newPath + p.slice(oldPath.length));
+          changed = true;
+        } else {
+          next.add(p);
+        }
+      }
+      return changed ? { expandedFolders: next } : {};
     }),
   toggleTag: (tag) =>
     set((s) => ({

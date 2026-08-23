@@ -90,6 +90,7 @@ export function FolderTree() {
 
   const expandedFolders = useUIStore((s) => s.expandedFolders);
   const toggleFolderExpanded = useUIStore((s) => s.toggleFolderExpanded);
+  const repathExpandedFolder = useUIStore((s) => s.repathExpandedFolder);
   const createDocRequest = useUIStore((s) => s.createDocRequest);
 
   // AppShell の「+ 新規文書」/ Ctrl+N ショートカット / その他外部要求(#137)を拾って
@@ -267,6 +268,9 @@ export function FolderTree() {
       { path: oldFolder, newPath },
       {
         onSuccess: (data) => {
+          // #216 展開状態を新パスに付け替える。付け替えないと refetch 後に折り畳まれて
+          // 見えてサブフォルダが消えたように見える(=リネームが反映されていない体感)
+          repathExpandedFolder(oldFolder, data.path);
           const nowPath = currentPathRef.current;
           if (nowPath && (nowPath === oldFolder || nowPath.startsWith(`${oldFolder}/`))) {
             const rewritten = data.path + nowPath.slice(oldFolder.length);
@@ -529,6 +533,8 @@ export function FolderTree() {
           oldPath = node.path;
           newPath = data.path;
           kind = 'folder';
+          // #216 展開状態を新パスに付け替える(一括移動経路)
+          repathExpandedFolder(oldPath, newPath);
         }
         succeeded++;
 
@@ -602,7 +608,16 @@ export function FolderTree() {
     } else {
       const folderName = item.path.split('/').pop()!;
       const newPath = targetFolderPath ? `${targetFolderPath}/${folderName}` : folderName;
-      moveFolder.mutate({ path: item.path, newPath });
+      const oldPath = item.path;
+      moveFolder.mutate(
+        { path: oldPath, newPath },
+        {
+          onSuccess: (data) => {
+            // #216 展開状態を新パスに付け替える(D&D経路)
+            repathExpandedFolder(oldPath, data.path);
+          },
+        },
+      );
     }
   }
 
