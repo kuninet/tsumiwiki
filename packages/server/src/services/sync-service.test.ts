@@ -7,7 +7,7 @@ import { openDatabase } from '../db/index.js';
 import { BackupService } from './backup-service.js';
 import { GitService } from './git-service.js';
 import { IndexerService } from './indexer-service.js';
-import { LibraryWatcher } from './library-watcher.js';
+import { LibraryWatcher, USE_POLLING } from './library-watcher.js';
 import { SyncService } from './sync-service.js';
 
 // 外部変更取り込み・バックアップpushのテスト(FR-DOC-08 / NFR-AVL-02)
@@ -112,12 +112,19 @@ describe('LibraryWatcher', () => {
     await new Promise((r) => setTimeout(r, 1500));
 
     await writeFile(join(lib, '監視対象_polling.md'), 'a\n', 'utf8');
-    // stabilityThreshold(500) + interval(1000) 分を待つ
-    await new Promise((r) => setTimeout(r, 2500));
-
-    expect(onChange).toHaveBeenCalled();
+    // stabilityThreshold(500) + interval(1000) + debounce(200) で理論値 ~1.7 秒。
+    // CI の I/O 揺れを吸収するため waitFor で最大 8 秒待つ(flake 回避)
+    await vi.waitFor(() => expect(onChange).toHaveBeenCalled(), {
+      timeout: 8000,
+      interval: 100,
+    });
     await watcher.stop();
   }, 30_000);
+
+  // #218 デフォルトが Windows 判定に紐づくことを担保(将来のリグレッション防止)
+  it('USE_POLLING のデフォルトは process.platform === "win32" と一致する', () => {
+    expect(USE_POLLING).toBe(process.platform === 'win32');
+  });
 });
 
 describe('BackupService', () => {

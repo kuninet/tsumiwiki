@@ -12,8 +12,9 @@ const IGNORED_RE = /(^|[/\\])(\.(git|obsidian|tsumiwiki)([/\\]|$)|\.tsumiwiki-tm
 // #218: Windows の fs.watch は各サブディレクトリに handle を握るため、配下 handle が親の
 // rename を EPERM でブロックする(子 handle は rename に追随しない Windows 仕様)。
 // polling モードは fs.watch を使わず stat 差分検出のため handle を残さず、rename を阻害しない。
-// Windows のみ切替(macOS/Linux は native watch で問題ないので CPU コストを避ける)
-const USE_POLLING = process.platform === 'win32';
+// Windows のみ切替(macOS/Linux は native watch で問題ないので CPU コストを避ける)。
+// named export はデフォルト値の妥当性をテストから検証するため
+export const USE_POLLING = process.platform === 'win32';
 
 export class LibraryWatcher {
   private watcher: FSWatcher | null = null;
@@ -36,10 +37,11 @@ export class LibraryWatcher {
       ignoreInitial: true,
       // 書き込み途中のファイルを拾わないよう安定を待つ
       awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
-      // #218 Windows のみ polling で fs.watch handle を握らないようにする
-      usePolling: this.usePolling,
-      interval: 1000,
-      binaryInterval: 3000,
+      // #218 Windows のみ polling で fs.watch handle を握らないようにする。
+      // interval / binaryInterval は polling 時のみ有効なので、意図を明示するため条件で切り分ける
+      ...(this.usePolling
+        ? { usePolling: true, interval: 1000, binaryInterval: 3000 }
+        : { usePolling: false }),
     });
     this.watcher.on('all', () => this.schedule());
   }
