@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCreateDoc, useTree } from '../api/docs';
 import { docUrl } from '../lib/doc-path';
+import { isMac } from '../lib/platform';
 import { pickUniqueUntitledTitle } from '../lib/untitled';
 import { getActivePaneActiveIdFromState, useTabsStore } from '../stores/tabs';
 import { resolveNewDocInitialFolder, useUserSettingsStore } from '../stores/user-settings';
@@ -19,11 +20,6 @@ import { resolveNewDocInitialFolder, useUserSettingsStore } from '../stores/user
 //
 // preventDefault は多くのブラウザで無効(Chrome の Ctrl+N は新規ウィンドウ)。
 // 「試すだけ試す」実装で、ブラウザ側のショートカットが優先されるのは受容する(#145)
-
-function isMac(): boolean {
-  if (typeof navigator === 'undefined') return false;
-  return /Mac|iPod|iPhone|iPad/.test(navigator.platform);
-}
 
 export function useNewDocShortcut() {
   const { data: tree } = useTree();
