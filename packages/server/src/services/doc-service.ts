@@ -9,6 +9,7 @@ import type { TrashEntry } from '@tsumiwiki/shared';
 import type { DocResponse, DocSummary, TreeResponse } from '@tsumiwiki/shared';
 import type { AppConfig } from '../config.js';
 import type { AppDatabase } from '../db/index.js';
+import { ATTACHMENT_EXTENSIONS, isIndexedFileName } from '../lib/attachments.js';
 import { InvalidPathError, isProtectedPath, normalizeRelPath, resolveInLibrary } from '../lib/paths.js';
 import type { DraftService } from './draft-service.js';
 import type { GitAuthor, GitService } from './git-service.js';
@@ -189,6 +190,20 @@ export class DocService {
 
   private get libraryPath(): string {
     return this.config.libraryPath;
+  }
+
+  // 添付索引の更新はbest-effort: 失敗しても呼び出し元の後続処理(ロック・下書きの
+  // repath等)は必ず継続する。索引はキャッシュであり、次回のscanAll・外部変更sync
+  // (設計06章6.4)で整合が回復するため
+  private async tryIndexAttachment(
+    op: () => Promise<void>,
+    context: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await op();
+    } catch (e) {
+      this.logger?.warn({ err: e, ...context }, '添付索引の更新に失敗しました(次回走査で回復)');
+    }
   }
 
   // 文書パスとして妥当か検証して正規化する(保護パス・拡張子)
@@ -608,6 +623,13 @@ export class DocService {
     }
     await this.tryCommit(commitPaths, `move: ${oldNorm} -> ${newNorm}`, author);
     await this.indexer.moveFile(oldNorm, newNorm);
+    // 同伴した添付も索引を付け替える(issue #198。#159の添付同伴に追随)
+    for (const m of movedAttachments) {
+      await this.tryIndexAttachment(
+        () => this.indexer.moveAttachment(m.oldRel, m.newRel),
+        { oldRel: m.oldRel, newRel: m.newRel },
+      );
+    }
     // ロック・下書きも新パスへ追随させる
     this.locks.repath(oldNorm, newNorm);
     this.drafts.repath(oldNorm, newNorm);
@@ -661,14 +683,8 @@ export class DocService {
   // ---- 添付(FR-IMG / FR-OBS-05) ----
 
   // 添付として受け付ける拡張子(画像のみ。PDF等はFR-IMG-04=COULDで将来)
-  static readonly ATTACHMENT_EXTENSIONS = new Set([
-    '.png',
-    '.jpg',
-    '.jpeg',
-    '.gif',
-    '.svg',
-    '.webp',
-  ]);
+  // 定義はlib/attachments.tsに集約(indexer-serviceと共有するため)
+  static readonly ATTACHMENT_EXTENSIONS = ATTACHMENT_EXTENSIONS;
 
   // 画像添付の保存(FR-IMG-01/02)。保存先は既定で文書と同じフォルダ、
   // 設定(ATTACHMENT_DIR_MODE)でフォルダ名指定も可能
@@ -703,6 +719,8 @@ export class DocService {
     }
     const relPath = dirNorm ? `${dirNorm}/${fileName}` : fileName;
     await this.tryCommit([relPath], `attach: ${relPath}`, author);
+    // 添付索引に即時反映(issue #198。/api/embedで直後から解決できるように)
+    await this.tryIndexAttachment(() => this.indexer.indexAttachment(relPath), { relPath });
     return { fileName, path: relPath };
   }
 
@@ -842,6 +860,8 @@ export class DocService {
       await this.indexer.scanAll();
     } else if (dest.toLowerCase().endsWith('.md')) {
       await this.indexer.indexFile(dest);
+    } else if (isIndexedFileName(dest)) {
+      await this.tryIndexAttachment(() => this.indexer.indexAttachment(dest), { dest });
     }
     return { path: dest };
   }

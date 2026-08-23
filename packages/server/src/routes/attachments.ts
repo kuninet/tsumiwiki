@@ -1,7 +1,8 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import { MIME_BY_EXT } from '../lib/attachments.js';
 import { InvalidPathError, isProtectedPath, normalizeRelPath, resolveInLibrary } from '../lib/paths.js';
 import { sendError } from '../plugins/auth.js';
 import { DocService } from '../services/doc-service.js';
@@ -9,15 +10,56 @@ import { authorOf, handling } from './docs.js';
 
 // 添付アップロード・ファイル配信API(FR-IMG / 設計03章)
 
-const MIME_BY_EXT: Record<string, string> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.svg': 'image/svg+xml',
-  '.webp': 'image/webp',
-  '.pdf': 'application/pdf',
-};
+// ライブラリ内ファイルを/api/files/*と/api/embedで共用する配信処理。
+// normalizedは既にnormalizeRelPath済みであること(呼び出し側で検証する)
+async function serveLibraryFile(
+  app: FastifyInstance,
+  reply: FastifyReply,
+  normalized: string,
+): Promise<FastifyReply> {
+  if (
+    !normalized ||
+    isProtectedPath(normalized) ||
+    normalized.split('/').includes('.trash') ||
+    normalized.toLowerCase().endsWith('.md')
+  ) {
+    return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
+  }
+  let abs: string;
+  try {
+    abs = resolveInLibrary(app.config.libraryPath, normalized);
+  } catch (e) {
+    if (e instanceof InvalidPathError) {
+      return sendError(reply, 400, 'INVALID_PATH', 'パスが不正です');
+    }
+    throw e;
+  }
+  let st;
+  try {
+    st = await stat(abs);
+  } catch {
+    // 索引が実体より古い(索引にあるがファイルが無い)場合もここで404になる
+    return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
+  }
+  if (!st.isFile()) {
+    return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
+  }
+
+  // 配信は既知の拡張子に限定する(防御的措置)
+  const ext = path.posix.extname(normalized).toLowerCase();
+  const mime = MIME_BY_EXT[ext];
+  if (!mime) {
+    return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
+  }
+  return reply
+    .header('X-Content-Type-Options', 'nosniff')
+    // SVG内スクリプト等の実行を封じる(NFR-SEC-03)
+    .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'")
+    .header('Content-Disposition', ext === '.svg' ? 'attachment' : 'inline')
+    .header('Cache-Control', 'private, max-age=60')
+    .type(mime)
+    .send(createReadStream(abs));
+}
 
 export function registerAttachmentRoutes(app: FastifyInstance): void {
   // docPathはクエリで受ける(multipartのフィールド順に依存しないため)
@@ -71,46 +113,22 @@ export function registerAttachmentRoutes(app: FastifyInstance): void {
     } catch {
       return sendError(reply, 400, 'INVALID_PATH', 'パスが不正です');
     }
-    if (
-      !normalized ||
-      isProtectedPath(normalized) ||
-      normalized.split('/').includes('.trash') ||
-      normalized.toLowerCase().endsWith('.md')
-    ) {
-      return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
-    }
-    let abs: string;
-    try {
-      abs = resolveInLibrary(app.config.libraryPath, normalized);
-    } catch (e) {
-      if (e instanceof InvalidPathError) {
-        return sendError(reply, 400, 'INVALID_PATH', 'パスが不正です');
-      }
-      throw e;
-    }
-    let st;
-    try {
-      st = await stat(abs);
-    } catch {
-      return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
-    }
-    if (!st.isFile()) {
-      return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
-    }
+    return serveLibraryFile(app, reply, normalized);
+  });
 
-    // 配信は既知の拡張子に限定する(防御的措置)
-    const ext = path.posix.extname(normalized).toLowerCase();
-    const mime = MIME_BY_EXT[ext];
-    if (!mime) {
+  // Obsidian同等のファイル名索引による埋め込み解決+配信(issue #198)。
+  // target: `![[target]]`の中身相当。from: 参照元文書の相対パス(任意)
+  app.get('/api/embed', async (req, reply) => {
+    const { target, from } = req.query as { target?: unknown; from?: unknown };
+    // クエリ重複(?target=a&target=b)はfastifyが配列を渡すため文字列以外は拒否する
+    if (typeof target !== 'string' || !target) {
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'targetを指定してください');
+    }
+    const fromPath = typeof from === 'string' ? from : '';
+    const resolved = app.indexerService.resolveAttachment(target, fromPath);
+    if (!resolved) {
       return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
     }
-    return reply
-      .header('X-Content-Type-Options', 'nosniff')
-      // SVG内スクリプト等の実行を封じる(NFR-SEC-03)
-      .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'")
-      .header('Content-Disposition', ext === '.svg' ? 'attachment' : 'inline')
-      .header('Cache-Control', 'private, max-age=60')
-      .type(mime)
-      .send(createReadStream(abs));
+    return serveLibraryFile(app, reply, resolved);
   });
 }

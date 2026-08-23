@@ -23,6 +23,9 @@ $env:DB_PATH      = 'C:\tsumiwiki-data\app.db'
 $env:PORT = '3080'
 $env:HOST = '0.0.0.0'
 
+# --- 添付の保存先(省略可。既定は文書と同じフォルダ) -----------------------
+# $env:ATTACHMENT_DIR_MODE = 'attachments'
+
 # --- バックアップ(省略可)-------------------------------------------------
 $env:BACKUP_REMOTE                = '\\fileserver\share\tsumiwiki.git'
 $env:BACKUP_PUSH_INTERVAL_MINUTES = '10'

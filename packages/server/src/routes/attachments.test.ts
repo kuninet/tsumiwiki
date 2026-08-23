@@ -244,3 +244,143 @@ describe('レビュー指摘の回帰テスト', () => {
     }
   }, 20_000);
 });
+
+describe('GET /api/embed(issue #198 添付索引による解決)', () => {
+  const upload = (name: string, content: Buffer, target = docPath) => {
+    const mp = multipart({}, { name, content });
+    return app.inject({
+      method: 'POST',
+      url: `/api/attachments?docPath=${encodeURIComponent(target)}`,
+      headers: { ...CSRF, cookie, ...mp.headers },
+      payload: mp.payload,
+    });
+  };
+
+  it('同フォルダ配置の画像を解決して配信する', async () => {
+    // 保存ファイル名はサーバー生成(image-YYYYMMDDHHmmss.png)のため実際の名前で解決する
+    const up = await upload('同フォルダ.png', PNG);
+    expect(up.statusCode).toBe(201);
+    const fileName = up.json().fileName as string;
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/embed?target=${encodeURIComponent(fileName)}&from=${encodeURIComponent(docPath)}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('image/png');
+    expect(res.rawPayload.equals(PNG)).toBe(true);
+  }, 20_000);
+
+  it('2配置(ルート・サブフォルダ)を名前一致・パス指定・パス末尾一致・fromなしの4通りで解決できる', async () => {
+    const { writeFile: wf, mkdir: md } = await import('node:fs/promises');
+    await wf(join(lib, 'ルート配置.png'), PNG); // ルート
+    await app.indexerService.indexAttachment('ルート配置.png');
+    await md(join(lib, 'attachments'), { recursive: true });
+    await wf(join(lib, 'attachments', '別フォルダ配置.png'), PNG);
+    await app.indexerService.indexAttachment('attachments/別フォルダ配置.png');
+
+    // ルート配置(参照元は議事録配下だが、ヴォルト全体から名前一致で解決)
+    const r1 = await app.inject({
+      method: 'GET',
+      url: `/api/embed?target=${encodeURIComponent('ルート配置.png')}&from=${encodeURIComponent(docPath)}`,
+      headers: { cookie },
+    });
+    expect(r1.statusCode).toBe(200);
+    expect(r1.rawPayload.equals(PNG)).toBe(true);
+
+    // フォルダ内配置(パス指定)
+    const r2 = await app.inject({
+      method: 'GET',
+      url: `/api/embed?target=${encodeURIComponent('attachments/別フォルダ配置.png')}`,
+      headers: { cookie },
+    });
+    expect(r2.statusCode).toBe(200);
+    expect(r2.rawPayload.equals(PNG)).toBe(true);
+
+    // ファイル名のみでのパス末尾一致解決
+    const r3 = await app.inject({
+      method: 'GET',
+      url: `/api/embed?target=${encodeURIComponent('別フォルダ配置.png')}`,
+      headers: { cookie },
+    });
+    expect(r3.statusCode).toBe(200);
+    expect(r3.rawPayload.equals(PNG)).toBe(true);
+
+    // fromなしでも名前一致だけで解決できる
+    const r4 = await app.inject({
+      method: 'GET',
+      url: `/api/embed?target=${encodeURIComponent('ルート配置.png')}`,
+      headers: { cookie },
+    });
+    expect(r4.statusCode).toBe(200);
+    expect(r4.rawPayload.equals(PNG)).toBe(true);
+  }, 20_000);
+
+  it('未登録のtargetは404、targetなしは400、.mdを指すtargetは404', async () => {
+    const notFound = await app.inject({
+      method: 'GET',
+      url: `/api/embed?target=${encodeURIComponent('存在しない.png')}`,
+      headers: { cookie },
+    });
+    expect(notFound.statusCode).toBe(404);
+
+    const noTarget = await app.inject({
+      method: 'GET',
+      url: '/api/embed',
+      headers: { cookie },
+    });
+    expect(noTarget.statusCode).toBe(400);
+
+    // .mdはattachment_indexに入らないため、名前が一致しても解決されず404
+    const mdTarget = await app.inject({
+      method: 'GET',
+      url: `/api/embed?target=${encodeURIComponent(docPath.split('/').pop() ?? '')}`,
+      headers: { cookie },
+    });
+    expect(mdTarget.statusCode).toBe(404);
+  }, 20_000);
+
+  it('targetを配列で複数指定(?target=a&target=b)すると400になる', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/embed?target=a.png&target=b.png',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+  }, 20_000);
+
+  it('索引にあるが実体が消えたファイルへの解決は404', async () => {
+    const up = await upload('消える画像.png', PNG);
+    expect(up.statusCode).toBe(201);
+    const relPath = up.json().path as string;
+    // 索引を更新せずファイル実体だけ消す(索引が実体より古い状態を再現)
+    await rm(join(lib, relPath), { force: true });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/embed?target=${encodeURIComponent(relPath.split('/').pop() ?? '')}&from=${encodeURIComponent(docPath)}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(404);
+  }, 20_000);
+
+  it('アップロード直後に索引が反映され、/api/embedで即座に解決できる', async () => {
+    const up = await upload('即時反映.png', PNG);
+    expect(up.statusCode).toBe(201);
+    const fileName = up.json().fileName as string;
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/embed?target=${encodeURIComponent(fileName)}&from=${encodeURIComponent(docPath)}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.rawPayload.equals(PNG)).toBe(true);
+  }, 20_000);
+
+  it('未認証では解決されない', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/embed?target=x.png' });
+    expect(res.statusCode).toBe(401);
+  }, 20_000);
+});

@@ -29,9 +29,21 @@ export class SyncService {
         committed = true;
       }
       const scan = await this.indexer.scanAll();
-      if (committed || scan.indexed > 0 || scan.removed > 0) {
+      if (
+        committed ||
+        scan.indexed > 0 ||
+        scan.removed > 0 ||
+        scan.attachmentsIndexed > 0 ||
+        scan.attachmentsRemoved > 0
+      ) {
         this.logger?.info(
-          { committed, indexed: scan.indexed, removed: scan.removed },
+          {
+            committed,
+            indexed: scan.indexed,
+            removed: scan.removed,
+            attachmentsIndexed: scan.attachmentsIndexed,
+            attachmentsRemoved: scan.attachmentsRemoved,
+          },
           '外部変更を取り込みました',
         );
       }

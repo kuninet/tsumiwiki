@@ -357,6 +357,29 @@ describe('文書移動時の添付同伴 (#159)', () => {
     expect(await fileExists('元/image-A.png')).toBe(false);
   }, 20_000);
 
+  it('専属の画像が移動すると添付索引(attachment_index)も新パスへ追随する(issue #198)', async () => {
+    await api('POST', '/api/folders', { path: '移動先2' });
+    const doc = await placeDocWithEmbed('元2', '記事2', 'image-C.png');
+    // 添付索引に事前登録(通常はaddAttachment経由。ここではファイル直置きのため明示的に索引)
+    await app.indexerService.indexAttachment('元2/image-C.png');
+
+    const moved = await api('POST', '/api/docs/move', {
+      path: doc.path,
+      newFolder: '移動先2',
+      newTitle: '記事2',
+    });
+    expect(moved.statusCode).toBe(200);
+
+    const oldRow = app.db
+      .prepare('SELECT rel_path FROM attachment_index WHERE rel_path = ?')
+      .get('元2/image-C.png');
+    const newRow = app.db
+      .prepare('SELECT rel_path FROM attachment_index WHERE rel_path = ?')
+      .get('移動先2/image-C.png');
+    expect(oldRow).toBeUndefined();
+    expect(newRow).toBeDefined();
+  }, 20_000);
+
   it('他文書からも参照されている画像は現地に残る', async () => {
     await api('POST', '/api/folders', { path: '移動先' });
     const doc = await placeDocWithEmbed('元', '本命記事', 'image-B.png');
