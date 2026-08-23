@@ -22,10 +22,11 @@ import { ObsidianEmbed } from './embed';
 // PDFのみ`#page=N`等としてiframe srcに引き継ぐ(画像では未使用)。別名指定(`|別名`)は解決に使わない。
 // 画像・PDF以外は従来どおりチップ表示のまま。シリアライズ(embed.ts)には一切手を加えない
 //
-// #199: 画像の管理メニュー(名前変更/削除/パスをコピー)。右クリックまたは「⋯」ボタンで
+// #199: 画像・PDFの管理メニュー(名前変更/削除/パスをコピー)。右クリックまたは「⋯」ボタンで
 // DocView側(editor.storage.tsumiwikiDoc.openAttachmentMenu)にメニュー表示を依頼する。
-// 絶対URL(http/https/data)には出さない(添付索引の管理対象外のため)。PDFは iframe が
-// クリックを奪ってメニューボタンが押せないため、当面は画像のみに提供する
+// 絶対URL(http/https/data)には出さない(添付索引の管理対象外のため)。
+// PDFは iframe がホバー/右クリックを吸うため、ボタンを常時表示(--persistent)にして
+// 「見えない・押せない」状態を回避する(#204)
 
 function basenameOf(pathOrTarget: string): string {
   const idx = pathOrTarget.lastIndexOf('/');
@@ -65,34 +66,7 @@ function ObsidianEmbedView({ node, editor }: NodeViewProps) {
 
   const docStorage = editor.storage.tsumiwikiDoc as TsumiwikiDocStorage | undefined;
   const docPath = docStorage?.path ?? '';
-
-  if (isPdfFile(file)) {
-    return (
-      <NodeViewWrapper as="span" className="obsidian-embed-pdf-wrapper" contentEditable={false}>
-        <iframe
-          src={embedSrc(file, docPath, { anchor })}
-          title={file}
-          width={width ?? '100%'}
-          height={height ?? 600}
-          className="obsidian-embed-pdf"
-          loading="lazy"
-        />
-      </NodeViewWrapper>
-    );
-  }
-
-  if (!isImageFile(file)) {
-    return (
-      <NodeViewWrapper as="span" className="obsidian-embed" contentEditable={false}>
-        {`![[${target}]]`}
-      </NodeViewWrapper>
-    );
-  }
-
   const showMenu = !isAbsoluteUrl(file);
-  const src = isAbsoluteUrl(file)
-    ? embedSrc(file, docPath)
-    : withCacheBuster(embedSrc(file, docPath), reloadKey);
 
   function openMenu(x: number, y: number) {
     docStorage?.openAttachmentMenu?.({ target: file, kind: 'embed', x, y });
@@ -110,6 +84,52 @@ function ObsidianEmbedView({ node, editor }: NodeViewProps) {
     const rect = e.currentTarget.getBoundingClientRect();
     openMenu(rect.left, rect.bottom);
   }
+
+  if (isPdfFile(file)) {
+    // PDF は iframe がホバー・右クリック・クリック全てを吸うため、`.attachment-frame:hover`
+    // が発火せずメニューボタンが見えない・押せない。--persistent 修飾で常時表示にする
+    return (
+      <NodeViewWrapper as="span" className="obsidian-embed-pdf-wrapper" contentEditable={false}>
+        <span
+          className="attachment-frame attachment-frame--persistent"
+          onContextMenu={handleContextMenu}
+        >
+          <iframe
+            src={embedSrc(file, docPath, { anchor })}
+            title={file}
+            width={width ?? '100%'}
+            height={height ?? 600}
+            className="obsidian-embed-pdf"
+            loading="lazy"
+          />
+          {showMenu && (
+            <button
+              type="button"
+              className="attachment-menu-button"
+              aria-label="PDFメニュー"
+              aria-haspopup="menu"
+              contentEditable={false}
+              onClick={handleMenuButtonClick}
+            >
+              ⋯
+            </button>
+          )}
+        </span>
+      </NodeViewWrapper>
+    );
+  }
+
+  if (!isImageFile(file)) {
+    return (
+      <NodeViewWrapper as="span" className="obsidian-embed" contentEditable={false}>
+        {`![[${target}]]`}
+      </NodeViewWrapper>
+    );
+  }
+
+  const src = isAbsoluteUrl(file)
+    ? embedSrc(file, docPath)
+    : withCacheBuster(embedSrc(file, docPath), reloadKey);
 
   return (
     <NodeViewWrapper as="span" className="obsidian-embed-image" contentEditable={false}>

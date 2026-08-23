@@ -1052,7 +1052,29 @@ describe('PDF添付(issue #204)', () => {
     expect(res.rawPayload.equals(PDF)).toBe(true);
   }, 20_000);
 
-  it('画像はPDFと異なり従来どおりdefault-src \'none\'のまま', async () => {
+  it('PDFも画像と同様にリネーム・削除できる(#199の管理経路に相乗り)', async () => {
+    const up = await upload('管理対象.pdf', PDF);
+    expect(up.statusCode).toBe(201);
+    const relPath = up.json().path;
+
+    const renamed = await app.inject({
+      method: 'POST',
+      url: '/api/attachments/rename',
+      headers: { ...CSRF, cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ path: relPath, newName: '改名後.pdf' }),
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().name).toBe('改名後.pdf');
+
+    const del = await app.inject({
+      method: 'DELETE',
+      url: `/api/attachments?path=${encodeURIComponent(renamed.json().path)}`,
+      headers: { ...CSRF, cookie },
+    });
+    expect(del.statusCode).toBe(200);
+  }, 30_000);
+
+    it('画像はPDFと異なり従来どおりdefault-src \'none\'のまま', async () => {
     const up = await upload('画像確認.png', PNG);
     const res = await app.inject({
       method: 'GET',

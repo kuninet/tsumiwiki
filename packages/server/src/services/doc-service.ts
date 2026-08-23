@@ -879,7 +879,8 @@ export class DocService {
     return { fileName, path: relPath };
   }
 
-  // 添付パスとして妥当か検証して正規化する(保護パス・.trash・.md・非画像拡張子を拒否。issue #199)
+  // 添付パスとして妥当か検証して正規化する(保護パス・.trash・.md・非対応拡張子を拒否。
+  // 対応拡張子は ATTACHMENT_EXTENSIONS = 画像 + PDF(#204)。issue #199)
   private validateAttachmentPath(relPath: string): string {
     const normalized = normalizeRelPath(relPath);
     if (!normalized || isProtectedPath(normalized) || normalized.split('/').includes('.trash')) {
