@@ -6,7 +6,7 @@ import type { Logger } from 'pino';
 import { parseDocument as parseYamlDocument, stringify as yamlStringify } from 'yaml';
 import { REV_PATTERN } from '@tsumiwiki/shared';
 import type { TrashEntry } from '@tsumiwiki/shared';
-import type { DocResponse, DocSummary, TreeResponse } from '@tsumiwiki/shared';
+import type { DocResponse, DocSummary, RenameAttachmentResponse, TreeResponse } from '@tsumiwiki/shared';
 import type { AppConfig } from '../config.js';
 import type { AppDatabase } from '../db/index.js';
 import { ATTACHMENT_EXTENSIONS, isIndexedFileName } from '../lib/attachments.js';
@@ -104,6 +104,134 @@ export function sanitizeTitle(title: string): string {
     throw new InvalidPathError(title);
   }
   return cleaned;
+}
+
+// 添付ファイル名の検証(issue #199)。sanitizeTitleと異なり禁止文字を置換せず拒否する。
+// リネームで「意図しない名前に化ける」事故(例: `/`が全角化されて別名で作られる)を
+// 避けるため。NFC正規化・前後空白除去のみ行い、以降は不正なら例外。
+function validateAttachmentName(name: string): string {
+  const normalized = name.normalize('NFC').trim();
+  if (!normalized) throw new InvalidPathError(name, 'ファイル名を入力してください');
+  if (/[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new InvalidPathError(name, 'ファイル名に制御文字は使えません');
+  }
+  if ([...normalized].some((c) => FORBIDDEN_CHAR_MAP[c] !== undefined)) {
+    throw new InvalidPathError(name, 'ファイル名に / \\ : * ? " < > | は使えません');
+  }
+  // Markdown/Obsidian記法上の意味を持つ文字も拒否する(issue #199 再レビュー中B)。
+  // 例: `a#b.png`は`![[a#b.png]]`で`#`以降がアンカー扱いになり埋め込みが解決不能になる、
+  // `]`・`(`・`)`・バッククォート入りはWIKILINK_REWRITE_RE/MD_LINK_REWRITE_REで
+  // targetとして捕捉できず、以後の参照検出・リネーム対象から外れてしまう。
+  // 既存ファイルの表示・添付索引解決には影響しない(「この名前へ変更する」操作だけを拒否する)
+  if (/[#[\]()`]/.test(normalized)) {
+    throw new InvalidPathError(name, 'ファイル名に # [ ] ( ) ` は使えません(リンク記法と衝突するため)');
+  }
+  if (normalized.startsWith('.') || /[. ]$/.test(normalized)) {
+    throw new InvalidPathError(name, 'ファイル名の先頭の . や末尾の . / 空白は使えません');
+  }
+  // 多くのファイルシステムはファイル名をUTF-8で255byteまでしか扱えない(NFR-COMP-04)
+  if (Buffer.byteLength(normalized, 'utf8') > 255) {
+    throw new InvalidPathError(name, 'ファイル名が長すぎます');
+  }
+  const ext = path.posix.extname(normalized);
+  const stem = ext ? normalized.slice(0, normalized.length - ext.length) : normalized;
+  if (WINDOWS_RESERVED_RE.test(stem)) {
+    throw new InvalidPathError(name, 'Windows の予約名(CON, PRN, AUX, NUL, COM1〜9, LPT1〜9)は使えません');
+  }
+  return normalized;
+}
+
+// フロントマターブロックと本文を厳密に分離する(FM_BLOCK_RE。#199の参照書き換えで、
+// フロントマターに一切触れず本文のみをバイト単位で書き戻すために使う)
+function splitFrontmatter(content: string): { prefix: string; body: string } {
+  const m = FM_BLOCK_RE.exec(content);
+  return m ? { prefix: m[0], body: content.slice(m[0].length) } : { prefix: '', body: content };
+}
+
+// #199: リネーム時の参照検出・書き換えの両方が使う正規表現。target部分だけを差し替えられる
+// よう、前後(記法の枠・alias・anchor・title)を別グループに分離して捕捉する
+// (グループ順は「開き記法・target・閉じ記法」で隙間なく連結しているため、
+// targetの開始位置はマッチ全体のindex + 開き記法の長さで正確に求まる)。
+// 対象: Obsidian埋め込み `![[target]]`・wikilink `[[target]]`(`|alias`・`#anchor`は除く)、
+// Markdown画像 `![alt](target)`・リンク `[text](target)`(`"title"`は除く)。
+// http(s)/data/mailto/fileスキームは除外。target の `?`/`#` 以降は落とす。URLデコードはしない。
+// `<...>` 囲みのリンクは対象外。単一行のtarget想定で改行含みには当たらない。
+// コードブロック・インラインコードの内側(中2)はcomputeCodeRangesで除外する
+const WIKILINK_REWRITE_RE = /(!?\[\[)([^\]|#\n]+?)((?:[#|][^\]\n]*)?\]\])/g;
+const MD_LINK_REWRITE_RE = /(!?\[[^\]\n]*\]\()([^)\s\n]+)((?:\s+["'][^)\n]*)?\))/g;
+const EXCLUDED_SCHEME_RE = /^(https?|data|mailto|file):/i;
+
+// フェンス行(3文字以上の```/~~~連。インデントのみのコードブロックは対象外)の検出。
+// markdown-meta.tsのstripCode(タグ抽出用)と同じ簡易な行単位の状態機械を、
+// 位置(文字インデックス)を保った形で使うためにここでも定義する
+const CODE_FENCE_LINE_RE = /^ {0,3}(`{3,}|~{3,})/;
+// インラインコード(`...`・``...``等)。バッククォート連長が一致するスパンを1行内で検出
+const INLINE_CODE_SPAN_RE = /(`+).*?\1/g;
+
+// body中の「コードブロック・インラインコードの内側」の文字範囲([start, end))を返す(中2)。
+// extractLinkTargets/rewriteAttachmentReferencesはこの範囲内のtargetを対象外にする
+function computeCodeRanges(body: string): { start: number; end: number }[] {
+  const ranges: { start: number; end: number }[] = [];
+  let offset = 0;
+  let fence: { char: string; len: number } | null = null;
+  for (const line of body.match(/[^\n]*\n|[^\n]+/g) ?? []) {
+    const eolLen = line.endsWith('\r\n') ? 2 : line.endsWith('\n') ? 1 : 0;
+    const bare = eolLen ? line.slice(0, -eolLen) : line;
+    const fenceMatch = CODE_FENCE_LINE_RE.exec(bare);
+    if (fence) {
+      ranges.push({ start: offset, end: offset + line.length });
+      if (
+        fenceMatch &&
+        fenceMatch[1][0] === fence.char &&
+        fenceMatch[1].length >= fence.len &&
+        /^\s*$/.test(bare.slice(fenceMatch[0].length))
+      ) {
+        fence = null;
+      }
+    } else if (fenceMatch) {
+      fence = { char: fenceMatch[1][0], len: fenceMatch[1].length };
+      ranges.push({ start: offset, end: offset + line.length });
+    } else {
+      for (const m of bare.matchAll(INLINE_CODE_SPAN_RE)) {
+        ranges.push({ start: offset + (m.index ?? 0), end: offset + (m.index ?? 0) + m[0].length });
+      }
+    }
+    offset += line.length;
+  }
+  return ranges;
+}
+
+function isWithinCode(ranges: { start: number; end: number }[], index: number): boolean {
+  return ranges.some((r) => index >= r.start && index < r.end);
+}
+
+// targetの`?`/`#`以降(クエリ・アンカー)を切り離す。前後空白はtrimする(軽微8。
+// `![[ old.png ]]`のような余白付きtargetも一致判定できるように抽出側・書き換え側で揃える)
+function splitTargetSuffix(rawTarget: string): { pathPart: string; suffix: string } {
+  const trimmed = rawTarget.trim();
+  const cut = trimmed.search(/[?#]/);
+  return cut === -1
+    ? { pathPart: trimmed, suffix: '' }
+    : { pathPart: trimmed.slice(0, cut), suffix: trimmed.slice(cut) };
+}
+
+// #199: リネーム時の参照検出対象を抽出する純関数。既存extractAttachmentFilenames
+// (同フォルダ限定・拡張子限定)と異なり対象を絞らず、target文字列(スキーム付きURL等も含め)
+// をそのまま返す。呼び出し側がindexer.resolveAttachmentで実ファイルへの一致を判定する
+export function extractLinkTargets(body: string): string[] {
+  const ranges = computeCodeRanges(body);
+  const result = new Set<string>();
+  const consider = (m: RegExpMatchArray) => {
+    const offset = (m.index ?? 0) + m[1].length;
+    if (isWithinCode(ranges, offset)) return;
+    const { pathPart } = splitTargetSuffix(m[2]);
+    if (!pathPart) return;
+    if (EXCLUDED_SCHEME_RE.test(pathPart)) return;
+    result.add(pathPart);
+  };
+  for (const m of body.matchAll(WIKILINK_REWRITE_RE)) consider(m);
+  for (const m of body.matchAll(MD_LINK_REWRITE_RE)) consider(m);
+  return [...result];
 }
 
 // ローカルタイムゾーンのオフセット付きISO 8601(要件05章の例示形式)
@@ -728,6 +856,241 @@ export class DocService {
     // 添付索引に即時反映(issue #198。/api/embedで直後から解決できるように)
     await this.tryUpdateIndex(() => this.indexer.indexAttachment(relPath), { relPath }, '添付');
     return { fileName, path: relPath };
+  }
+
+  // 添付パスとして妥当か検証して正規化する(保護パス・.trash・.md・非画像拡張子を拒否。issue #199)
+  private validateAttachmentPath(relPath: string): string {
+    const normalized = normalizeRelPath(relPath);
+    if (!normalized || isProtectedPath(normalized) || normalized.split('/').includes('.trash')) {
+      throw new InvalidPathError(relPath);
+    }
+    if (normalized.toLowerCase().endsWith('.md')) {
+      throw new InvalidPathError(relPath);
+    }
+    const ext = path.posix.extname(normalized).toLowerCase();
+    if (!DocService.ATTACHMENT_EXTENSIONS.has(ext)) {
+      throw new InvalidPathError(relPath);
+    }
+    return normalized;
+  }
+
+  // 指定添付を参照している文書のパス一覧(issue #199)。findExclusiveAttachmentsと同じ
+  // O(N)読み込み方針(全doc_indexを読む)。ライブラリ規模が大きい場合のコスト対策は
+  // TODO(#160含む)を参照(将来doc_indexに添付参照リストを持たせるなどして解消する)
+  async findAttachmentReferences(attachmentRelPath: string): Promise<string[]> {
+    const normalized = this.validateAttachmentPath(attachmentRelPath);
+    const docs = (
+      this.db.prepare('SELECT doc_path FROM doc_index').all() as { doc_path: string }[]
+    ).map((r) => r.doc_path);
+
+    const result: string[] = [];
+    for (const docPath of docs) {
+      let content: string;
+      try {
+        content = await readFile(resolveInLibrary(this.libraryPath, docPath), 'utf8');
+      } catch {
+        continue;
+      }
+      const { body } = splitFrontmatter(content);
+      for (const target of extractLinkTargets(body)) {
+        if (this.indexer.resolveAttachment(target, docPath) === normalized) {
+          result.push(docPath);
+          break;
+        }
+      }
+    }
+    return result;
+  }
+
+  // 文書本文中の添付参照のうち、basenameがoldBasenameと一致(大文字小文字無視)し
+  // resolveAttachmentで対象添付そのものに解決されるものだけをnewBasenameへ置換する。
+  // フォルダ部分・alias・anchor・titleは保持し、コードブロック・インラインコードの内側は
+  // 対象外にする(中2)。実際に置換したtarget(from/to。API契約)も合わせて返す
+  private rewriteAttachmentReferences(
+    body: string,
+    docPath: string,
+    oldBasename: string,
+    newBasename: string,
+    attachmentRelPath: string,
+  ): { body: string; replacements: { from: string; to: string }[] } {
+    const oldLower = oldBasename.toLowerCase();
+    const replacements = new Map<string, string>();
+
+    const rewriteTarget = (rawTarget: string): string | null => {
+      const { pathPart, suffix } = splitTargetSuffix(rawTarget);
+      if (!pathPart || EXCLUDED_SCHEME_RE.test(pathPart)) return null;
+      const slashIdx = pathPart.lastIndexOf('/');
+      const base = slashIdx === -1 ? pathPart : pathPart.slice(slashIdx + 1);
+      if (base.toLowerCase() !== oldLower) return null;
+      if (this.indexer.resolveAttachment(pathPart, docPath) !== attachmentRelPath) return null;
+      const folderPrefix = slashIdx === -1 ? '' : pathPart.slice(0, slashIdx + 1);
+      const newPathPart = `${folderPrefix}${newBasename}`;
+      replacements.set(pathPart, newPathPart);
+      return `${newPathPart}${suffix}`;
+    };
+    // codeRangesは各パス実行時点のbodyに対して都度算出する(1つ目のreplaceで文字数が
+    // 変わるため、2つ目のreplace時に古いrangesを使うとインデックスがずれてしまう)
+    const makeReplacer = (ranges: { start: number; end: number }[]) => {
+      return (full: string, open: string, target: string, close: string, offset: number): string => {
+        if (isWithinCode(ranges, offset + open.length)) return full;
+        const replaced = rewriteTarget(target);
+        return replaced === null ? full : `${open}${replaced}${close}`;
+      };
+    };
+    let working = body.replace(WIKILINK_REWRITE_RE, makeReplacer(computeCodeRanges(body)));
+    working = working.replace(MD_LINK_REWRITE_RE, makeReplacer(computeCodeRanges(working)));
+
+    return { body: working, replacements: [...replacements].map(([from, to]) => ({ from, to })) };
+  }
+
+  // 添付ファイルの名前変更(issue #199)。参照している全文書のリンクを1コミットで書き換える
+  async renameAttachment(
+    relPath: string,
+    newName: string,
+    author: GitAuthor,
+  ): Promise<RenameAttachmentResponse> {
+    const normalized = this.validateAttachmentPath(relPath);
+    const abs = resolveInLibrary(this.libraryPath, normalized);
+    if (!(await this.exists(abs))) {
+      throw new DocNotFoundError(normalized);
+    }
+
+    let candidateName = validateAttachmentName(newName);
+    const oldExt = path.posix.extname(normalized).toLowerCase();
+    let candidateExt = path.posix.extname(candidateName).toLowerCase();
+    if (!candidateExt) {
+      // 拡張子省略時は元の拡張子を補う
+      candidateName = `${candidateName}${path.posix.extname(normalized)}`;
+      candidateExt = oldExt;
+    }
+    if (candidateExt !== oldExt) {
+      // 画像形式の変更はしない
+      throw new InvalidPathError(newName, `拡張子は ${oldExt} のまま変更できません`);
+    }
+
+    const dir = path.posix.dirname(normalized);
+    const dirPrefix = dir === '.' ? '' : dir;
+    const newNorm = dirPrefix ? `${dirPrefix}/${candidateName}` : candidateName;
+
+    if (newNorm === normalized) {
+      return { path: normalized, name: path.posix.basename(normalized), rewrittenDocs: [] };
+    }
+    const newAbs = resolveInLibrary(this.libraryPath, newNorm);
+    // 大文字小文字のみの変更は、case-insensitiveなFS(Windows/macOS)ではexistsが
+    // 自分自身を指してしまうため、衝突チェックを行わない(moveDocと同じ方針)
+    const caseOnly = newNorm.toLowerCase() === normalized.toLowerCase();
+    if (!caseOnly && (await this.exists(newAbs))) {
+      throw new DocConflictError(`同名のファイルがあります: ${newNorm}`);
+    }
+
+    // 参照文書の書き換え+添付本体のrenameを1つのtry/catchにまとめる。どちらの段階で
+    // 失敗しても、書き換え済み文書とrename済みの添付ファイル名を元に戻してから例外を投げる
+    // (moveDocの添付ロールバックと同じ流儀。中3)
+    const oldBasename = path.posix.basename(normalized);
+    const references = await this.findAttachmentReferences(normalized);
+    const rewrittenDocs: { path: string; updatedAt: string; replacements: { from: string; to: string }[] }[] =
+      [];
+    const backups: { docPath: string; docAbs: string; content: string }[] = [];
+    // caseOnly時、一時名への退避が完了した(=元に戻す必要がある)かどうか
+    let renamedToTmp = false;
+    let tmpAbs = '';
+    try {
+      for (const docPath of references) {
+        const docAbs = resolveInLibrary(this.libraryPath, docPath);
+        const original = await readFile(docAbs, 'utf8');
+        const { prefix, body } = splitFrontmatter(original);
+        const { body: rewrittenBody, replacements } = this.rewriteAttachmentReferences(
+          body,
+          docPath,
+          oldBasename,
+          candidateName,
+          normalized,
+        );
+        if (rewrittenBody === body) continue;
+        backups.push({ docPath, docAbs, content: original });
+        // 改行コードは保持する(CRLF→LF変換はしない。saveDocとは方針が異なる点に注意)
+        await this.writeAtomic(docAbs, prefix + rewrittenBody);
+        const st = await stat(docAbs);
+        rewrittenDocs.push({ path: docPath, updatedAt: st.mtime.toISOString(), replacements });
+      }
+
+      // ファイル本体のrename(case-insensitive FS対応: 大文字小文字のみの変更は一時名を経由する)
+      if (caseOnly) {
+        tmpAbs = path.join(path.dirname(abs), `.tsumiwiki-tmp-${randomBytes(6).toString('hex')}`);
+        await rename(abs, tmpAbs);
+        renamedToTmp = true;
+        await rename(tmpAbs, newAbs);
+        renamedToTmp = false;
+      } else {
+        await rename(abs, newAbs);
+      }
+    } catch (e) {
+      if (renamedToTmp) {
+        try {
+          await rename(tmpAbs, abs);
+        } catch (rbErr) {
+          this.logger?.error(
+            { err: rbErr, tmpAbs, abs },
+            '添付renameのロールバックに失敗しました(手動復旧が必要)',
+          );
+        }
+      }
+      for (const b of backups) {
+        try {
+          await this.writeAtomic(b.docAbs, b.content);
+        } catch (rbErr) {
+          this.logger?.error(
+            { err: rbErr, docPath: b.docPath },
+            '参照書き換えのロールバックに失敗しました(手動復旧が必要)',
+          );
+        }
+      }
+      throw e;
+    }
+
+    await this.tryCommit(
+      [normalized, newNorm, ...rewrittenDocs.map((d) => d.path)],
+      `rename attachment: ${normalized} -> ${newNorm}`,
+      author,
+    );
+    await this.tryUpdateIndex(
+      () => this.indexer.moveAttachment(normalized, newNorm),
+      { oldRel: normalized, newRel: newNorm },
+      '添付',
+    );
+    // 書き換えた文書の索引も更新する
+    for (const d of rewrittenDocs) {
+      await this.tryUpdateIndex(() => this.indexer.indexFile(d.path), { docPath: d.path }, '文書');
+    }
+
+    return { path: newNorm, name: candidateName, rewrittenDocs };
+  }
+
+  // 添付ファイルの削除(issue #199)。ごみ箱送りのみで、参照文書は書き換えない
+  // (Obsidianと同じ挙動。表示は404→失敗チップになる)
+  async deleteAttachment(relPath: string, author: GitAuthor): Promise<void> {
+    const normalized = this.validateAttachmentPath(relPath);
+    const abs = resolveInLibrary(this.libraryPath, normalized);
+    if (!(await this.exists(abs))) {
+      throw new DocNotFoundError(normalized);
+    }
+    const trashDir = path.join(this.libraryPath, '.trash');
+    await mkdir(trashDir, { recursive: true });
+
+    // ごみ箱内の同名衝突は連番で回避(deleteDocと同じ規則)
+    const baseName = path.posix.basename(normalized);
+    let trashName = baseName;
+    for (let i = 2; await this.exists(path.join(trashDir, trashName)); i++) {
+      const ext = path.posix.extname(baseName);
+      trashName = `${baseName.slice(0, baseName.length - ext.length)} (${i})${ext}`;
+    }
+    await rename(abs, path.join(trashDir, trashName));
+    await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}`, author);
+    await this.tryUpdateIndex(
+      async () => this.indexer.removeAttachment(normalized),
+      { relPath: normalized },
+      '添付',
+    );
   }
 
   // ---- ごみ箱(FR-DOC-07) ----

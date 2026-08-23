@@ -31,7 +31,7 @@ export async function handling<T>(
     return await fn();
   } catch (e) {
     if (e instanceof InvalidPathError) {
-      return sendError(reply, 400, 'INVALID_PATH', 'パスが不正です');
+      return sendError(reply, 400, 'INVALID_PATH', e.userMessage ?? 'パスが不正です');
     }
     if (e instanceof DocNotFoundError) {
       return sendError(reply, 404, 'NOT_FOUND', e.message);

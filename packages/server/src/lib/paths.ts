@@ -7,9 +7,12 @@ import path from 'node:path';
 // - ライブラリルート外への脱出(..)を拒否
 
 export class InvalidPathError extends Error {
-  constructor(input: string) {
+  // 利用者に見せてよい理由(指定時はAPIレスポンスのmessageに使う。未指定なら固定文言)
+  readonly userMessage?: string;
+  constructor(input: string, userMessage?: string) {
     super(`不正なパスです: ${input}`);
     this.name = 'InvalidPathError';
+    this.userMessage = userMessage;
   }
 }
 

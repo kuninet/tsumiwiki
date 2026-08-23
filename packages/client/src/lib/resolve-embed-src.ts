@@ -13,7 +13,8 @@ function toFilesUrl(relPath: string): string {
   return `/api/files/${relPath.split('/').map(encodeURIComponent).join('/')}`;
 }
 
-function isAbsoluteUrl(value: string): boolean {
+// #199: 添付管理メニュー(embed-view/image-view)でも絶対URLの除外判定に使うため公開する
+export function isAbsoluteUrl(value: string): boolean {
   return /^(https?:|data:)/i.test(value);
 }
 

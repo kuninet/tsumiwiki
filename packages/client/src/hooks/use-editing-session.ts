@@ -44,6 +44,9 @@ export interface UseEditingSessionResult {
   startEditing: (initialBody: string, initialTags: string[]) => Promise<void>;
   updateBody: (body: string) => void;
   updateTags: (tags: string[]) => void;
+  // dirty を変えずに保存対象の本文だけ差し替える。サーバー側で既にファイルが書き換わっている
+  // 変更(添付リネームによる参照書き換え等)をエディタへ反映したときに使う
+  syncBody: (body: string) => void;
   // 保存試行後、真に成功して dirty が落ちたかどうかを返す。
   // dirty=false のときの早期 return(何もしなくてよい)も true とみなす。
   // CloseConfirmDialog が「保存 → 閉じる」を進めてよいか判定するのに使う
@@ -181,6 +184,10 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     setDirty(true);
     // 追加編集後に「自動保存済み」バッジが残らないよう毎編集でクリアする(次の自動保存で再点灯)
     setLastDraftSavedAt(null);
+  }, []);
+
+  const syncBody = useCallback((body: string) => {
+    contentRef.current.body = body;
   }, []);
 
   const updateTags = useCallback((tags: string[]) => {
@@ -398,6 +405,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     startEditing,
     updateBody,
     updateTags,
+    syncBody,
     save,
     cancelEditing,
     restoreDraft,
