@@ -1,6 +1,6 @@
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react';
-import { useState } from 'react';
-import { embedSrc, parseEmbedTarget } from '../../lib/resolve-embed-src';
+import { type MouseEvent as ReactMouseEvent, useState } from 'react';
+import { embedSrc, isAbsoluteUrl, parseEmbedTarget } from '../../lib/resolve-embed-src';
 import type { TsumiwikiDocStorage } from '../doc-storage';
 import { ObsidianEmbed } from './embed';
 
@@ -8,6 +8,10 @@ import { ObsidianEmbed } from './embed';
 // 使う/api/embed?target=&from=に1回のリクエストで解決して<img>表示する(#198)。
 // `|幅` `|幅x高さ`は表示サイズに反映し、`#anchor`・別名指定(`|別名`)は解決に使わない。
 // 画像以外は従来どおりチップ表示のまま。シリアライズ(embed.ts)には一切手を加えない
+//
+// #199: 画像の管理メニュー(名前変更/削除/パスをコピー)。右クリックまたは「⋯」ボタンで
+// DocView側(editor.storage.tsumiwikiDoc.openAttachmentMenu)にメニュー表示を依頼する。
+// 絶対URL(http/https/data)には出さない(添付索引の管理対象外のため)
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp']);
 
@@ -34,20 +38,52 @@ function ObsidianEmbedView({ node, editor }: NodeViewProps) {
     );
   }
 
-  const docPath = (editor.storage.tsumiwikiDoc as TsumiwikiDocStorage | undefined)?.path ?? '';
+  const docStorage = editor.storage.tsumiwikiDoc as TsumiwikiDocStorage | undefined;
+  const docPath = docStorage?.path ?? '';
+  const showMenu = !isAbsoluteUrl(file);
+
+  function openMenu(x: number, y: number) {
+    docStorage?.openAttachmentMenu?.({ target: file, kind: 'embed', x, y });
+  }
+
+  function handleContextMenu(e: ReactMouseEvent) {
+    if (!showMenu) return;
+    e.preventDefault();
+    openMenu(e.clientX, e.clientY);
+  }
+
+  function handleMenuButtonClick(e: ReactMouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    openMenu(rect.left, rect.bottom);
+  }
 
   return (
     <NodeViewWrapper as="span" className="obsidian-embed-image" contentEditable={false}>
       {failed ? (
         <span className="obsidian-embed">{`![[${target}]]`}</span>
       ) : (
-        <img
-          src={embedSrc(file, docPath)}
-          alt={file}
-          width={width}
-          height={height}
-          onError={() => setFailedTarget(target)}
-        />
+        <span className="attachment-frame" onContextMenu={handleContextMenu}>
+          <img
+            src={embedSrc(file, docPath)}
+            alt={file}
+            width={width}
+            height={height}
+            onError={() => setFailedTarget(target)}
+          />
+          {showMenu && (
+            <button
+              type="button"
+              className="attachment-menu-button"
+              aria-label="画像メニュー"
+              contentEditable={false}
+              onClick={handleMenuButtonClick}
+            >
+              ⋯
+            </button>
+          )}
+        </span>
       )}
     </NodeViewWrapper>
   );

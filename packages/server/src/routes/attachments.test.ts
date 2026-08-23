@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -382,5 +382,345 @@ describe('GET /api/embed(issue #198 添付索引による解決)', () => {
   it('未認証では解決されない', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/embed?target=x.png' });
     expect(res.statusCode).toBe(401);
+  }, 20_000);
+});
+
+// 添付管理(名前変更・削除・参照調査)のテスト(issue #199)
+
+function api(method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, payload?: unknown) {
+  return app.inject({
+    method,
+    url,
+    headers: { ...CSRF, cookie },
+    payload: payload as never,
+  });
+}
+
+// 保存はロック保持が前提(FR-LOCK)。ロック取得してからPUTするヘルパー(docs.test.tsと同じ流儀)
+async function saveDoc(payload: { path: string; [k: string]: unknown }) {
+  await api('POST', '/api/locks', { path: payload.path });
+  return api('PUT', '/api/docs', payload);
+}
+
+async function uploadTo(target: string, name = '画像.png') {
+  const mp = multipart({}, { name, content: PNG });
+  const res = await app.inject({
+    method: 'POST',
+    url: `/api/attachments?docPath=${encodeURIComponent(target)}`,
+    headers: { ...CSRF, cookie, ...mp.headers },
+    payload: mp.payload,
+  });
+  expect(res.statusCode).toBe(201);
+  return res.json() as { fileName: string; path: string };
+}
+
+describe('GET /api/attachments/resolve(issue #199)', () => {
+  it('解決成功時はpathとnameを返す', async () => {
+    const up = await uploadTo(docPath);
+    const res = await api(
+      'GET',
+      `/api/attachments/resolve?target=${encodeURIComponent(up.fileName)}&from=${encodeURIComponent(docPath)}`,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ path: up.path, name: up.fileName });
+  }, 20_000);
+
+  it('未登録のtargetは404', async () => {
+    const res = await api('GET', `/api/attachments/resolve?target=${encodeURIComponent('存在しない.png')}`);
+    expect(res.statusCode).toBe(404);
+  }, 20_000);
+
+  it('targetなしは400', async () => {
+    const res = await api('GET', '/api/attachments/resolve');
+    expect(res.statusCode).toBe(400);
+  }, 20_000);
+});
+
+describe('GET /api/attachments/references(issue #199)', () => {
+  it('同フォルダのMarkdown画像参照を検出する', async () => {
+    const up = await uploadTo(docPath);
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent(docPath)}`);
+    await saveDoc({
+      path: docPath,
+      body: `![説明](${up.fileName})\n`,
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+
+    const res = await api('GET', `/api/attachments/references?path=${encodeURIComponent(up.path)}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().docs).toEqual([docPath]);
+  }, 20_000);
+
+  it('パス指定・[[x.png]]形式でも検出する', async () => {
+    const up = await uploadTo(docPath);
+    await api('POST', '/api/docs', { folder: '別部屋', title: '別文書' });
+    const otherPath = '別部屋/別文書.md';
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent(otherPath)}`);
+    await saveDoc({
+      path: otherPath,
+      body: `[[${up.path}]]\n`,
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+
+    const res = await api('GET', `/api/attachments/references?path=${encodeURIComponent(up.path)}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().docs).toEqual([otherPath]);
+  }, 20_000);
+
+  it('同名別フォルダの画像は含まれない', async () => {
+    const up = await uploadTo(docPath, '同名.png');
+    await api('POST', '/api/folders', { path: '別フォルダ' });
+    await writeFile(join(lib, '別フォルダ', up.fileName), PNG);
+    await app.indexerService.indexAttachment(`別フォルダ/${up.fileName}`);
+
+    await api('POST', '/api/docs', { folder: '別フォルダ', title: '参照文書' });
+    const otherDocPath = '別フォルダ/参照文書.md';
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent(otherDocPath)}`);
+    // ファイル名だけの参照は同フォルダの別実体(別フォルダ側)へ解決される
+    await saveDoc({
+      path: otherDocPath,
+      body: `![[${up.fileName}]]\n`,
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+
+    const res = await api('GET', `/api/attachments/references?path=${encodeURIComponent(up.path)}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().docs).toEqual([]);
+  }, 20_000);
+
+  it('未参照の添付は空配列', async () => {
+    const up = await uploadTo(docPath);
+    const res = await api('GET', `/api/attachments/references?path=${encodeURIComponent(up.path)}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().docs).toEqual([]);
+  }, 20_000);
+
+  it('不正パスは400', async () => {
+    const res = await api('GET', `/api/attachments/references?path=${encodeURIComponent('../outside.png')}`);
+    expect(res.statusCode).toBe(400);
+  }, 20_000);
+});
+
+describe('POST /api/attachments/rename(issue #199)', () => {
+  it('参照文書2件のリンク(alias付き埋め込み・wikilink・パス指定画像)を書き換え、1コミットにまとまる', async () => {
+    const up = await uploadTo(docPath);
+
+    await api('POST', '/api/docs', { folder: '議事録', title: '参照文書A' });
+    const docA = '議事録/参照文書A.md';
+    const gotA = await api('GET', `/api/docs?path=${encodeURIComponent(docA)}`);
+    await saveDoc({
+      path: docA,
+      body: `![[${up.fileName}|300]]\n[[${up.fileName}]]\n`,
+      tags: [],
+      baseUpdatedAt: gotA.json().updatedAt,
+    });
+
+    await api('POST', '/api/docs', { folder: '別部屋', title: '参照文書B' });
+    const docB = '別部屋/参照文書B.md';
+    const gotB = await api('GET', `/api/docs?path=${encodeURIComponent(docB)}`);
+    await saveDoc({
+      path: docB,
+      body: `![説明](${up.path})\n`,
+      tags: [],
+      baseUpdatedAt: gotB.json().updatedAt,
+    });
+
+    const res = await api('POST', '/api/attachments/rename', { path: up.path, newName: '新しい画像.png' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.path).toBe('議事録/新しい画像.png');
+    expect(body.name).toBe('新しい画像.png');
+    expect(body.rewrittenDocs.map((d: { path: string }) => d.path).sort()).toEqual([docA, docB].sort());
+
+    const files = await readdir(join(lib, '議事録'));
+    expect(files).toContain('新しい画像.png');
+    expect(files).not.toContain(up.fileName);
+
+    const bodyA = (await api('GET', `/api/docs?path=${encodeURIComponent(docA)}`)).json().body;
+    expect(bodyA).toContain('![[新しい画像.png|300]]');
+    expect(bodyA).toContain('[[新しい画像.png]]');
+
+    const bodyB = (await api('GET', `/api/docs?path=${encodeURIComponent(docB)}`)).json().body;
+    expect(bodyB).toContain('![説明](議事録/新しい画像.png)');
+
+    // 1コミットにまとまる
+    const history = await app.gitService.history('議事録/新しい画像.png');
+    expect(history[0].message).toBe(`rename attachment: ${up.path} -> 議事録/新しい画像.png`);
+  }, 30_000);
+
+  it('フロントマターとCRLFは保持される', async () => {
+    const up = await uploadTo(docPath, 'crlf対象.png');
+    await writeFile(
+      join(lib, 'CRLF参照.md'),
+      `---\r\ntags: [x]\r\n---\r\n\r\n見出し\r\n![[${up.fileName}]]\r\n本文\r\n`,
+      'utf8',
+    );
+    await app.indexerService.indexFile('CRLF参照.md');
+
+    const res = await api('POST', '/api/attachments/rename', { path: up.path, newName: 'crlf変更後.png' });
+    expect(res.statusCode).toBe(200);
+
+    const raw = await readFile(join(lib, 'CRLF参照.md'), 'utf8');
+    expect(raw).toContain('\r\n');
+    expect(raw).toContain('tags: [x]');
+    expect(raw).toContain('![[crlf変更後.png]]');
+  }, 20_000);
+
+  it('同名衝突は409', async () => {
+    const up = await uploadTo(docPath, 'A.png');
+    await uploadTo(docPath, 'B.png');
+    const bFiles = await readdir(join(lib, '議事録'));
+    const bName = bFiles.find((f) => f !== up.fileName)!;
+    const res = await api('POST', '/api/attachments/rename', { path: up.path, newName: bName });
+    expect(res.statusCode).toBe(409);
+  }, 20_000);
+
+  it('不正名(/入り)は400', async () => {
+    const up = await uploadTo(docPath);
+    const res = await api('POST', '/api/attachments/rename', { path: up.path, newName: 'a/b.png' });
+    expect(res.statusCode).toBe(400);
+  }, 20_000);
+
+  it('Windows予約名は400', async () => {
+    const up = await uploadTo(docPath);
+    const res = await api('POST', '/api/attachments/rename', { path: up.path, newName: 'CON.png' });
+    expect(res.statusCode).toBe(400);
+  }, 20_000);
+
+  it('拡張子の変更は400', async () => {
+    const up = await uploadTo(docPath);
+    const res = await api('POST', '/api/attachments/rename', { path: up.path, newName: '変更後.jpg' });
+    expect(res.statusCode).toBe(400);
+  }, 20_000);
+
+  it('拡張子省略時は元の拡張子を補う', async () => {
+    const up = await uploadTo(docPath);
+    const res = await api('POST', '/api/attachments/rename', { path: up.path, newName: '拡張子省略' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().name).toBe('拡張子省略.png');
+  }, 20_000);
+
+  it('大文字小文字のみの変更ができる', async () => {
+    const up = await uploadTo(docPath, 'case.PNG');
+    const upper = up.fileName.toUpperCase();
+    const res = await api('POST', '/api/attachments/rename', { path: up.path, newName: upper });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().name).toBe(upper);
+    const files = await readdir(join(lib, '議事録'));
+    expect(files).toContain(upper);
+  }, 20_000);
+
+  it('未存在は404', async () => {
+    const res = await api('POST', '/api/attachments/rename', {
+      path: `議事録/${'存在しない.png'}`,
+      newName: '新名.png',
+    });
+    expect(res.statusCode).toBe(404);
+  }, 20_000);
+
+  it('同名別フォルダの参照は書き換えられない', async () => {
+    const up = await uploadTo(docPath, '共通名.png');
+    await api('POST', '/api/folders', { path: '別フォルダ' });
+    await writeFile(join(lib, '別フォルダ', up.fileName), PNG);
+    await app.indexerService.indexAttachment(`別フォルダ/${up.fileName}`);
+
+    await api('POST', '/api/docs', { folder: '別フォルダ', title: '参照文書' });
+    const otherDocPath = '別フォルダ/参照文書.md';
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent(otherDocPath)}`);
+    await saveDoc({
+      path: otherDocPath,
+      body: `![[${up.fileName}]]\n`,
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+
+    const res = await api('POST', '/api/attachments/rename', { path: up.path, newName: '改名後.png' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().rewrittenDocs).toEqual([]);
+
+    const otherBody = (await api('GET', `/api/docs?path=${encodeURIComponent(otherDocPath)}`)).json().body;
+    expect(otherBody).toContain(`![[${up.fileName}]]`);
+  }, 20_000);
+
+  it('rewrittenDocs[].updatedAtは実際のmtimeと一致する', async () => {
+    const up = await uploadTo(docPath);
+    await api('POST', '/api/docs', { folder: '議事録', title: '参照文書C' });
+    const docC = '議事録/参照文書C.md';
+    const gotC = await api('GET', `/api/docs?path=${encodeURIComponent(docC)}`);
+    await saveDoc({
+      path: docC,
+      body: `![[${up.fileName}]]\n`,
+      tags: [],
+      baseUpdatedAt: gotC.json().updatedAt,
+    });
+
+    const res = await api('POST', '/api/attachments/rename', { path: up.path, newName: '確認用.png' });
+    expect(res.statusCode).toBe(200);
+    const entry = res.json().rewrittenDocs.find((d: { path: string }) => d.path === docC);
+    const doc = await api('GET', `/api/docs?path=${encodeURIComponent(docC)}`);
+    expect(entry.updatedAt).toBe(doc.json().updatedAt);
+  }, 20_000);
+});
+
+describe('DELETE /api/attachments(issue #199)', () => {
+  it('.trashへ移動し、索引・/api/embedから消え、ごみ箱一覧に出て復元で再び解決できる', async () => {
+    const up = await uploadTo(docPath, '削除対象.png');
+
+    const del = await api('DELETE', `/api/attachments?path=${encodeURIComponent(up.path)}`);
+    expect(del.statusCode).toBe(200);
+    expect(del.json()).toEqual({ ok: true });
+
+    const files = await readdir(join(lib, '議事録'));
+    expect(files).not.toContain(up.fileName);
+
+    const embed = await api(
+      'GET',
+      `/api/embed?target=${encodeURIComponent(up.fileName)}&from=${encodeURIComponent(docPath)}`,
+    );
+    expect(embed.statusCode).toBe(404);
+
+    const trash = await api('GET', '/api/trash');
+    const entry = trash.json().entries.find((e: { name: string }) => e.name === up.fileName);
+    expect(entry).toBeTruthy();
+    expect(entry.originalPath).toBe(up.path);
+
+    const restore = await api('POST', '/api/trash/restore', { trashPath: entry.trashPath });
+    expect(restore.statusCode).toBe(200);
+
+    const embedAfter = await api(
+      'GET',
+      `/api/embed?target=${encodeURIComponent(up.fileName)}&from=${encodeURIComponent(docPath)}`,
+    );
+    expect(embedAfter.statusCode).toBe(200);
+  }, 20_000);
+
+  it('未存在は404', async () => {
+    const res = await api('DELETE', `/api/attachments?path=${encodeURIComponent('議事録/存在しない.png')}`);
+    expect(res.statusCode).toBe(404);
+  }, 20_000);
+});
+
+describe('添付管理APIの認証(issue #199)', () => {
+  it('未認証はいずれも401', async () => {
+    const resolve = await app.inject({ method: 'GET', url: '/api/attachments/resolve?target=x.png' });
+    expect(resolve.statusCode).toBe(401);
+    const references = await app.inject({ method: 'GET', url: '/api/attachments/references?path=x.png' });
+    expect(references.statusCode).toBe(401);
+    const rename = await app.inject({
+      method: 'POST',
+      url: '/api/attachments/rename',
+      headers: CSRF,
+      payload: { path: 'x.png', newName: 'y.png' },
+    });
+    expect(rename.statusCode).toBe(401);
+    const del = await app.inject({
+      method: 'DELETE',
+      url: '/api/attachments?path=x.png',
+      headers: CSRF,
+    });
+    expect(del.statusCode).toBe(401);
   }, 20_000);
 });

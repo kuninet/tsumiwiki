@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { renameAttachmentRequestSchema } from '@tsumiwiki/shared';
 import { MIME_BY_EXT } from '../lib/attachments.js';
 import { InvalidPathError, isProtectedPath, normalizeRelPath, resolveInLibrary } from '../lib/paths.js';
 import { sendError } from '../plugins/auth.js';
@@ -130,5 +131,57 @@ export function registerAttachmentRoutes(app: FastifyInstance): void {
       return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
     }
     return serveLibraryFile(app, reply, resolved);
+  });
+
+  // ---- 添付の管理(名前変更・削除・参照調査。issue #199) ----
+
+  // /api/embedと同じ規則で解決し、実パスとファイル名を返す(クライアントの右クリック
+  // メニュー起動時に、いま指している添付が何かを特定するために使う)
+  app.get('/api/attachments/resolve', async (req, reply) => {
+    const { target, from } = req.query as { target?: unknown; from?: unknown };
+    if (typeof target !== 'string' || !target) {
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'targetを指定してください');
+    }
+    const fromPath = typeof from === 'string' ? from : '';
+    const resolved = app.indexerService.resolveAttachment(target, fromPath);
+    if (!resolved) {
+      return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
+    }
+    return { path: resolved, name: path.posix.basename(resolved) };
+  });
+
+  // 指定添付を参照している文書パス一覧(削除確認ダイアログの「他N文書からも参照」表示用)
+  app.get('/api/attachments/references', async (req, reply) => {
+    const { path: attachmentPath } = req.query as { path?: unknown };
+    if (typeof attachmentPath !== 'string' || !attachmentPath) {
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'pathを指定してください');
+    }
+    return handling(reply, async () => {
+      const docs = await app.docService.findAttachmentReferences(attachmentPath);
+      return { docs };
+    });
+  });
+
+  // リネーム: ライブラリ内の参照文書を1コミットで書き換える
+  app.post('/api/attachments/rename', async (req, reply) => {
+    const parsed = renameAttachmentRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'パスと新しいファイル名を指定してください');
+    }
+    return handling(reply, () =>
+      app.docService.renameAttachment(parsed.data.path, parsed.data.newName, authorOf(req)),
+    );
+  });
+
+  // 削除: ごみ箱へ移動する(参照文書は書き換えない。Obsidianと同じ挙動)
+  app.delete('/api/attachments', async (req, reply) => {
+    const { path: attachmentPath } = req.query as { path?: string };
+    if (!attachmentPath) {
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'pathを指定してください');
+    }
+    return handling(reply, async () => {
+      await app.docService.deleteAttachment(attachmentPath, authorOf(req));
+      return { ok: true };
+    });
   });
 }

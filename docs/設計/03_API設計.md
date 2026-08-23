@@ -95,6 +95,10 @@
 | POST | `/api/attachments?docPath=` | multipart `{file}`(docPathはクエリ。フィールド順非依存)→ 添付フォルダに保存+コミットし、参照名を返す |
 | GET | `/api/files/*` | ライブラリ内ファイルのraw配信(画像表示用)。Markdownは対象外。`Content-Disposition` と MIME を適切に設定 |
 | GET | `/api/embed?target=&from=` | Obsidian同等のファイル名索引(`attachment_index`。issue #198)による解決+配信。`target`(`![[target]]`相当)を`from`(参照元文書パス)のフォルダ起点で解決: パス指定時の完全パス一致→同フォルダ優先→共通祖先が深い方→パスが浅い方→辞書順。未解決は404。配信自体は`/api/files/*`と同条件(`.md`・`.trash`・保護パスは対象外) |
+| GET | `/api/attachments/resolve?target=&from=` | `/api/embed`と同じ規則で解決し、実パスとファイル名を`{path, name}`で返す(配信はしない)。未解決404、`target`が非文字列/空は400 |
+| GET | `/api/attachments/references?path=` | 指定した添付(相対パス)を参照している文書パス一覧`{docs}`。`path`は存在しなくても200で空配列(削除確認前の存在チェック目的では使わない)。不正パスは400 |
+| POST | `/api/attachments/rename` | `{path, newName}` → `{path, name, rewrittenDocs}`。添付ファイルの名前変更(issue #199)。ライブラリ全文書を走査し、この添付を参照している`![[X]]`・`[[X]]`・`![alt](X)`・`[text](X)`のtarget部分(basenameのみ。フォルダ・`|alias`・`#anchor`・`"title"`は保持)を新ファイル名へ書き換え、添付のrenameと合わせて**1コミット**にまとめる。参照文書のフロントマターには触れず、改行コードもCRLF/LFとも保持する(`saveDoc`のLF統一とは方針が異なる)。**ロック中の文書でも書き換える**(リンク整合を優先。編集者の保存はbaseUpdatedAt不一致で`CONFLICT`検知され、既存の競合解消フローで再保存できる)。書き換え途中で失敗した場合は書き換え済み文書を元に戻してから例外を投げる。同名衝突409、拡張子変更・不正なファイル名(`/`・`\`・制御文字・先頭`.`・Windows予約名)は400、未存在404。大文字小文字のみの変更は許可 |
+| DELETE | `/api/attachments?path=` | `.trash/`へ移動+コミット。**参照文書は書き換えない**(Obsidianと同じ挙動。参照元では表示が404→失敗チップになる)。`{ok: true}` |
 
 ### ごみ箱(FR-DOC-07)
 

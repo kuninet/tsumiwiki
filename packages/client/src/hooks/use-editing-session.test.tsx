@@ -194,6 +194,36 @@ describe('useEditingSession', () => {
     expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/locks')).toBe(false);
   });
 
+  it('syncBody は dirty を変えずに保存対象の本文だけ差し替える(添付リネームの参照書き換え用)', async () => {
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'PUT /api/docs': { updatedAt: '2026-07-02T00:00:00+09:00' },
+    });
+
+    const { result } = renderHook(
+      () => useEditingSession({ path: 'a.md', baseUpdatedAt: '2026-07-01T00:00:00+09:00' }),
+      { wrapper },
+    );
+    await act(async () => {
+      await result.current.startEditing('![[old.png]]', []);
+    });
+
+    // 未編集のまま syncBody しても dirty にはならない
+    act(() => result.current.syncBody('![[new.png]]'));
+    expect(result.current.dirty).toBe(false);
+
+    // 未保存編集中に syncBody された本文が、そのまま保存内容になる
+    act(() => result.current.updateBody('![[old.png]] 追記'));
+    act(() => result.current.syncBody('![[new.png]] 追記'));
+    expect(result.current.dirty).toBe(true);
+    await act(async () => {
+      await result.current.save();
+    });
+    const put = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs');
+    expect(put?.body).toMatchObject({ body: '![[new.png]] 追記' });
+  });
+
   it('未変更(dirty=false)で save() を呼んでも PUT /api/docs は飛ばない', async () => {
     const calls = stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },

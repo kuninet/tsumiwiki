@@ -321,6 +321,34 @@ export type ExpandTemplateResponse = z.infer<typeof expandTemplateResponseSchema
 // (中#3 対応: shared/index.ts と template-vars.ts で独立に持っていた `'{{cursor}}'`
 // 値が食い違うと server↔client 契約が黙って壊れるため)。
 
+// ---- 添付の管理(FR-IMG-05。issue #199) ----
+
+export const resolveAttachmentResponseSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+});
+export type ResolveAttachmentResponse = z.infer<typeof resolveAttachmentResponseSchema>;
+
+// その添付を参照している文書パス一覧
+export const attachmentReferencesResponseSchema = z.object({
+  docs: z.array(z.string()),
+});
+export type AttachmentReferencesResponse = z.infer<typeof attachmentReferencesResponseSchema>;
+
+export const renameAttachmentRequestSchema = z.object({
+  path: z.string().min(1),
+  newName: z.string().min(1),
+});
+export type RenameAttachmentRequest = z.infer<typeof renameAttachmentRequestSchema>;
+
+export const renameAttachmentResponseSchema = z.object({
+  path: z.string(), // 新しい相対パス
+  name: z.string(), // 新しいファイル名
+  // 参照を書き換えた文書と、その書き換え後mtime(呼び出し側のキャッシュ更新用)
+  rewrittenDocs: z.array(z.object({ path: z.string(), updatedAt: z.string() })),
+});
+export type RenameAttachmentResponse = z.infer<typeof renameAttachmentResponseSchema>;
+
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({
   error: z.object({

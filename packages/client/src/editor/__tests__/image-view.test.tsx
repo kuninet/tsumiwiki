@@ -1,6 +1,6 @@
 import { EditorContent, useEditor } from '@tiptap/react';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TsumiwikiDocStorage } from '../doc-storage';
 import { createEditorExtensions } from '../markdown';
 
@@ -101,5 +101,125 @@ describe('ImageWithResolvedSrc', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(img!.getAttribute('src')).toBe(fallbackSrc);
+  });
+});
+
+// #199 画像の管理メニュー(右クリック・「⋯」ボタン)
+function TestEditorWithMenu({
+  content,
+  docFolder,
+  docPath,
+  onOpenAttachmentMenu,
+}: {
+  content: string;
+  docFolder: string;
+  docPath: string;
+  onOpenAttachmentMenu: ReturnType<typeof vi.fn>;
+}) {
+  const editor = useEditor({
+    extensions: createEditorExtensions(),
+    content: '',
+    onCreate: ({ editor: e }) => {
+      const storage: TsumiwikiDocStorage = {
+        folder: docFolder,
+        path: docPath,
+        openAttachmentMenu: onOpenAttachmentMenu,
+      };
+      e.storage.tsumiwikiDoc = storage;
+      e.commands.setContent(content);
+    },
+  });
+  return <EditorContent editor={editor} />;
+}
+
+describe('ImageWithResolvedSrc の画像メニュー(#199)', () => {
+  it('右クリックでopenAttachmentMenuがtarget(src)・kind=image・座標付きで呼ばれる', async () => {
+    const onOpenAttachmentMenu = vi.fn();
+    render(
+      <TestEditorWithMenu
+        content={'![alt](sub/a.png)'}
+        docFolder={'フォルダ'}
+        docPath={'フォルダ/文書.md'}
+        onOpenAttachmentMenu={onOpenAttachmentMenu}
+      />,
+    );
+    let frame: HTMLElement;
+    await waitFor(() => {
+      const el = document.querySelector('.attachment-frame');
+      expect(el).toBeTruthy();
+      frame = el as HTMLElement;
+    });
+    fireEvent.contextMenu(frame!, { clientX: 5, clientY: 8 });
+    expect(onOpenAttachmentMenu).toHaveBeenCalledWith({
+      target: 'sub/a.png',
+      kind: 'image',
+      x: 5,
+      y: 8,
+    });
+  });
+
+  it('「⋯」ボタンのクリックでもopenAttachmentMenuが呼ばれる', async () => {
+    const onOpenAttachmentMenu = vi.fn();
+    render(
+      <TestEditorWithMenu
+        content={'![alt](a.png)'}
+        docFolder={'フォルダ'}
+        docPath={'フォルダ/文書.md'}
+        onOpenAttachmentMenu={onOpenAttachmentMenu}
+      />,
+    );
+    let button: HTMLElement;
+    await waitFor(() => {
+      const el = document.querySelector('.attachment-menu-button');
+      expect(el).toBeTruthy();
+      button = el as HTMLElement;
+    });
+    fireEvent.click(button!);
+    expect(onOpenAttachmentMenu).toHaveBeenCalledTimes(1);
+    expect(onOpenAttachmentMenu.mock.calls[0][0]).toMatchObject({ target: 'a.png', kind: 'image' });
+  });
+
+  it('絶対URL(http/https/data)にはメニューボタンを出さない', async () => {
+    const onOpenAttachmentMenu = vi.fn();
+    render(
+      <TestEditorWithMenu
+        content={'![alt](https://example.com/a.png)'}
+        docFolder={'フォルダ'}
+        docPath={'フォルダ/文書.md'}
+        onOpenAttachmentMenu={onOpenAttachmentMenu}
+      />,
+    );
+    await waitFor(() => {
+      expect(document.querySelector('.tiptap-image img')).toBeTruthy();
+    });
+    expect(document.querySelector('.attachment-menu-button')).toBeNull();
+  });
+
+  it('フォールバックも失敗し壊れた画像状態になったらメニューボタンを出さない', async () => {
+    const onOpenAttachmentMenu = vi.fn();
+    render(
+      <TestEditorWithMenu
+        content={'![alt](sub/a.png)'}
+        docFolder={'フォルダ'}
+        docPath={'フォルダ/文書.md'}
+        onOpenAttachmentMenu={onOpenAttachmentMenu}
+      />,
+    );
+    let img: HTMLImageElement;
+    await waitFor(() => {
+      const el = document.querySelector('.tiptap-image img');
+      expect(el).toBeTruthy();
+      img = el as HTMLImageElement;
+    });
+    // primaryの失敗→fallbackへ
+    img!.dispatchEvent(new Event('error'));
+    await waitFor(() => {
+      expect(img!.getAttribute('src')).toContain('/api/embed');
+    });
+    // fallbackも失敗→壊れた画像状態
+    img!.dispatchEvent(new Event('error'));
+    await waitFor(() => {
+      expect(document.querySelector('.attachment-menu-button')).toBeNull();
+    });
   });
 });

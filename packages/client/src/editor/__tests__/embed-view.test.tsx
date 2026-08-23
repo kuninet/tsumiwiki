@@ -1,7 +1,7 @@
 import type { Editor } from '@tiptap/core';
 import { EditorContent, useEditor } from '@tiptap/react';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TsumiwikiDocStorage } from '../doc-storage';
 import { createEditorExtensions } from '../markdown';
 
@@ -132,5 +132,114 @@ describe('ObsidianEmbedWithPreview', () => {
     });
     expect(document.querySelector('.obsidian-embed img')).toBeNull();
     expect(document.body.textContent).toContain('![[note.md]]');
+  });
+});
+
+// #199 画像の管理メニュー(右クリック・「⋯」ボタン)
+function TestEditorWithMenu({
+  content,
+  docPath,
+  onOpenAttachmentMenu,
+}: {
+  content: string;
+  docPath: string;
+  onOpenAttachmentMenu: ReturnType<typeof vi.fn>;
+}) {
+  const editor = useEditor({
+    extensions: createEditorExtensions(),
+    content: '',
+    onCreate: ({ editor: e }) => {
+      const storage: TsumiwikiDocStorage = {
+        folder: '',
+        path: docPath,
+        openAttachmentMenu: onOpenAttachmentMenu,
+      };
+      e.storage.tsumiwikiDoc = storage;
+      e.commands.setContent(content);
+    },
+  });
+  return <EditorContent editor={editor} />;
+}
+
+describe('ObsidianEmbedWithPreview の画像メニュー(#199)', () => {
+  it('右クリックでopenAttachmentMenuがtarget(サイズ・別名除く)・kind=embed・座標付きで呼ばれる', async () => {
+    const onOpenAttachmentMenu = vi.fn();
+    render(
+      <TestEditorWithMenu
+        content={'![[a.png|300x200]]'}
+        docPath={'文書.md'}
+        onOpenAttachmentMenu={onOpenAttachmentMenu}
+      />,
+    );
+    let frame: HTMLElement;
+    await waitFor(() => {
+      const el = document.querySelector('.attachment-frame');
+      expect(el).toBeTruthy();
+      frame = el as HTMLElement;
+    });
+    fireEvent.contextMenu(frame!, { clientX: 10, clientY: 20 });
+    expect(onOpenAttachmentMenu).toHaveBeenCalledWith({
+      target: 'a.png',
+      kind: 'embed',
+      x: 10,
+      y: 20,
+    });
+  });
+
+  it('「⋯」ボタンのクリックでもopenAttachmentMenuが呼ばれる', async () => {
+    const onOpenAttachmentMenu = vi.fn();
+    render(
+      <TestEditorWithMenu
+        content={'![[a.png]]'}
+        docPath={'文書.md'}
+        onOpenAttachmentMenu={onOpenAttachmentMenu}
+      />,
+    );
+    let button: HTMLElement;
+    await waitFor(() => {
+      const el = document.querySelector('.attachment-menu-button');
+      expect(el).toBeTruthy();
+      button = el as HTMLElement;
+    });
+    fireEvent.click(button!);
+    expect(onOpenAttachmentMenu).toHaveBeenCalledTimes(1);
+    expect(onOpenAttachmentMenu.mock.calls[0][0]).toMatchObject({ target: 'a.png', kind: 'embed' });
+  });
+
+  it('絶対URL(http/https/data)にはメニューボタンを出さない', async () => {
+    const onOpenAttachmentMenu = vi.fn();
+    render(
+      <TestEditorWithMenu
+        content={'![[https://example.com/a.png]]'}
+        docPath={'文書.md'}
+        onOpenAttachmentMenu={onOpenAttachmentMenu}
+      />,
+    );
+    await waitFor(() => {
+      expect(document.querySelector('.obsidian-embed-image img')).toBeTruthy();
+    });
+    expect(document.querySelector('.attachment-menu-button')).toBeNull();
+  });
+
+  it('失敗チップ表示中はメニューボタンを出さない', async () => {
+    const onOpenAttachmentMenu = vi.fn();
+    render(
+      <TestEditorWithMenu
+        content={'![[a.png]]'}
+        docPath={'文書.md'}
+        onOpenAttachmentMenu={onOpenAttachmentMenu}
+      />,
+    );
+    let img: HTMLImageElement;
+    await waitFor(() => {
+      const el = document.querySelector('.obsidian-embed-image img');
+      expect(el).toBeTruthy();
+      img = el as HTMLImageElement;
+    });
+    img!.dispatchEvent(new Event('error'));
+    await waitFor(() => {
+      expect(document.querySelector('.attachment-menu-button')).toBeNull();
+      expect(document.querySelector('.attachment-frame')).toBeNull();
+    });
   });
 });
