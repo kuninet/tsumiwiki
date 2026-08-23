@@ -99,6 +99,25 @@ describe('LibraryWatcher', () => {
     expect(onChange).not.toHaveBeenCalled();
     await watcher.stop();
   }, 30_000);
+
+  // #218: Windows の fs.watch が親 rename を EPERM でブロックする件の対策として
+  // polling モードを注入できることを確認する(polling でも変更検出は動く)。
+  // Windows 固有の rename 挙動そのものは非 Windows 環境では再現できないため、
+  // ここでは「polling 構成でも onChange が発火する」だけ担保する
+  it('polling モードでもファイル変更を検知して通知する', async () => {
+    const onChange = vi.fn();
+    const watcher = new LibraryWatcher(lib, onChange, 200, 15_000, true);
+    watcher.start();
+    // polling は初回スキャンにやや時間がかかる
+    await new Promise((r) => setTimeout(r, 1500));
+
+    await writeFile(join(lib, '監視対象_polling.md'), 'a\n', 'utf8');
+    // stabilityThreshold(500) + interval(1000) 分を待つ
+    await new Promise((r) => setTimeout(r, 2500));
+
+    expect(onChange).toHaveBeenCalled();
+    await watcher.stop();
+  }, 30_000);
 });
 
 describe('BackupService', () => {
