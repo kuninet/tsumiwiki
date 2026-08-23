@@ -273,24 +273,26 @@ AIが一気に大量の文書を書き換える用途で、いちいちロック
 
 ## 9. 検索
 
-### GET /api/search?q=<query>&limit=20
+### GET /api/search?q=<query>
 
 SQLite FTS5 trigram インデックスによる全文検索。
 
-- `q` は 3文字以上推奨(1〜2文字だとヒットしないことがある。trigram特性)
-- `limit` は 1〜100(既定 20)
-- 大文字小文字を区別しない、日本語もOK
+- `q` の各語が 3 文字以上なら trigram インデックス検索、1〜2 文字の語を含む場合は部分一致(LIKE)検索にフォールバックする(全文書走査のため大規模ライブラリでは遅くなる)
+- 結果は最大 50 件(`limit` クエリパラメータは受け付けない)
+- 大文字小文字を区別しない(LIKE経路はASCIIのみ)、日本語もOK
 
-**レスポンス**: `SearchResult[]`。
+**レスポンス**: `{ results: SearchResult[] }`。
 
 ```json
-[
-  {
-    "path": "日記/2026-07-05.md",
-    "title": "2026-07-05",
-    "snippet": "本文抜粋(HTMLエスケープ済み)<mark>ハイライト</mark>部分のみHTML"
-  }
-]
+{
+  "results": [
+    {
+      "path": "日記/2026-07-05.md",
+      "title": "2026-07-05",
+      "snippet": "本文抜粋(HTMLエスケープ済み)<mark>ハイライト</mark>部分のみHTML"
+    }
+  ]
+}
 ```
 
 `snippet` の `<mark>` タグ以外の HTML は全てエスケープ済み。UIは `innerHTML` で描画してよい契約。

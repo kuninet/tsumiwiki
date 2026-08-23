@@ -79,6 +79,161 @@ describe('全文検索', () => {
     const res = await api('GET', '/api/search?q=%20');
     expect(res.statusCode).toBe(400);
   }, 20_000);
+
+  it('2文字のクエリがLIKEフォールバックでヒットし、snippetにハイライトが付く', async () => {
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('牛乳')}`);
+    expect(res.statusCode).toBe(200);
+    const results = res.json().results;
+    expect(results.map((r: { path: string }) => r.path)).toEqual(['買い物メモ.md']);
+    expect(results[0].snippet).toContain('<mark>牛乳</mark>');
+  }, 20_000);
+
+  it('1文字のクエリもヒットする', async () => {
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('卵')}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().results.map((r: { path: string }) => r.path)).toEqual(['買い物メモ.md']);
+  }, 20_000);
+
+  it('短い語と長い語の混在はANDになる', async () => {
+    const res1 = await api('GET', `/api/search?q=${encodeURIComponent('設計 スキーマ')}`);
+    expect(res1.json().results.map((r: { path: string }) => r.path).sort()).toEqual(
+      ['設計方針.md', '議事録.md'].sort(),
+    );
+
+    const res2 = await api('GET', `/api/search?q=${encodeURIComponent('牛乳 スキーマ')}`);
+    expect(res2.json().results.length).toBe(0);
+  }, 20_000);
+
+  it('タイトルのみ一致でもヒットする', async () => {
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('議事')}`);
+    expect(res.statusCode).toBe(200);
+    const results = res.json().results;
+    expect(results.map((r: { path: string }) => r.path)).toEqual(['議事録.md']);
+    expect(results[0].snippet).not.toContain('<mark>');
+  }, 20_000);
+
+  it('LIKEワイルドカードはエスケープされる', async () => {
+    await writeFile(join(lib, 'パーセント.md'), '進捗は100%です。\n', 'utf8');
+    await writeFile(join(lib, '円.md'), '費用は100円です。\n', 'utf8');
+    await writeFile(join(lib, 'アンダースコア.md'), '変数名はa_bです。\n', 'utf8');
+    await writeFile(join(lib, 'エックス.md'), '変数名はaxbです。\n', 'utf8');
+    await app.indexerService.scanAll();
+
+    const res1 = await api('GET', `/api/search?q=${encodeURIComponent('0%')}`);
+    expect(res1.json().results.map((r: { path: string }) => r.path)).toEqual(['パーセント.md']);
+
+    const res2 = await api('GET', `/api/search?q=${encodeURIComponent('_')}`);
+    expect(res2.json().results.map((r: { path: string }) => r.path)).toEqual(['アンダースコア.md']);
+  }, 20_000);
+
+  it('LIKE経路のsnippetも本文HTMLがエスケープされる', async () => {
+    await writeFile(
+      join(lib, 'XSS文書.md'),
+      '牛乳を買う <script>alert(1)</script>\n',
+      'utf8',
+    );
+    await app.indexerService.scanAll();
+
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('牛乳')}`);
+    const hit = res.json().results.find((r: { path: string }) => r.path === 'XSS文書.md');
+    expect(hit).toBeTruthy();
+    expect(hit.snippet).not.toContain('<script>');
+    expect(hit.snippet).toContain('&lt;script&gt;');
+    expect(hit.snippet).toContain('<mark>牛乳</mark>');
+  }, 20_000);
+
+  it('サロゲートペア(絵文字)が混在する本文でもハイライト位置がずれない', async () => {
+    await writeFile(join(lib, '絵文字1.md'), '🍎🍎🍎牛乳を買う\n', 'utf8');
+    await app.indexerService.scanAll();
+
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('牛乳')}`);
+    const hit = res.json().results.find((r: { path: string }) => r.path === '絵文字1.md');
+    expect(hit).toBeTruthy();
+    expect(hit.snippet).toContain('<mark>牛乳</mark>');
+    expect(hit.snippet).not.toContain('<mark>買う</mark>');
+  }, 20_000);
+
+  it('絵文字直後の末尾ヒットでも正しい範囲がハイライトされる', async () => {
+    await writeFile(join(lib, '絵文字2.md'), '🍎🍎🍎🍎🍎牛乳', 'utf8');
+    await app.indexerService.scanAll();
+
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('牛乳')}`);
+    const hit = res.json().results.find((r: { path: string }) => r.path === '絵文字2.md');
+    expect(hit).toBeTruthy();
+    expect(hit.snippet).toBe('🍎🍎🍎🍎🍎<mark>牛乳</mark>');
+  }, 20_000);
+
+  it('窓の途中でヒットした場合、前後に…が付く', async () => {
+    const body = 'あ'.repeat(45) + '牛乳' + 'い'.repeat(40);
+    await writeFile(join(lib, '長文.md'), body, 'utf8');
+    await app.indexerService.scanAll();
+
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('牛乳')}`);
+    const hit = res.json().results.find((r: { path: string }) => r.path === '長文.md');
+    expect(hit).toBeTruthy();
+    expect(hit.snippet.startsWith('…')).toBe(true);
+    expect(hit.snippet.endsWith('…')).toBe(true);
+    expect(hit.snippet).toContain('<mark>牛乳</mark>');
+  }, 20_000);
+
+  it('同一語が複数回出現する場合は全てハイライトされる', async () => {
+    await writeFile(join(lib, '重複出現.md'), '牛乳と牛乳をたくさん買う。\n', 'utf8');
+    await app.indexerService.scanAll();
+
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('牛乳')}`);
+    const hit = res.json().results.find((r: { path: string }) => r.path === '重複出現.md');
+    expect(hit).toBeTruthy();
+    expect(hit.snippet.match(/<mark>/g)?.length).toBeGreaterThanOrEqual(2);
+  }, 20_000);
+
+  it('ASCII文字は大文字小文字を無視してハイライトされる', async () => {
+    await writeFile(join(lib, '英語文書.md'), 'MILKです。\n', 'utf8');
+    await app.indexerService.scanAll();
+
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('mi')}`);
+    const hit = res.json().results.find((r: { path: string }) => r.path === '英語文書.md');
+    expect(hit).toBeTruthy();
+    expect(hit.snippet).toContain('<mark>MI</mark>');
+  }, 20_000);
+
+  it('バックスラッシュを含むクエリが正しくエスケープされる', async () => {
+    await writeFile(join(lib, 'パス1.md'), 'パスは C:\\temp です。\n', 'utf8');
+    await writeFile(join(lib, 'パス2.md'), 'パスは C:/temp です。\n', 'utf8');
+    await app.indexerService.scanAll();
+
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('\\')}`);
+    expect(res.json().results.map((r: { path: string }) => r.path)).toEqual(['パス1.md']);
+  }, 20_000);
+
+  it('タイトル一致は更新日時に関わらず本文のみ一致より先に返る', async () => {
+    await writeFile(join(lib, '花見会.md'), '来月のイベントについて。\n', 'utf8');
+    await writeFile(join(lib, 'イベント案内.md'), '来月は花見に行く予定です。\n', 'utf8');
+    await app.indexerService.scanAll();
+
+    // 本文のみ一致の文書の方を新しくして、単純な更新日時順では逆転することを確認した上でテストする
+    app.db
+      .prepare('UPDATE doc_index SET updated_at = ? WHERE doc_path = ?')
+      .run('2020-01-01T00:00:00.000Z', '花見会.md');
+    app.db
+      .prepare('UPDATE doc_index SET updated_at = ? WHERE doc_path = ?')
+      .run('2030-01-01T00:00:00.000Z', 'イベント案内.md');
+
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('花見')}`);
+    expect(res.json().results.map((r: { path: string }) => r.path)).toEqual([
+      '花見会.md',
+      'イベント案内.md',
+    ]);
+  }, 20_000);
+
+  it('LIKE経路も既定件数(50件)を超えて返さない', async () => {
+    for (let i = 0; i < 51; i++) {
+      await writeFile(join(lib, `件数文書${i}.md`), 'これは検証用の本文です。\n', 'utf8');
+    }
+    await app.indexerService.scanAll();
+
+    const res = await api('GET', `/api/search?q=${encodeURIComponent('検証')}`);
+    expect(res.json().results.length).toBe(50);
+  }, 20_000);
 });
 
 describe('タグ', () => {
