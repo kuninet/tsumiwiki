@@ -325,6 +325,27 @@
   pointer-events: auto;
 }
 
+/* iframe(PDF等)がホバー・クリックイベントを吸って親要素の :hover が
+   発火しないため、--persistent 修飾のフレームではボタンを常時表示・操作可能にする(#204) */
+.ProseMirror .attachment-frame--persistent .attachment-menu-button {
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 1;
+}
+
+/* PDF埋め込み(#204)。iframeなのでmax-widthのみで縦横比は幅/高さ属性側に委ねる */
+.ProseMirror .obsidian-embed-pdf-wrapper,
+.ProseMirror .tiptap-image-pdf-wrapper {
+  display: block;
+}
+
+.ProseMirror .obsidian-embed-pdf,
+.ProseMirror .tiptap-image-pdf {
+  max-width: 100%;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+}
+
 /* wikilink入力補完のポップアップ(document.bodyへ直接追加される自作コンポーネント) */
 .wikilink-suggestion-popup {
   position: absolute;

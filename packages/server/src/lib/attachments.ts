@@ -4,7 +4,7 @@ import path from 'node:path';
 // doc-service(アップロード可否)とindexer-service(索引・配信可否)の双方から参照するため
 // ここに集約する。indexerはdoc-serviceをimportしない(循環import回避)。
 
-// 添付として受け付ける画像拡張子(アップロード可能。PDF等はFR-IMG-04=COULDで将来)
+// 添付として受け付ける拡張子(アップロード可能。画像 + PDF。FR-IMG-01/04)
 export const ATTACHMENT_EXTENSIONS: ReadonlySet<string> = new Set([
   '.png',
   '.jpg',
@@ -12,6 +12,7 @@ export const ATTACHMENT_EXTENSIONS: ReadonlySet<string> = new Set([
   '.gif',
   '.svg',
   '.webp',
+  '.pdf',
 ]);
 
 // 配信・索引対象の拡張子とMIME(画像 + PDF)。routes/attachments.tsのraw配信で使う

@@ -88,7 +88,10 @@ function formatUpdatedAt(iso: string): { date: string; time: string } {
   return { date, time };
 }
 
-const IMAGE_MIME_PREFIX = 'image/';
+// D&D/ペーストで受け付けるファイル種別(画像 + PDF。FR-IMG-01/04)
+function isAttachmentFile(f: File): boolean {
+  return f.type.startsWith('image/') || f.type === 'application/pdf';
+}
 
 // #199 添付リネーム: サーバーが返す replacements(その文書で実際に書き換えた
 // target→新target。trim済み・`|alias`・`#anchor`・`?query`・`"title"`を含まない)を
@@ -280,21 +283,17 @@ export function DocView({
         keydown: (_view, event) => event.isComposing && event.key === ' ',
       },
       handleDrop: (_view, event) => {
-        const files = Array.from(event.dataTransfer?.files ?? []).filter((f) =>
-          f.type.startsWith(IMAGE_MIME_PREFIX),
-        );
+        const files = Array.from(event.dataTransfer?.files ?? []).filter(isAttachmentFile);
         if (files.length === 0) return false;
         event.preventDefault();
-        void handleUploadImages(files);
+        void handleUploadFiles(files);
         return true;
       },
       handlePaste: (_view, event) => {
-        const files = Array.from(event.clipboardData?.files ?? []).filter((f) =>
-          f.type.startsWith(IMAGE_MIME_PREFIX),
-        );
+        const files = Array.from(event.clipboardData?.files ?? []).filter(isAttachmentFile);
         if (files.length === 0) return false;
         event.preventDefault();
-        void handleUploadImages(files);
+        void handleUploadFiles(files);
         return true;
       },
     },
@@ -514,7 +513,7 @@ export function DocView({
   }
 
   // 複数ファイルは逐次アップロードし、成功をまとめて1トーストで通知する
-  async function handleUploadImages(files: File[]) {
+  async function handleUploadFiles(files: File[]) {
     let inserted = 0;
     for (const file of files) {
       try {
@@ -526,19 +525,15 @@ export function DocView({
           .run();
         inserted++;
       } catch (err) {
-        showToast('error', err instanceof Error ? err.message : '画像のアップロードに失敗しました');
+        showToast('error', err instanceof Error ? err.message : 'ファイルのアップロードに失敗しました');
       }
     }
     if (inserted > 0) {
       showToast(
         'success',
-        inserted === 1 ? '画像を挿入しました' : `${inserted}件の画像を挿入しました`,
+        inserted === 1 ? 'ファイルを挿入しました' : `${inserted}件のファイルを挿入しました`,
       );
     }
-  }
-
-  async function handleUploadImage(file: File) {
-    await handleUploadImages([file]);
   }
 
   // #199 画像の管理メニュー(名前変更/削除/パスをコピー)。embed-view/image-viewの
@@ -922,7 +917,7 @@ export function DocView({
         <EditorToolbar
           editor={editor}
           onOpenLinkDialog={() => setLinkDialogVisible(true)}
-          onPickImage={(file) => void handleUploadImage(file)}
+          onPickImage={(file) => void handleUploadFiles([file])}
           onOpenTemplateApply={() => setTemplateApplyOpen(true)}
         />
       )}

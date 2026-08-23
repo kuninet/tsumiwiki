@@ -52,10 +52,15 @@ async function serveLibraryFile(
   if (!mime) {
     return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
   }
+  // PDFはブラウザ内蔵ビューアが自ページ内リソースを読み込むため、画像/SVGより緩いCSPを使う。
+  // 画像・SVGは引き続き default-src 'none' でSVG内スクリプト等の実行を封じる(NFR-SEC-03)
+  const csp =
+    ext === '.pdf'
+      ? "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; font-src 'self' data:"
+      : "default-src 'none'; style-src 'unsafe-inline'";
   return reply
     .header('X-Content-Type-Options', 'nosniff')
-    // SVG内スクリプト等の実行を封じる(NFR-SEC-03)
-    .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'")
+    .header('Content-Security-Policy', csp)
     .header('Content-Disposition', ext === '.svg' ? 'attachment' : 'inline')
     .header('Cache-Control', 'private, max-age=60')
     .type(mime)

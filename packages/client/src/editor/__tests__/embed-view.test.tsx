@@ -138,6 +138,33 @@ describe('ObsidianEmbedWithPreview', () => {
     expect(document.querySelector('.obsidian-embed img')).toBeNull();
     expect(document.body.textContent).toContain('![[note.md]]');
   });
+
+  it('PDFはiframeで表示し、#anchorをsrcの末尾に引き継ぐ(#204)', async () => {
+    render(<TestEditor content={'![[doc.pdf#page=3]]'} docPath={'フォルダ/文書.md'} />);
+    let iframe: HTMLIFrameElement;
+    await waitFor(() => {
+      const el = document.querySelector('.obsidian-embed-pdf');
+      expect(el).toBeTruthy();
+      iframe = el as HTMLIFrameElement;
+    });
+    expect(iframe!.getAttribute('src')).toBe(
+      `/api/embed?target=${encodeURIComponent('doc.pdf')}&from=${encodeURIComponent('フォルダ/文書.md')}#page=3`,
+    );
+    expect(iframe!.getAttribute('width')).toBe('100%');
+    expect(iframe!.getAttribute('height')).toBe('600');
+  });
+
+  it('PDFの|幅x高さはiframeのwidth/heightに反映する', async () => {
+    render(<TestEditor content={'![[doc.pdf|800x400]]'} docPath={'文書.md'} />);
+    let iframe: HTMLIFrameElement;
+    await waitFor(() => {
+      const el = document.querySelector('.obsidian-embed-pdf');
+      expect(el).toBeTruthy();
+      iframe = el as HTMLIFrameElement;
+    });
+    expect(iframe!.getAttribute('width')).toBe('800');
+    expect(iframe!.getAttribute('height')).toBe('400');
+  });
 });
 
 // #199 画像の管理メニュー(右クリック・「⋯」ボタン)

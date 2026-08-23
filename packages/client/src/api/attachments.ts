@@ -7,7 +7,7 @@ import type {
 } from '@tsumiwiki/shared';
 import { api } from './client';
 
-// 画像添付のアップロード(FR-IMG-01/02)。multipart/form-dataのためapi()は使わず素で実装する
+// 画像・PDF添付のアップロード(FR-IMG-01/02/04)。multipart/form-dataのためapi()は使わず素で実装する
 // (api()はContent-Type: application/jsonを常に付与するため、boundary付きヘッダを
 // ブラウザに委ねる必要のあるmultipart送信とは相性が悪い)
 

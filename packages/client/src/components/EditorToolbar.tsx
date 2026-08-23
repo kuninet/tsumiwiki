@@ -274,14 +274,14 @@ export function EditorToolbar({
         />
         <ToolbarButton
           icon={<ImageIcon size={ICON_SIZE} aria-hidden="true" />}
-          label="画像"
-          title="画像"
+          label="画像/PDF"
+          title="画像/PDF"
           onClick={() => fileInputRef.current?.click()}
         />
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/png,image/jpeg,image/gif,image/svg+xml,image/webp"
+          accept="image/png,image/jpeg,image/gif,image/svg+xml,image/webp,application/pdf"
           onChange={handleFileChange}
           className="hidden"
         />

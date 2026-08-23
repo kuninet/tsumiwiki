@@ -7,7 +7,12 @@ import {
   getAttachmentGeneration,
   withCacheBuster,
 } from '../../lib/attachment-events';
-import { imageFallbackSrc, isAbsoluteUrl, resolveImageSrc } from '../../lib/resolve-embed-src';
+import {
+  imageFallbackSrc,
+  isAbsoluteUrl,
+  isPdfFile,
+  resolveImageSrc,
+} from '../../lib/resolve-embed-src';
 import type { TsumiwikiDocStorage } from '../doc-storage';
 
 // 標準画像記法 ![alt](src) の表示解決(FR-OBS-03)。まず相対パスを文書フォルダ基準で
@@ -16,7 +21,11 @@ import type { TsumiwikiDocStorage } from '../doc-storage';
 // シリアライズ(Image拡張の標準実装)には触れない
 //
 // #199: 画像の管理メニュー(名前変更/削除/パスをコピー)。絶対URL、および
-// フォールバックも失敗した「壊れた画像」状態には出さない
+// フォールバックも失敗した「壊れた画像」状態には出さない。PDFはiframeが
+// クリックを奪ってメニューボタンが押せないため、当面は画像のみに提供する
+//
+// PDF(#204): iframeはonErrorが効かないため索引フォールバックは行わず、文書フォルダ相対の
+// /api/files/...のみで表示する(それで解決できなければブラウザ既定のPDFエラー表示になる)
 
 function basenameOf(pathOrSrc: string): string {
   const withoutQueryOrHash = pathOrSrc.split(/[?#]/, 1)[0] ?? '';
@@ -63,6 +72,21 @@ function ImageView({ node, editor }: NodeViewProps) {
     window.addEventListener(ATTACHMENT_CHANGED_EVENT, handleAttachmentChanged);
     return () => window.removeEventListener(ATTACHMENT_CHANGED_EVENT, handleAttachmentChanged);
   }, [src]);
+
+  if (isPdfFile(src)) {
+    return (
+      <NodeViewWrapper as="span" className="tiptap-image-pdf-wrapper" contentEditable={false}>
+        <iframe
+          src={resolveImageSrc(src, docFolder)}
+          title={alt ?? src}
+          width="100%"
+          height={600}
+          className="tiptap-image-pdf"
+          loading="lazy"
+        />
+      </NodeViewWrapper>
+    );
+  }
 
   const fallback = imageFallbackSrc(src, docPath);
   const resolvedSrc = stage === 'primary' ? resolveImageSrc(src, docFolder) : (fallback ?? src);

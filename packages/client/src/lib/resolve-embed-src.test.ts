@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { embedSrc, imageFallbackSrc, parseEmbedTarget, resolveImageSrc } from './resolve-embed-src';
+import {
+  embedSrc,
+  imageFallbackSrc,
+  isImageFile,
+  isPdfFile,
+  parseEmbedTarget,
+  resolveImageSrc,
+} from './resolve-embed-src';
 
 describe('parseEmbedTarget', () => {
   it('サイズ指定の無いtargetはfileのみを返す', () => {
@@ -14,8 +21,8 @@ describe('parseEmbedTarget', () => {
     expect(parseEmbedTarget('a.png|300x200')).toEqual({ file: 'a.png', width: 300, height: 200 });
   });
 
-  it('#anchorはfileから除去し、解決には使わない', () => {
-    expect(parseEmbedTarget('a.png#見出し')).toEqual({ file: 'a.png' });
+  it('#anchorはfileから除去してanchorに保持する(画像側の解決には使わない)', () => {
+    expect(parseEmbedTarget('a.png#見出し')).toEqual({ file: 'a.png', anchor: '見出し' });
   });
 
   it('|別名(サイズ形式でない)は無視してfileのみ返す', () => {
@@ -27,6 +34,7 @@ describe('parseEmbedTarget', () => {
       file: 'a.png',
       width: 300,
       height: 200,
+      anchor: '見出し',
     });
   });
 
@@ -36,6 +44,19 @@ describe('parseEmbedTarget', () => {
 
   it('全角数字の|幅はサイズ形式と認めず無視する', () => {
     expect(parseEmbedTarget('a.png|３００')).toEqual({ file: 'a.png' });
+  });
+
+  it('PDFの#pageアンカーをanchorに保持する(#204)', () => {
+    expect(parseEmbedTarget('doc.pdf#page=3')).toEqual({ file: 'doc.pdf', anchor: 'page=3' });
+  });
+
+  it('#pageアンカーと|幅x高さを同時に指定した場合も両方保持する', () => {
+    expect(parseEmbedTarget('doc.pdf#page=3|800x600')).toEqual({
+      file: 'doc.pdf',
+      anchor: 'page=3',
+      width: 800,
+      height: 600,
+    });
   });
 });
 
@@ -53,6 +74,42 @@ describe('embedSrc', () => {
     expect(embedSrc('data:image/png;base64,AAAA', 'フォルダ/文書.md')).toBe(
       'data:image/png;base64,AAAA',
     );
+  });
+
+  it('options.anchor指定時はURL末尾に#<anchor>を付ける(#204)', () => {
+    expect(embedSrc('doc.pdf', 'notes/x.md', { anchor: 'page=3' })).toBe(
+      `/api/embed?target=${encodeURIComponent('doc.pdf')}&from=${encodeURIComponent('notes/x.md')}#page=3`,
+    );
+  });
+
+  it('anchor未指定時は従来どおり#を付けない', () => {
+    expect(embedSrc('doc.pdf', 'notes/x.md', {})).toBe(
+      `/api/embed?target=${encodeURIComponent('doc.pdf')}&from=${encodeURIComponent('notes/x.md')}`,
+    );
+  });
+});
+
+describe('isPdfFile / isImageFile', () => {
+  it('.pdf(大文字小文字問わず)をPDFと判定する', () => {
+    expect(isPdfFile('doc.pdf')).toBe(true);
+    expect(isPdfFile('DOC.PDF')).toBe(true);
+    expect(isPdfFile('folder/doc.pdf')).toBe(true);
+  });
+
+  it('画像拡張子はPDFと判定しない', () => {
+    expect(isPdfFile('a.png')).toBe(false);
+    expect(isPdfFile('no-extension')).toBe(false);
+  });
+
+  it('画像拡張子(png/jpg/jpeg/gif/svg/webp)を画像と判定する', () => {
+    for (const ext of ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp']) {
+      expect(isImageFile(`a.${ext}`)).toBe(true);
+    }
+  });
+
+  it('PDF・未知拡張子は画像と判定しない', () => {
+    expect(isImageFile('doc.pdf')).toBe(false);
+    expect(isImageFile('a.txt')).toBe(false);
   });
 });
 
