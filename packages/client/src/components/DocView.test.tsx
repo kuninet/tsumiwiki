@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
+import { useUserSettingsStore } from '../stores/user-settings';
 import { DocView } from './DocView';
 
 const DOC: DocResponse = {
@@ -95,6 +96,14 @@ describe('DocView', () => {
     useEditStore.setState({ mode: 'view', dirty: false, lockedPath: null, lastDraftSavedAt: null });
     useToastStore.setState({ toast: null });
     useUIStore.getState().resetEditorChrome();
+    // #212 レビュー M2: persist ミドルウェアが localStorage に書き戻すため
+    // state リセットと合わせて permanent storage も掃除する(他 test suite への漏出防止)
+    useUserSettingsStore.setState({
+      newDocPolicy: 'same-folder',
+      fixedFolder: '',
+      contentWidth: 'normal',
+    });
+    useUserSettingsStore.persist.clearStorage();
   });
 
   it('閲覧モードでタイトルと更新日時を表示する', async () => {
@@ -105,6 +114,40 @@ describe('DocView', () => {
     // JST表示: 2026/07/01 と 00:00:00 を別々に表示
     expect(screen.getByText('2026/07/01')).toBeTruthy();
     expect(screen.getByText('00:00:00')).toBeTruthy();
+  });
+
+  it('contentWidth 個人設定が本文ラッパの max-width クラスに反映される (#212)', async () => {
+    stubFetch();
+    // 既定(normal)で描画
+    const { rerender } = renderDocView();
+    const wrap = await screen.findByTestId('doc-content-wrap');
+    expect(wrap.className).toContain('max-w-[min(760px,100%)]');
+
+    // wide に切替 → 再レンダで反映
+    useUserSettingsStore.getState().setContentWidth('wide');
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <DocView doc={DOC} currentUser={CURRENT_USER} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('doc-content-wrap').className).toContain('max-w-[min(1040px,100%)]');
+    });
+
+    // full に切替
+    useUserSettingsStore.getState().setContentWidth('full');
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <DocView doc={DOC} currentUser={CURRENT_USER} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('doc-content-wrap').className).toContain('max-w-full');
+    });
   });
 
   it('他者がロック中の場合は編集ボタンが無効化され、編集中である旨が表示される', async () => {

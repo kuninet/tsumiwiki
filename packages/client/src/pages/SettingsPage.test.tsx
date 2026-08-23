@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useUserSettingsStore } from '../stores/user-settings';
 import { SettingsPage } from './SettingsPage';
 
 interface Call {
@@ -52,6 +53,16 @@ function renderPage() {
 }
 
 describe('SettingsPage', () => {
+  beforeEach(() => {
+    useUserSettingsStore.setState({
+      newDocPolicy: 'same-folder',
+      fixedFolder: '',
+      contentWidth: 'normal',
+    });
+    // #212 レビュー M2: setState は persist ミドルウェアで localStorage に書き戻される。
+    // 他 test suite の初期状態を汚染しないよう永続層も掃除する
+    useUserSettingsStore.persist.clearStorage();
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
     cleanup();
@@ -101,6 +112,23 @@ describe('SettingsPage', () => {
       expect(newInput.value).toBe('');
       expect(confirmInput.value).toBe('');
     });
+  });
+
+  it('本文最大幅のラジオを切り替えると contentWidth が更新される (#212)', async () => {
+    stubFetch();
+    renderPage();
+    await screen.findByText('taro');
+
+    expect(useUserSettingsStore.getState().contentWidth).toBe('normal');
+
+    fireEvent.click(screen.getByLabelText(/広め/));
+    expect(useUserSettingsStore.getState().contentWidth).toBe('wide');
+
+    fireEvent.click(screen.getByLabelText(/全幅/));
+    expect(useUserSettingsStore.getState().contentWidth).toBe('full');
+
+    fireEvent.click(screen.getByLabelText(/標準/));
+    expect(useUserSettingsStore.getState().contentWidth).toBe('normal');
   });
 
   it('現在のパスワードが誤っている場合はAPIのエラーメッセージを表示する', async () => {

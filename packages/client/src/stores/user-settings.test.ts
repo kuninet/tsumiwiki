@@ -1,9 +1,20 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { resolveNewDocInitialFolder, useUserSettingsStore } from './user-settings';
+import {
+  contentWidthMaxClass,
+  resolveNewDocInitialFolder,
+  useUserSettingsStore,
+} from './user-settings';
 
 describe('user-settings', () => {
   beforeEach(() => {
-    useUserSettingsStore.setState({ newDocPolicy: 'same-folder', fixedFolder: '' });
+    useUserSettingsStore.setState({
+      newDocPolicy: 'same-folder',
+      fixedFolder: '',
+      contentWidth: 'normal',
+    });
+    // #212 レビュー M2: setState は persist ミドルウェアで localStorage に書き戻される。
+    // 他 test suite の初期状態を汚染しないよう永続層も掃除する
+    useUserSettingsStore.persist.clearStorage();
   });
 
   describe('resolveNewDocInitialFolder', () => {
@@ -40,6 +51,25 @@ describe('user-settings', () => {
       expect(useUserSettingsStore.getState().newDocPolicy).toBe('root');
       useUserSettingsStore.getState().setFixedFolder('notes');
       expect(useUserSettingsStore.getState().fixedFolder).toBe('notes');
+    });
+  });
+
+  describe('contentWidth (#212)', () => {
+    it('既定は normal', () => {
+      expect(useUserSettingsStore.getState().contentWidth).toBe('normal');
+    });
+
+    it('setContentWidth で更新できる', () => {
+      useUserSettingsStore.getState().setContentWidth('wide');
+      expect(useUserSettingsStore.getState().contentWidth).toBe('wide');
+      useUserSettingsStore.getState().setContentWidth('full');
+      expect(useUserSettingsStore.getState().contentWidth).toBe('full');
+    });
+
+    it('contentWidthMaxClass は各値に対応する max-width クラスを返す', () => {
+      expect(contentWidthMaxClass('normal')).toBe('max-w-[min(760px,100%)]');
+      expect(contentWidthMaxClass('wide')).toBe('max-w-[min(1040px,100%)]');
+      expect(contentWidthMaxClass('full')).toBe('max-w-full');
     });
   });
 });

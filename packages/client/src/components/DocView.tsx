@@ -30,6 +30,7 @@ import { registerTabActions } from '../lib/tab-actions-registry';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
+import { contentWidthMaxClass, useUserSettingsStore } from '../stores/user-settings';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ContextMenu } from './ContextMenu';
 import { EditorToolbar } from './EditorToolbar';
@@ -182,6 +183,8 @@ export function DocView({
   const editorChromeVisible = useUIStore((s) => s.editorChromeVisible);
   const showEditorChrome = useUIStore((s) => s.showEditorChrome);
   const resetEditorChrome = useUIStore((s) => s.resetEditorChrome);
+  // #212: 本文最大幅の個人設定(normal/wide/full)。編集/閲覧共通
+  const contentWidth = useUserSettingsStore((s) => s.contentWidth);
   // #175: 仮想キーボード出現時に scroll 領域下端へ空ける px 数
   const { bottomOffset: keyboardBottomOffset } = useVirtualKeyboard();
   const { data: tree } = useTree();
@@ -939,9 +942,13 @@ export function DocView({
             : undefined
         }
       >
-        {/* コンテンツ幅は最大760pxで、狭くなるにつれ padding→本文ブロック順に自動追従する。
-            記事幅がビューポート幅を超えないよう `max-w-full` を保険で入れる */}
-        <div className="mx-auto max-w-[min(760px,100%)] px-4 py-4 sm:px-6 lg:px-8">
+        {/* コンテンツ幅は個人設定(#212)で normal=760px / wide=1040px / full=制約なし を切替。
+            いずれもモバイル幅ではラッパ側の max-width が viewport 幅で頭打ちになり、
+            狭くなるにつれ padding→本文ブロック順に自動追従する挙動は維持される */}
+        <div
+          data-testid="doc-content-wrap"
+          className={`mx-auto ${contentWidthMaxClass(contentWidth)} px-4 py-4 sm:px-6 lg:px-8`}
+        >
           <EditorContent editor={editor} />
         </div>
       </div>
