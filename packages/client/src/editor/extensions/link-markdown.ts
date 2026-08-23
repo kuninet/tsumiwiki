@@ -12,7 +12,7 @@ import { isAllowedLinkUrl } from '../../lib/allowed-link';
 // さらに markdown-it の既定 validateLink は `file:` を拒否するため、
 // 外部ファイルリンク(FR-LINK-02)が `\[a\](file:///...)` とリテラル化される。
 //
-// ここでは本アプリの許可スキーム(lib/allowed-link.ts: http/https/mailto/file・相対パス・data:image)に
+// ここでは本アプリの許可スキーム(lib/allowed-link.ts: http/https/mailto/file・相対パス)に
 // 揃えた検証に置き換え、title を属性として保持し、markdown-it 側も同じ判定にする。
 // 許可外スキーム(tel: 等)は両層で一致して拒否→markdown-it がリテラル化するため原文は消えない。
 

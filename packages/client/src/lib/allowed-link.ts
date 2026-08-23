@@ -2,11 +2,9 @@
 // javascript:等の実行系スキームはエディタのコマンド挿入経路でも拒否する。
 // エディタの Link 拡張(editor/extensions/link-markdown.ts)と markdown-it の validateLink も
 // この関数を使い、許可集合を 1 か所に揃える(層ごとに食い違うと「片方が通して片方が落とす」
-// 隙間がそのままリンク消失になるため)
+// 隙間がそのままリンク消失になるため)。data: は画像用途でも許可しない(許可しても Image 拡張の
+// 既定 allowBase64=false で落ちて原文が消えるため、リテラル化して原文を残す方を選ぶ)
 const ALLOWED_SCHEMES = ['http', 'https', 'mailto', 'file'];
-
-// 画像としての data URL は許可する(markdown-it 既定と同じ範囲)
-const DATA_IMAGE_RE = /^data:image\/(gif|png|jpeg|webp);/i;
 
 // ブラウザは URL のスキーム部に含まれる空白・制御文字を取り除いて解釈するため
 // (`java\nscript:` → `javascript:`)、判定前に同じ正規化をしてすり抜けを防ぐ。
@@ -28,6 +26,5 @@ export function isAllowedLinkUrl(url: string): boolean {
   const normalized = normalizeForSchemeCheck(url);
   const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(normalized);
   if (!schemeMatch) return true; // 相対URL・スキームなしは許可
-  if (DATA_IMAGE_RE.test(normalized)) return true;
   return ALLOWED_SCHEMES.includes(schemeMatch[1].toLowerCase());
 }

@@ -139,10 +139,11 @@ describe('Markdown リンクの往復保全(issue #207)', () => {
     }
   });
 
-  it('data: は画像(data:image)のみ許可し、それ以外はリンク化しない', () => {
-    // 注: data:image の <img> 自体は Image 拡張の既定(allowBase64: false)で保持されない(従来どおり)
-    expect(hasLinkMark('[a](data:image/png;base64,AAAA)')).toBe(true);
-    expect(hasLinkMark('[a](data:text/html;base64,AAAA)')).toBe(false);
+  it('data: はリンク・画像ともリテラル化され原文が残る', () => {
+    // 画像として許可しても Image 拡張の既定(allowBase64: false)で落ちて原文が消えるため、
+    // 許可集合から外してリテラル化する
+    expect(hasLinkMark('[a](data:image/png;base64,AAAA)')).toBe(false);
+    expect(roundtripMarkdown('![a](data:image/png;base64,AAAA)')).toContain('data:image/png;base64,AAAA');
   });
 
   it('許可スキームと相対パスはリンクになる', () => {
