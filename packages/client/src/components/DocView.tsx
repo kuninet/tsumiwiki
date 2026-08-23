@@ -152,10 +152,23 @@ export function DocView({
     // wikilinkDocsRefはref経由のため再構築不要
     [],
   );
+  // NodeView(embed-view/image-view)が画像解決に使う現在文書の情報。
+  // useEditor のオプションは生成時に固定されるため ref 経由で最新の doc.path を参照する
+  const docPathRef = useRef(doc.path);
+  docPathRef.current = doc.path;
   const editor = useEditor({
     extensions,
     content: doc.body,
     editable: false,
+    // NodeView の初回描画(ビュー生成時)より前に storage を用意しておく。
+    // 後続の useEffect だけだと初回描画が folder/path 未設定で走り、
+    // /api/embed への問い合わせが from='' になってしまう
+    onBeforeCreate: ({ editor: e }) => {
+      e.storage.tsumiwikiDoc = {
+        folder: folderOfPath(docPathRef.current),
+        path: docPathRef.current,
+      };
+    },
     onUpdate: ({ editor: e }) => {
       session.updateBody(e.storage.markdown.getMarkdown() as string);
     },
@@ -189,10 +202,10 @@ export function DocView({
     },
   });
 
-  // NodeView(embed-view/image-view)が相対パス解決に使う現在文書のフォルダを共有する
+  // 文書パスが変わった(移動・リネーム)ときに storage を追随させる
   useEffect(() => {
     if (!editor) return;
-    editor.storage.tsumiwikiDoc = { folder: folderOfPath(doc.path) };
+    editor.storage.tsumiwikiDoc = { folder: folderOfPath(doc.path), path: doc.path };
   }, [editor, doc.path]);
 
   useEffect(() => {

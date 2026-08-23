@@ -39,6 +39,16 @@ function tagsOf(docPath: string): { tag: string; source: string }[] {
     .all(docPath) as { tag: string; source: string }[];
 }
 
+function attachmentRow(
+  relPath: string,
+): { rel_path: string; name: string; name_key: string; folder: string } | undefined {
+  return db
+    .prepare('SELECT rel_path, name, name_key, folder FROM attachment_index WHERE rel_path = ?')
+    .get(relPath) as
+    | { rel_path: string; name: string; name_key: string; folder: string }
+    | undefined;
+}
+
 describe('IndexerService', () => {
   it('日本語ファイル名・フォルダが走査され、doc_indexにtitleとfolderが入る', async () => {
     await mkdir(join(lib, '議事録'), { recursive: true });
@@ -263,4 +273,135 @@ describe('IndexerService: 堅牢性(レビュー指摘対応)', () => {
       await rm(lib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 20_000);
+});
+
+// 添付ファイル索引(issue #198)。ヴォルト全体のファイル名索引でObsidian同等の解決を行う
+describe('IndexerService: 添付索引(attachment_index)', () => {
+  it('ルート/サブフォルダ/サブフォルダのattachments配下の画像が索引され、日本語名もNFC正規化される', async () => {
+    await mkdir(join(lib, 'サブ', 'attachments'), { recursive: true });
+    await writeFile(join(lib, 'ルート画像.png'), 'a', 'utf8');
+    await writeFile(join(lib, 'サブ', 'サブ画像.jpg'), 'b', 'utf8');
+    await writeFile(join(lib, 'サブ', 'attachments', '添付画像.gif'), 'c', 'utf8');
+    await writeFile(join(lib, '通常文書.md'), '本文\n', 'utf8');
+
+    const result = await svc.scanAll();
+    // .mdのindexed件数は添付に影響されない
+    expect(result.indexed).toBe(1);
+    expect(result.attachmentsIndexed).toBe(3);
+
+    expect(attachmentRow('ルート画像.png')).toMatchObject({
+      name: 'ルート画像.png',
+      name_key: 'ルート画像.png',
+      folder: '',
+    });
+    expect(attachmentRow('サブ/サブ画像.jpg')).toMatchObject({
+      name: 'サブ画像.jpg',
+      folder: 'サブ',
+    });
+    expect(attachmentRow('サブ/attachments/添付画像.gif')).toMatchObject({
+      name: '添付画像.gif',
+      folder: 'サブ/attachments',
+    });
+  });
+
+  it('差分: 2回目のscanAllで変更なし、移動で旧行が消え新行が入り、削除で消える', async () => {
+    await writeFile(join(lib, '画像A.png'), 'x', 'utf8');
+    const first = await svc.scanAll();
+    expect(first.attachmentsIndexed).toBe(1);
+
+    const second = await svc.scanAll();
+    expect(second.attachmentsIndexed).toBe(0);
+    expect(second.attachmentsRemoved).toBe(0);
+
+    await mkdir(join(lib, '移動先'), { recursive: true });
+    await rename(join(lib, '画像A.png'), join(lib, '移動先', '画像A.png'));
+    const third = await svc.scanAll();
+    expect(attachmentRow('画像A.png')).toBeUndefined();
+    expect(attachmentRow('移動先/画像A.png')).toBeDefined();
+    expect(third.attachmentsIndexed).toBe(1);
+    expect(third.attachmentsRemoved).toBe(1);
+
+    await unlink(join(lib, '移動先', '画像A.png'));
+    const fourth = await svc.scanAll();
+    expect(fourth.attachmentsRemoved).toBe(1);
+    expect(attachmentRow('移動先/画像A.png')).toBeUndefined();
+  });
+
+  it('indexAttachment/moveAttachment/removeAttachmentで個別に索引を操作できる', async () => {
+    await writeFile(join(lib, '個別画像.png'), 'x', 'utf8');
+    await svc.indexAttachment('個別画像.png');
+    expect(attachmentRow('個別画像.png')).toBeDefined();
+
+    await rename(join(lib, '個別画像.png'), join(lib, '個別画像2.png'));
+    await svc.moveAttachment('個別画像.png', '個別画像2.png');
+    expect(attachmentRow('個別画像.png')).toBeUndefined();
+    expect(attachmentRow('個別画像2.png')).toBeDefined();
+
+    svc.removeAttachment('個別画像2.png');
+    expect(attachmentRow('個別画像2.png')).toBeUndefined();
+  });
+});
+
+describe('IndexerService: resolveAttachment(issue #198 解決規則)', () => {
+  it('名前一致で解決できる(大文字小文字は区別しない)', async () => {
+    await writeFile(join(lib, '画像.PNG'), 'x', 'utf8');
+    await svc.scanAll();
+    expect(svc.resolveAttachment('画像.png', '')).toBe('画像.PNG');
+    expect(svc.resolveAttachment('画像.PNG', '')).toBe('画像.PNG');
+  });
+
+  it('パス末尾一致で解決できる(大文字小文字は区別しない)', async () => {
+    await mkdir(join(lib, '深い', 'Sub'), { recursive: true });
+    await writeFile(join(lib, '深い', 'Sub', 'inner.png'), 'x', 'utf8');
+    await svc.scanAll();
+    // 完全一致
+    expect(svc.resolveAttachment('深い/Sub/inner.png', '')).toBe('深い/Sub/inner.png');
+    // パス末尾一致(浅い指定で深い実パスに解決)
+    expect(svc.resolveAttachment('Sub/inner.png', '')).toBe('深い/Sub/inner.png');
+    // 大文字小文字は区別しない
+    expect(svc.resolveAttachment('sub/INNER.PNG', '')).toBe('深い/Sub/inner.png');
+    // 一致しないパスはnull
+    expect(svc.resolveAttachment('other/inner.png', '')).toBeNull();
+  });
+
+  it('未登録のtargetはnull、..セグメントは拒否される', async () => {
+    await svc.scanAll();
+    expect(svc.resolveAttachment('存在しない.png', '')).toBeNull();
+    expect(svc.resolveAttachment('../secret.png', '')).toBeNull();
+    expect(svc.resolveAttachment('a/../../secret.png', '')).toBeNull();
+    expect(svc.resolveAttachment('', '')).toBeNull();
+  });
+
+  it('同名複数候補: 参照元文書と同じフォルダを優先する', async () => {
+    await mkdir(join(lib, 'A'), { recursive: true });
+    await mkdir(join(lib, 'B'), { recursive: true });
+    await writeFile(join(lib, 'A', '同名.png'), 'a', 'utf8');
+    await writeFile(join(lib, 'B', '同名.png'), 'b', 'utf8');
+    await svc.scanAll();
+
+    expect(svc.resolveAttachment('同名.png', 'A/文書.md')).toBe('A/同名.png');
+    expect(svc.resolveAttachment('同名.png', 'B/文書.md')).toBe('B/同名.png');
+  });
+
+  it('同名複数候補: 同フォルダが無ければ共通祖先が深い方を優先する', async () => {
+    await mkdir(join(lib, '親', '子A'), { recursive: true });
+    await mkdir(join(lib, '親', '子B'), { recursive: true });
+    await writeFile(join(lib, '親', '子A', '同名2.png'), 'a', 'utf8');
+    await writeFile(join(lib, '親', '子B', '同名2.png'), 'b', 'utf8');
+    await svc.scanAll();
+
+    // 参照元は「親/子A/孫/文書.md」。どちらの候補とも同フォルダではないが、
+    // 親/子A(共通祖先の深さ2)の方が親/子B(深さ1)より参照元に近い
+    expect(svc.resolveAttachment('同名2.png', '親/子A/孫/文書.md')).toBe('親/子A/同名2.png');
+  });
+
+  it('同名複数候補: フォルダの深さが浅い方を優先する', async () => {
+    await mkdir(join(lib, '深い', 'さらに深い'), { recursive: true });
+    await writeFile(join(lib, '浅い画像.png'), 'a', 'utf8');
+    // ファイル名が異なると別候補になるため、同名で配置し直す
+    await writeFile(join(lib, '深い', 'さらに深い', '浅い画像.png'), 'b', 'utf8');
+    await svc.scanAll();
+
+    expect(svc.resolveAttachment('浅い画像.png', '無関係/文書.md')).toBe('浅い画像.png');
+  });
 });

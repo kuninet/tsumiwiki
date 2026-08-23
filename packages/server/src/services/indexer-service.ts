@@ -2,25 +2,36 @@ import type { Dirent } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { AppDatabase } from '../db/index.js';
+import { isIndexedFileName } from '../lib/attachments.js';
 import { isProtectedPath, normalizeRelPath } from '../lib/paths.js';
 import { parseDocMeta } from './markdown-meta.js';
 
 // ライブラリインデックスサービス(設計02章2.3)
-// doc_index / doc_tags / doc_fts はライブラリから再構築可能な派生データとして管理する。
+// doc_index / doc_tags / doc_fts / attachment_index はライブラリから再構築可能な
+// 派生データとして管理する。
 // - 起動時: 全走査し、mtime/sizeが変わったファイルだけ再パース(差分リインデックス)
 // - 保存・外部変更時: 該当ファイルのみ更新
 // - 索引は「キャッシュ」であり、一部ファイルの読み込み失敗でサービス全体を
 //   止めない(失敗分はfailedPathsで報告し、他のファイルは索引を続行する)
+// - 添付(画像等)はパース不要のためstat差分のみでattachment_indexをupsertする
 
 export interface ScanResult {
-  indexed: number; // 新規または更新
+  indexed: number; // 新規または更新(文書)
   removed: number; // 消えた文書
-  unchanged: number;
+  unchanged: number; // 変更なし(文書)
   failedPaths: string[]; // 読み込み・パースに失敗した文書(継続対象)
+  attachmentsIndexed: number; // 新規または更新(添付)
+  attachmentsRemoved: number; // 消えた添付
 }
 
 interface IndexRow {
   doc_path: string;
+  updated_at: string;
+  size: number;
+}
+
+interface AttachmentIndexRow {
+  rel_path: string;
   updated_at: string;
   size: number;
 }
@@ -43,6 +54,22 @@ interface ParsedRow {
   body: string;
 }
 
+// 添付索引の1行(DB書き込み待ち)
+interface AttachmentRow {
+  relPath: string;
+  name: string;
+  nameKey: string;
+  folder: string;
+  updatedAt: string;
+  size: number;
+}
+
+// 解決候補(resolveAttachment用)
+interface AttachmentCandidate {
+  rel_path: string;
+  folder: string;
+}
+
 // フルリインデックス時のトランザクションあたり文書数
 // (1文書=1コミットにするとWALのfsyncが文書数分発生するため)
 const WRITE_BATCH_SIZE = 200;
@@ -53,10 +80,11 @@ export class IndexerService {
     private readonly libraryPath: string,
   ) {}
 
-  // ライブラリ全体を走査して差分リインデックスする
+  // ライブラリ全体を走査して差分リインデックスする(文書・添付の両方)
   async scanAll(): Promise<ScanResult> {
-    const files = new Map<string, WalkedFile>();
-    await this.walk('', files);
+    const docs = new Map<string, WalkedFile>();
+    const attachments = new Map<string, WalkedFile>();
+    await this.walk('', docs, attachments);
 
     const known = new Map<string, IndexRow>(
       (this.db.prepare('SELECT doc_path, updated_at, size FROM doc_index').all() as IndexRow[]).map(
@@ -68,7 +96,7 @@ export class IndexerService {
     const parsed: ParsedRow[] = [];
     const failedPaths: string[] = [];
     let unchanged = 0;
-    for (const [relPath, meta] of files) {
+    for (const [relPath, meta] of docs) {
       const row = known.get(relPath);
       known.delete(relPath);
       // 注意: mtime(ms)+size一致でunchanged判定のため、同一mtime tick内の
@@ -100,7 +128,42 @@ export class IndexerService {
       this.removeFile(gone);
       removed++;
     }
-    return { indexed: parsed.length, removed, unchanged, failedPaths };
+
+    // 添付索引の差分更新(パース不要。stat情報のみでupsert)
+    const knownAttachments = new Map<string, AttachmentIndexRow>(
+      (
+        this.db
+          .prepare('SELECT rel_path, updated_at, size FROM attachment_index')
+          .all() as AttachmentIndexRow[]
+      ).map((r) => [r.rel_path, r]),
+    );
+    const attachmentRows: AttachmentRow[] = [];
+    for (const [relPath, meta] of attachments) {
+      const row = knownAttachments.get(relPath);
+      knownAttachments.delete(relPath);
+      if (row && row.updated_at === meta.mtime && row.size === meta.size) continue;
+      attachmentRows.push(this.buildAttachmentRow(relPath, meta));
+    }
+    for (let i = 0; i < attachmentRows.length; i += WRITE_BATCH_SIZE) {
+      const chunk = attachmentRows.slice(i, i + WRITE_BATCH_SIZE);
+      this.db.transaction(() => {
+        for (const row of chunk) this.writeAttachmentRow(row);
+      })();
+    }
+    let attachmentsRemoved = 0;
+    for (const gone of knownAttachments.keys()) {
+      this.removeAttachment(gone);
+      attachmentsRemoved++;
+    }
+
+    return {
+      indexed: parsed.length,
+      removed,
+      unchanged,
+      failedPaths,
+      attachmentsIndexed: attachmentRows.length,
+      attachmentsRemoved,
+    };
   }
 
   // 1文書をインデックスへ反映する(新規・更新どちらも)。
@@ -129,6 +192,140 @@ export class IndexerService {
   async moveFile(oldRelPath: string, newRelPath: string): Promise<void> {
     this.removeFile(oldRelPath);
     await this.indexFile(newRelPath);
+  }
+
+  // 1添付をインデックスへ反映する(新規・更新どちらも)。stat結果のみ使う。
+  // 本アプリがNFCで書いたファイルである前提(indexFileと同じ注意書き)
+  async indexAttachment(relPath: string): Promise<void> {
+    const normalized = normalizeRelPath(relPath);
+    const abs = path.join(this.libraryPath, ...normalized.split('/'));
+    const st = await stat(abs);
+    const row = this.buildAttachmentRow(normalized, {
+      mtime: st.mtime.toISOString(),
+      size: st.size,
+      absPath: abs,
+    });
+    this.db.transaction(() => this.writeAttachmentRow(row))();
+  }
+
+  // 添付をインデックスから除去する(削除・ごみ箱移動時)
+  removeAttachment(relPath: string): void {
+    const normalized = normalizeRelPath(relPath);
+    this.db.prepare('DELETE FROM attachment_index WHERE rel_path = ?').run(normalized);
+  }
+
+  // リネーム・移動時の付け替え
+  async moveAttachment(oldRelPath: string, newRelPath: string): Promise<void> {
+    this.removeAttachment(oldRelPath);
+    await this.indexAttachment(newRelPath);
+  }
+
+  // Obsidian同等のファイル名索引解決(issue #198)。
+  // target(![[target]]の中身)をfromDocPath(参照元文書)のフォルダを起点に解決する。
+  // 解決できなければnull(呼び出し側で404にする)。
+  resolveAttachment(target: string, fromDocPath: string): string | null {
+    const normalizedTarget = this.normalizeEmbedTarget(target);
+    if (!normalizedTarget) return null;
+    const fromFolder = this.folderOfDoc(fromDocPath);
+
+    let candidates: AttachmentCandidate[];
+    if (!normalizedTarget.includes('/')) {
+      candidates = this.db
+        .prepare('SELECT rel_path, folder FROM attachment_index WHERE name_key = ?')
+        .all(normalizedTarget.toLowerCase()) as AttachmentCandidate[];
+    } else {
+      const lowerTarget = normalizedTarget.toLowerCase();
+      candidates = this.db
+        .prepare(
+          `SELECT rel_path, folder FROM attachment_index
+           WHERE lower(rel_path) = ? OR lower(rel_path) LIKE ? ESCAPE '\\'`,
+        )
+        .all(lowerTarget, `%/${this.escapeLike(lowerTarget)}`) as AttachmentCandidate[];
+    }
+
+    if (candidates.length === 0) return null;
+    if (candidates.length === 1) return candidates[0].rel_path;
+    return this.pickBestCandidate(fromFolder, candidates);
+  }
+
+  // target文字列の正規化。NFC・前後空白除去・\→/・先頭の./と/を除去。
+  // 空、または..セグメントを含む場合はnull(仕様A-4)
+  private normalizeEmbedTarget(target: string): string | null {
+    const unified = target.normalize('NFC').trim().replace(/\\/g, '/').replace(/^(\.\/|\/)+/, '');
+    if (!unified) return null;
+    const segments = unified.split('/').filter((s) => s !== '' && s !== '.');
+    if (segments.length === 0 || segments.some((s) => s === '..')) return null;
+    return segments.join('/');
+  }
+
+  // fromDocPathの親フォルダ('' = ルート)。空・不正な入力は''扱い
+  private folderOfDoc(fromDocPath: string): string {
+    if (!fromDocPath) return '';
+    try {
+      const normalized = normalizeRelPath(fromDocPath);
+      if (!normalized) return '';
+      const dir = path.posix.dirname(normalized);
+      return dir === '.' ? '' : dir;
+    } catch {
+      return '';
+    }
+  }
+
+  // LIKE用にワイルドカード文字(% _ \)をエスケープする
+  private escapeLike(s: string): string {
+    return s.replace(/[\\%_]/g, (c) => `\\${c}`);
+  }
+
+  // 複数候補から1件を優先順位で絞り込む(仕様A-4の4.)
+  // 1. 参照元と同じフォルダ 2. 共通祖先が深い 3. パスが浅い 4. 辞書順
+  private pickBestCandidate(fromFolder: string, candidates: AttachmentCandidate[]): string {
+    const fromSegments = fromFolder ? fromFolder.split('/') : [];
+    const commonDepth = (folder: string): number => {
+      const segments = folder ? folder.split('/') : [];
+      let n = 0;
+      while (n < fromSegments.length && n < segments.length && fromSegments[n] === segments[n]) n++;
+      return n;
+    };
+    const sorted = [...candidates].sort((a, b) => {
+      const aSame = a.folder === fromFolder ? 0 : 1;
+      const bSame = b.folder === fromFolder ? 0 : 1;
+      if (aSame !== bSame) return aSame - bSame;
+      const depthDiff = commonDepth(b.folder) - commonDepth(a.folder);
+      if (depthDiff !== 0) return depthDiff;
+      const segCountDiff = a.rel_path.split('/').length - b.rel_path.split('/').length;
+      if (segCountDiff !== 0) return segCountDiff;
+      if (a.rel_path < b.rel_path) return -1;
+      if (a.rel_path > b.rel_path) return 1;
+      return 0;
+    });
+    return sorted[0].rel_path;
+  }
+
+  private buildAttachmentRow(relPath: string, meta: WalkedFile): AttachmentRow {
+    const normalized = normalizeRelPath(relPath);
+    const name = path.posix.basename(normalized);
+    const folder = path.posix.dirname(normalized);
+    return {
+      relPath: normalized,
+      name,
+      nameKey: name.toLowerCase(),
+      folder: folder === '.' ? '' : folder,
+      updatedAt: meta.mtime,
+      size: meta.size,
+    };
+  }
+
+  // トランザクション内から呼ぶこと
+  private writeAttachmentRow(row: AttachmentRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO attachment_index (rel_path, name, name_key, folder, updated_at, size)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(rel_path) DO UPDATE SET
+           name = excluded.name, name_key = excluded.name_key, folder = excluded.folder,
+           updated_at = excluded.updated_at, size = excluded.size`,
+      )
+      .run(row.relPath, row.name, row.nameKey, row.folder, row.updatedAt, row.size);
   }
 
   private async parseFile(
@@ -187,7 +384,12 @@ export class IndexerService {
       .run(row.docPath, row.title, row.body);
   }
 
-  private async walk(relDir: string, out: Map<string, WalkedFile>, absDirReal?: string): Promise<void> {
+  private async walk(
+    relDir: string,
+    docs: Map<string, WalkedFile>,
+    attachments: Map<string, WalkedFile>,
+    absDirReal?: string,
+  ): Promise<void> {
     const absDir = absDirReal ?? this.libraryPath;
     let entries: Dirent[];
     try {
@@ -203,13 +405,23 @@ export class IndexerService {
       // 設定系ドットフォルダ(.git/.obsidian等)と.trash(ネスト含む)は索引しない
       if (isProtectedPath(rel) || name === '.trash') continue;
       if (entry.isDirectory()) {
-        await this.walk(rel, out, absReal);
-      } else if (entry.isFile() && name.toLowerCase().endsWith('.md')) {
-        try {
-          const st = await stat(absReal);
-          out.set(rel, { mtime: st.mtime.toISOString(), size: st.size, absPath: absReal });
-        } catch {
-          // 走査中に消えた等。スキップして継続
+        await this.walk(rel, docs, attachments, absReal);
+      } else if (entry.isFile()) {
+        const lower = name.toLowerCase();
+        if (lower.endsWith('.md')) {
+          try {
+            const st = await stat(absReal);
+            docs.set(rel, { mtime: st.mtime.toISOString(), size: st.size, absPath: absReal });
+          } catch {
+            // 走査中に消えた等。スキップして継続
+          }
+        } else if (isIndexedFileName(name)) {
+          try {
+            const st = await stat(absReal);
+            attachments.set(rel, { mtime: st.mtime.toISOString(), size: st.size, absPath: absReal });
+          } catch {
+            // 走査中に消えた等。スキップして継続
+          }
         }
       }
     }

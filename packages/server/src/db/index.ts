@@ -83,6 +83,20 @@ const MIGRATIONS: string[] = [
   ALTER TABLE drafts_new RENAME TO drafts;
   CREATE INDEX idx_drafts_updated ON drafts(updated_at);
   `,
+  // v3: 添付ファイル索引(issue #198)。![[X]]埋め込みをObsidian同様に
+  // ライブラリ全体のファイル名索引で解決するため、画像等もdoc_indexと
+  // 同じ方式(mtime+sizeの差分)でstatのみを索引する
+  `
+  CREATE TABLE attachment_index (
+    rel_path   TEXT PRIMARY KEY,   -- ライブラリ相対パス(NFC、/区切り)
+    name       TEXT NOT NULL,      -- ファイル名(NFC)
+    name_key   TEXT NOT NULL,      -- 小文字化したファイル名(大文字小文字を区別しない検索キー)
+    folder     TEXT NOT NULL,      -- 親フォルダ('' = ルート)
+    updated_at TEXT NOT NULL,      -- mtime(ISO)
+    size       INTEGER NOT NULL
+  );
+  CREATE INDEX idx_attachment_index_name ON attachment_index(name_key);
+  `,
 ];
 
 // 現在のスキーマバージョン(テスト・診断用)

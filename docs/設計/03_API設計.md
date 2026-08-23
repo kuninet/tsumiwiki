@@ -94,6 +94,7 @@
 |---|---|---|
 | POST | `/api/attachments?docPath=` | multipart `{file}`(docPathはクエリ。フィールド順非依存)→ 添付フォルダに保存+コミットし、参照名を返す |
 | GET | `/api/files/*` | ライブラリ内ファイルのraw配信(画像表示用)。Markdownは対象外。`Content-Disposition` と MIME を適切に設定 |
+| GET | `/api/embed?target=&from=` | Obsidian同等のファイル名索引(`attachment_index`。issue #198)による解決+配信。`target`(`![[target]]`相当)を`from`(参照元文書パス)のフォルダ起点で解決: 同フォルダ優先→共通祖先が深い方→パスが浅い方→辞書順。未解決は404 |
 
 ### ごみ箱(FR-DOC-07)
 

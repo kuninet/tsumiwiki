@@ -29,6 +29,9 @@ REM --- Listen address (change PORT to avoid conflicts with other Node apps) -
 set "PORT=3080"
 set "HOST=0.0.0.0"
 
+REM --- Attachment dir: same-folder (default) or a folder name under the library root
+REM set "ATTACHMENT_DIR_MODE=attachments"
+
 REM --- Backup (optional) --------------------------------------------------
 set "BACKUP_REMOTE=\\fileserver\share\tsumiwiki.git"
 set "BACKUP_PUSH_INTERVAL_MINUTES=10"
