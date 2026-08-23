@@ -1,5 +1,5 @@
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { embedSrc, parseEmbedTarget } from '../../lib/resolve-embed-src';
 import type { TsumiwikiDocStorage } from '../doc-storage';
 import { ObsidianEmbed } from './embed';
@@ -21,6 +21,11 @@ function ObsidianEmbedView({ node, editor }: NodeViewProps) {
   const target = node.attrs.target as string;
   const { file, width, height } = parseEmbedTarget(target);
   const [failed, setFailed] = useState(false);
+  // targetが変わっても(同位置ノードのattrs更新)ReactのNodeViewインスタンスは
+  // 再利用されuseStateが残るため、target変更時は失敗状態を明示的にリセットする
+  useEffect(() => {
+    setFailed(false);
+  }, [target]);
 
   if (!isImageTarget(file)) {
     return (

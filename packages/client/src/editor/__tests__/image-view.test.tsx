@@ -1,5 +1,5 @@
 import { EditorContent, useEditor } from '@tiptap/react';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { TsumiwikiDocStorage } from '../doc-storage';
 import { createEditorExtensions } from '../markdown';
@@ -89,14 +89,17 @@ describe('ImageWithResolvedSrc', () => {
       img = el as HTMLImageElement;
     });
     img!.dispatchEvent(new Event('error'));
-    let fallbackSrc: string | null;
+    let fallbackSrc: string | null = null;
     await waitFor(() => {
       fallbackSrc = img!.getAttribute('src');
       expect(fallbackSrc).toContain('/api/embed');
     });
     img!.dispatchEvent(new Event('error'));
-    await waitFor(() => {
-      expect(img!.getAttribute('src')).toBe(fallbackSrc);
+    // waitForは初回評価で条件を満たして即抜けてしまい、srcが変化してから
+    // 元に戻る/変わらないような回帰を検出できない。1tick進めてから同期的に検証する
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    expect(img!.getAttribute('src')).toBe(fallbackSrc);
   });
 });

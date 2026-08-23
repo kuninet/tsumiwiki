@@ -272,7 +272,7 @@ describe('GET /api/embed(issue #198 添付索引による解決)', () => {
     expect(res.rawPayload.equals(PNG)).toBe(true);
   }, 20_000);
 
-  it('ルート配置・フォルダ内・パス指定の4配置パターンを解決できる', async () => {
+  it('2配置(ルート・サブフォルダ)を名前一致・パス指定・パス末尾一致・fromなしの4通りで解決できる', async () => {
     const { writeFile: wf, mkdir: md } = await import('node:fs/promises');
     await wf(join(lib, 'ルート配置.png'), PNG); // ルート
     await app.indexerService.indexAttachment('ルート配置.png');
@@ -339,6 +339,30 @@ describe('GET /api/embed(issue #198 添付索引による解決)', () => {
       headers: { cookie },
     });
     expect(mdTarget.statusCode).toBe(404);
+  }, 20_000);
+
+  it('targetを配列で複数指定(?target=a&target=b)すると400になる', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/embed?target=a.png&target=b.png',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+  }, 20_000);
+
+  it('索引にあるが実体が消えたファイルへの解決は404', async () => {
+    const up = await upload('消える画像.png', PNG);
+    expect(up.statusCode).toBe(201);
+    const relPath = up.json().path as string;
+    // 索引を更新せずファイル実体だけ消す(索引が実体より古い状態を再現)
+    await rm(join(lib, relPath), { force: true });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/embed?target=${encodeURIComponent(relPath.split('/').pop() ?? '')}&from=${encodeURIComponent(docPath)}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(404);
   }, 20_000);
 
   it('アップロード直後に索引が反映され、/api/embedで即座に解決できる', async () => {

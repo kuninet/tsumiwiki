@@ -192,6 +192,20 @@ export class DocService {
     return this.config.libraryPath;
   }
 
+  // 添付索引の更新はbest-effort: 失敗しても呼び出し元の後続処理(ロック・下書きの
+  // repath等)は必ず継続する。索引はキャッシュであり、次回のscanAll・外部変更sync
+  // (設計06章6.4)で整合が回復するため
+  private async tryIndexAttachment(
+    op: () => Promise<void>,
+    context: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await op();
+    } catch (e) {
+      this.logger?.warn({ err: e, ...context }, '添付索引の更新に失敗しました(次回走査で回復)');
+    }
+  }
+
   // 文書パスとして妥当か検証して正規化する(保護パス・拡張子)
   private validateDocPath(relPath: string): string {
     const normalized = normalizeRelPath(relPath);
@@ -611,7 +625,10 @@ export class DocService {
     await this.indexer.moveFile(oldNorm, newNorm);
     // 同伴した添付も索引を付け替える(issue #198。#159の添付同伴に追随)
     for (const m of movedAttachments) {
-      await this.indexer.moveAttachment(m.oldRel, m.newRel);
+      await this.tryIndexAttachment(
+        () => this.indexer.moveAttachment(m.oldRel, m.newRel),
+        { oldRel: m.oldRel, newRel: m.newRel },
+      );
     }
     // ロック・下書きも新パスへ追随させる
     this.locks.repath(oldNorm, newNorm);
@@ -703,7 +720,7 @@ export class DocService {
     const relPath = dirNorm ? `${dirNorm}/${fileName}` : fileName;
     await this.tryCommit([relPath], `attach: ${relPath}`, author);
     // 添付索引に即時反映(issue #198。/api/embedで直後から解決できるように)
-    await this.indexer.indexAttachment(relPath);
+    await this.tryIndexAttachment(() => this.indexer.indexAttachment(relPath), { relPath });
     return { fileName, path: relPath };
   }
 
@@ -844,7 +861,7 @@ export class DocService {
     } else if (dest.toLowerCase().endsWith('.md')) {
       await this.indexer.indexFile(dest);
     } else if (isIndexedFileName(dest)) {
-      await this.indexer.indexAttachment(dest);
+      await this.tryIndexAttachment(() => this.indexer.indexAttachment(dest), { dest });
     }
     return { path: dest };
   }

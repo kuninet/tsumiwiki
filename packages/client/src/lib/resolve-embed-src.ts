@@ -67,9 +67,13 @@ export function resolveImageSrc(src: string, docFolder: string): string {
 }
 
 // ![](src)がロードに失敗したときのフォールバック: srcのファイル名部分だけを
-// embedSrcで解決し直す(添付索引による名前一致に賭ける)。絶対URLはフォールバックしない
+// embedSrcで解決し直す(添付索引による名前一致に賭ける)。絶対URLはフォールバックしない。
+// クエリ・フラグメント(`?`/`#`以降)は除去し、末尾が`/`等でファイル名が空ならnull
 export function imageFallbackSrc(src: string, docPath: string): string | null {
   if (isAbsoluteUrl(src)) return null;
-  const basename = src.split('/').pop() || src;
+  const withoutQueryOrHash = src.split(/[?#]/, 1)[0];
+  const segments = withoutQueryOrHash.split('/');
+  const basename = segments[segments.length - 1] ?? '';
+  if (!basename) return null;
   return embedSrc(basename, docPath);
 }

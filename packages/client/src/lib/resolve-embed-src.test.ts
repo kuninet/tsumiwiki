@@ -29,6 +29,14 @@ describe('parseEmbedTarget', () => {
       height: 200,
     });
   });
+
+  it('|が複数ある場合(サイズ形式でない)はサイズを無視してfileのみ返す', () => {
+    expect(parseEmbedTarget('a.png|300|x')).toEqual({ file: 'a.png' });
+  });
+
+  it('全角数字の|幅はサイズ形式と認めず無視する', () => {
+    expect(parseEmbedTarget('a.png|３００')).toEqual({ file: 'a.png' });
+  });
 });
 
 describe('embedSrc', () => {
@@ -104,5 +112,15 @@ describe('imageFallbackSrc', () => {
   it('絶対URLはnullを返す(フォールバックしない)', () => {
     expect(imageFallbackSrc('https://example.com/a.png', '文書.md')).toBeNull();
     expect(imageFallbackSrc('data:image/png;base64,AAAA', '文書.md')).toBeNull();
+  });
+
+  it('末尾が/でファイル名が空の場合はnullを返す', () => {
+    expect(imageFallbackSrc('dir/', '文書.md')).toBeNull();
+  });
+
+  it('クエリ文字列を除去してファイル名だけをembedSrcで解決する', () => {
+    expect(imageFallbackSrc('a.png?v=1', '文書.md')).toBe(
+      `/api/embed?target=${encodeURIComponent('a.png')}&from=${encodeURIComponent('文書.md')}`,
+    );
   });
 });

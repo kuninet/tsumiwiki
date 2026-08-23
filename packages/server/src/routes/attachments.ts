@@ -119,11 +119,13 @@ export function registerAttachmentRoutes(app: FastifyInstance): void {
   // Obsidian同等のファイル名索引による埋め込み解決+配信(issue #198)。
   // target: `![[target]]`の中身相当。from: 参照元文書の相対パス(任意)
   app.get('/api/embed', async (req, reply) => {
-    const { target, from } = req.query as { target?: string; from?: string };
-    if (!target) {
+    const { target, from } = req.query as { target?: unknown; from?: unknown };
+    // クエリ重複(?target=a&target=b)はfastifyが配列を渡すため文字列以外は拒否する
+    if (typeof target !== 'string' || !target) {
       return sendError(reply, 400, 'VALIDATION_ERROR', 'targetを指定してください');
     }
-    const resolved = app.indexerService.resolveAttachment(target, from ?? '');
+    const fromPath = typeof from === 'string' ? from : '';
+    const resolved = app.indexerService.resolveAttachment(target, fromPath);
     if (!resolved) {
       return sendError(reply, 404, 'NOT_FOUND', 'ファイルが見つかりません');
     }

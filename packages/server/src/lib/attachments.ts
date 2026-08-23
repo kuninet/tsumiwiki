@@ -29,5 +29,5 @@ export const MIME_BY_EXT: Readonly<Record<string, string>> = {
 // (拡張子を小文字化してMIME_BY_EXTにあるか)
 export function isIndexedFileName(name: string): boolean {
   const ext = path.posix.extname(name).toLowerCase();
-  return ext in MIME_BY_EXT;
+  return Object.hasOwn(MIME_BY_EXT, ext);
 }

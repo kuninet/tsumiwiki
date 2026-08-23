@@ -223,29 +223,37 @@ export class IndexerService {
   // Obsidian同等のファイル名索引解決(issue #198)。
   // target(![[target]]の中身)をfromDocPath(参照元文書)のフォルダを起点に解決する。
   // 解決できなければnull(呼び出し側で404にする)。
+  //
+  // SQLiteのlower()はASCII専用で非ASCII大文字(例: Ä)を含むパス指定を正しく
+  // 小文字化できないため、SQL側のlower()/LIKEは使わない。basenameのname_key
+  // (索引つき・JS toLowerCase())で候補を絞り込んでから、パス指定時は
+  // JS側の文字列比較(完全一致 or `/`区切りの末尾一致)で絞る。
   resolveAttachment(target: string, fromDocPath: string): string | null {
     const normalizedTarget = this.normalizeEmbedTarget(target);
     if (!normalizedTarget) return null;
     const fromFolder = this.folderOfDoc(fromDocPath);
+    const hasPath = normalizedTarget.includes('/');
+    const targetLower = normalizedTarget.toLowerCase();
+    const basenameLower = path.posix.basename(normalizedTarget).toLowerCase();
 
-    let candidates: AttachmentCandidate[];
-    if (!normalizedTarget.includes('/')) {
-      candidates = this.db
-        .prepare('SELECT rel_path, folder FROM attachment_index WHERE name_key = ?')
-        .all(normalizedTarget.toLowerCase()) as AttachmentCandidate[];
-    } else {
-      const lowerTarget = normalizedTarget.toLowerCase();
-      candidates = this.db
-        .prepare(
-          `SELECT rel_path, folder FROM attachment_index
-           WHERE lower(rel_path) = ? OR lower(rel_path) LIKE ? ESCAPE '\\'`,
-        )
-        .all(lowerTarget, `%/${this.escapeLike(lowerTarget)}`) as AttachmentCandidate[];
-    }
+    const byName = this.db
+      .prepare('SELECT rel_path, folder FROM attachment_index WHERE name_key = ?')
+      .all(basenameLower) as AttachmentCandidate[];
+
+    const candidates = hasPath
+      ? byName.filter((c) => {
+          const relLower = c.rel_path.toLowerCase();
+          return relLower === targetLower || relLower.endsWith(`/${targetLower}`);
+        })
+      : byName;
 
     if (candidates.length === 0) return null;
     if (candidates.length === 1) return candidates[0].rel_path;
-    return this.pickBestCandidate(fromFolder, candidates);
+    // パス指定時のみ「ヴォルトルート起点の完全パス一致」を最優先にする(仕様外/レビュー指摘)。
+    // 名前のみ指定(hasPath=false)でこれを有効にすると、ルート直下の同名ファイルが
+    // 同フォルダ優先より不当に優先されてしまうため対象外とする
+    const isExactPath = hasPath ? (relPath: string) => relPath.toLowerCase() === targetLower : () => false;
+    return this.pickBestCandidate(fromFolder, candidates, isExactPath);
   }
 
   // target文字列の正規化。NFC・前後空白除去・\→/・先頭の./と/を除去。
@@ -271,14 +279,14 @@ export class IndexerService {
     }
   }
 
-  // LIKE用にワイルドカード文字(% _ \)をエスケープする
-  private escapeLike(s: string): string {
-    return s.replace(/[\\%_]/g, (c) => `\\${c}`);
-  }
-
-  // 複数候補から1件を優先順位で絞り込む(仕様A-4の4.)
+  // 複数候補から1件を優先順位で絞り込む(仕様A-4の4. + レビュー指摘の完全パス一致優先)
+  // 0. ヴォルトルート起点の完全パスがtargetと一致(大文字小文字無視。パス指定時のみ)
   // 1. 参照元と同じフォルダ 2. 共通祖先が深い 3. パスが浅い 4. 辞書順
-  private pickBestCandidate(fromFolder: string, candidates: AttachmentCandidate[]): string {
+  private pickBestCandidate(
+    fromFolder: string,
+    candidates: AttachmentCandidate[],
+    isExactPath: (relPath: string) => boolean,
+  ): string {
     const fromSegments = fromFolder ? fromFolder.split('/') : [];
     const commonDepth = (folder: string): number => {
       const segments = folder ? folder.split('/') : [];
@@ -287,6 +295,9 @@ export class IndexerService {
       return n;
     };
     const sorted = [...candidates].sort((a, b) => {
+      const aExact = isExactPath(a.rel_path) ? 0 : 1;
+      const bExact = isExactPath(b.rel_path) ? 0 : 1;
+      if (aExact !== bExact) return aExact - bExact;
       const aSame = a.folder === fromFolder ? 0 : 1;
       const bSame = b.folder === fromFolder ? 0 : 1;
       if (aSame !== bSame) return aSame - bSame;

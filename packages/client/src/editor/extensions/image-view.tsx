@@ -1,6 +1,6 @@
 import Image from '@tiptap/extension-image';
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { imageFallbackSrc, resolveImageSrc } from '../../lib/resolve-embed-src';
 import type { TsumiwikiDocStorage } from '../doc-storage';
 
@@ -8,8 +8,6 @@ import type { TsumiwikiDocStorage } from '../doc-storage';
 // /api/files/...に解決し、404(onError)ならsrcのファイル名だけで/api/embedに
 // フォールバックする(#198)。それも失敗したら壊れた画像アイコンのまま。
 // シリアライズ(Image拡張の標準実装)には触れない
-
-type Stage = 'primary' | 'fallback';
 
 function ImageView({ node, editor }: NodeViewProps) {
   const src = node.attrs.src as string;
@@ -19,18 +17,19 @@ function ImageView({ node, editor }: NodeViewProps) {
   const docFolder = docStorage?.folder ?? '';
   const docPath = docStorage?.path ?? '';
 
-  const [stage, setStage] = useState<Stage>('primary');
-  // node.attrs.srcが変わったら(別の画像に差し替わったら)解決段階をリセットする
-  useEffect(() => {
-    setStage('primary');
-  }, [src]);
+  // 「どのsrcに対して失敗したか」を保持する。src自体が変わった場合は
+  // failedSrcと一致しなくなるため、useEffectでのリセットなしに自動でprimaryへ戻る
+  // (useEffectだと反映がコミット後になり、差し替え直後の1レンダーで旧stageのまま
+  // 新srcのfallbackを描画してしまい不要な/api/embedリクエストが発生するため)
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const stage: 'primary' | 'fallback' = failedSrc === src ? 'fallback' : 'primary';
 
   const fallback = imageFallbackSrc(src, docPath);
   const currentSrc = stage === 'primary' ? resolveImageSrc(src, docFolder) : (fallback ?? src);
 
   function handleError() {
     if (stage === 'primary' && fallback !== null) {
-      setStage('fallback');
+      setFailedSrc(src);
     }
     // fallback段階(またはフォールバック先が無い)での失敗は何もしない=壊れた画像アイコンのまま
   }

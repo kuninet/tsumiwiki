@@ -277,7 +277,7 @@ describe('IndexerService: 堅牢性(レビュー指摘対応)', () => {
 
 // 添付ファイル索引(issue #198)。ヴォルト全体のファイル名索引でObsidian同等の解決を行う
 describe('IndexerService: 添付索引(attachment_index)', () => {
-  it('ルート/サブフォルダ/サブフォルダのattachments配下の画像が索引され、日本語名もNFC正規化される', async () => {
+  it('ルート/サブフォルダ/サブフォルダのattachments配下の画像が索引される', async () => {
     await mkdir(join(lib, 'サブ', 'attachments'), { recursive: true });
     await writeFile(join(lib, 'ルート画像.png'), 'a', 'utf8');
     await writeFile(join(lib, 'サブ', 'サブ画像.jpg'), 'b', 'utf8');
@@ -302,6 +302,36 @@ describe('IndexerService: 添付索引(attachment_index)', () => {
       name: '添付画像.gif',
       folder: 'サブ/attachments',
     });
+  });
+
+  it('NFDで書かれたファイル名もNFCキーで索引・解決される', async () => {
+    // 'が' = 'か'(U+304B) + 濁点(U+3099)の分解形(NFD)で明示的に書き込む
+    const nfdName = 'が.png'.normalize('NFD');
+    expect(nfdName).not.toBe('が.png'); // 前提: 実際に分解形になっていること
+    await writeFile(join(lib, nfdName), 'x', 'utf8');
+
+    const result = await svc.scanAll();
+    expect(result.attachmentsIndexed).toBe(1);
+    expect(attachmentRow('が.png')).toMatchObject({ name: 'が.png', name_key: 'が.png' });
+    expect(svc.resolveAttachment('が.png', '')).toBe('が.png');
+  });
+
+  it('.trash直下・ネストした.trash・.obsidian配下の画像は索引されずresolveAttachmentもnull', async () => {
+    await mkdir(join(lib, '.trash'), { recursive: true });
+    await mkdir(join(lib, 'サブ', '.trash'), { recursive: true });
+    await mkdir(join(lib, '.obsidian'), { recursive: true });
+    await writeFile(join(lib, '.trash', 'ごみ.png'), 'a', 'utf8');
+    await writeFile(join(lib, 'サブ', '.trash', 'ネストごみ.png'), 'b', 'utf8');
+    await writeFile(join(lib, '.obsidian', '設定画像.png'), 'c', 'utf8');
+
+    const result = await svc.scanAll();
+    expect(result.attachmentsIndexed).toBe(0);
+    expect(attachmentRow('.trash/ごみ.png')).toBeUndefined();
+    expect(attachmentRow('サブ/.trash/ネストごみ.png')).toBeUndefined();
+    expect(attachmentRow('.obsidian/設定画像.png')).toBeUndefined();
+    expect(svc.resolveAttachment('ごみ.png', '')).toBeNull();
+    expect(svc.resolveAttachment('ネストごみ.png', '')).toBeNull();
+    expect(svc.resolveAttachment('設定画像.png', '')).toBeNull();
   });
 
   it('差分: 2回目のscanAllで変更なし、移動で旧行が消え新行が入り、削除で消える', async () => {
@@ -403,5 +433,48 @@ describe('IndexerService: resolveAttachment(issue #198 解決規則)', () => {
     await svc.scanAll();
 
     expect(svc.resolveAttachment('浅い画像.png', '無関係/文書.md')).toBe('浅い画像.png');
+  });
+
+  it('同名複数候補: 他の優先度が全て同点なら辞書順(rel_path)で決まる', async () => {
+    await mkdir(join(lib, 'X'), { recursive: true });
+    await mkdir(join(lib, 'Y'), { recursive: true });
+    await writeFile(join(lib, 'X', '辞書順.png'), 'a', 'utf8');
+    await writeFile(join(lib, 'Y', '辞書順.png'), 'b', 'utf8');
+    await svc.scanAll();
+
+    // fromFolder=''のため同フォルダ一致なし、共通祖先の深さ・セグメント数も両者同点
+    expect(svc.resolveAttachment('辞書順.png', '無関係.md')).toBe('X/辞書順.png');
+  });
+
+  it('非ASCII大文字を含むパス指定でも解決できる(SQLiteのlower()に依存しない)', async () => {
+    await mkdir(join(lib, 'Bilder'), { recursive: true });
+    await writeFile(join(lib, 'Bilder', 'Änderung.png'), 'x', 'utf8');
+    await svc.scanAll();
+
+    expect(svc.resolveAttachment('Bilder/Änderung.png', '')).toBe('Bilder/Änderung.png');
+    expect(svc.resolveAttachment('bilder/änderung.png', '')).toBe('Bilder/Änderung.png');
+  });
+
+  it('パス指定時はヴォルトルート起点の完全パス一致を他の優先度より優先する', async () => {
+    await mkdir(join(lib, 'sub'), { recursive: true });
+    await mkdir(join(lib, 'A', 'sub'), { recursive: true });
+    await writeFile(join(lib, 'sub', 'img.png'), 'a', 'utf8');
+    await writeFile(join(lib, 'A', 'sub', 'img.png'), 'b', 'utf8');
+    await svc.scanAll();
+
+    // 参照元A/doc.mdから![[sub/img.png]]は、共通祖先の深さだけならA/sub/img.pngが
+    // 優先されてしまうが、ヴォルトルート起点の完全パス一致(sub/img.png)が最優先される
+    expect(svc.resolveAttachment('sub/img.png', 'A/doc.md')).toBe('sub/img.png');
+  });
+
+  it('名前のみ指定時は完全パス一致を優先せず、同フォルダを優先する(ルート直下優先のバグ防止)', async () => {
+    await mkdir(join(lib, 'sub'), { recursive: true });
+    await writeFile(join(lib, 'img2.png'), 'a', 'utf8'); // ルート
+    await writeFile(join(lib, 'sub', 'img2.png'), 'b', 'utf8');
+    await svc.scanAll();
+
+    // 参照元sub/doc.mdからは、名前のみ指定(パスなし)なので完全パス一致は考慮せず
+    // 同フォルダのsub/img2.pngが優先される
+    expect(svc.resolveAttachment('img2.png', 'sub/doc.md')).toBe('sub/img2.png');
   });
 });

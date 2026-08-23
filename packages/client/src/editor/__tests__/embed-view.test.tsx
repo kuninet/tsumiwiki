@@ -1,5 +1,6 @@
+import type { Editor } from '@tiptap/core';
 import { EditorContent, useEditor } from '@tiptap/react';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { TsumiwikiDocStorage } from '../doc-storage';
 import { createEditorExtensions } from '../markdown';
@@ -11,7 +12,15 @@ afterEach(cleanup);
 // まだ反映されない(onCreateは初期NodeViewマウント後に発火する)。NodeView側は
 // レンダリング毎にeditor.storageを直接参照するため、ストレージ設定後にsetContentで
 // ノードを(再)生成すれば設定済みの値で描画される
-function TestEditor({ content, docPath }: { content: string; docPath: string }) {
+function TestEditor({
+  content,
+  docPath,
+  editorRef,
+}: {
+  content: string;
+  docPath: string;
+  editorRef?: { current: Editor | null };
+}) {
   const editor = useEditor({
     extensions: createEditorExtensions(),
     content: '',
@@ -19,9 +28,24 @@ function TestEditor({ content, docPath }: { content: string; docPath: string }) 
       const storage: TsumiwikiDocStorage = { folder: '', path: docPath };
       e.storage.tsumiwikiDoc = storage;
       e.commands.setContent(content);
+      if (editorRef) editorRef.current = e;
     },
   });
   return <EditorContent editor={editor} />;
+}
+
+// obsidianEmbedノードの文書内位置を探す(テスト内でtargetを差し替えるために使う)
+function findEmbedPos(editor: Editor): number {
+  let pos: number | null = null;
+  editor.state.doc.descendants((node, nodePos) => {
+    if (node.type.name === 'obsidianEmbed') {
+      pos = nodePos;
+      return false;
+    }
+    return true;
+  });
+  if (pos === null) throw new Error('obsidianEmbedノードが見つかりません');
+  return pos;
 }
 
 describe('ObsidianEmbedWithPreview', () => {
@@ -65,6 +89,40 @@ describe('ObsidianEmbedWithPreview', () => {
       expect(document.querySelector('.obsidian-embed-image img')).toBeNull();
       expect(document.body.textContent).toContain('![[a.png]]');
     });
+  });
+
+  it('target差し替えで失敗チップから画像表示に戻る', async () => {
+    const editorRef: { current: Editor | null } = { current: null };
+    render(<TestEditor content={'![[a.png]]'} docPath={'文書.md'} editorRef={editorRef} />);
+    let img: HTMLImageElement;
+    await waitFor(() => {
+      const el = document.querySelector('.obsidian-embed-image img');
+      expect(el).toBeTruthy();
+      img = el as HTMLImageElement;
+    });
+    img!.dispatchEvent(new Event('error'));
+    await waitFor(() => {
+      expect(document.querySelector('.obsidian-embed-image img')).toBeNull();
+    });
+
+    // 同位置ノードのattrsをtarget違いで更新する(ReactのNodeViewインスタンスは再利用される)
+    act(() => {
+      const editor = editorRef.current!;
+      const pos = findEmbedPos(editor);
+      editor
+        .chain()
+        .setNodeSelection(pos)
+        .updateAttributes('obsidianEmbed', { target: 'b.png' })
+        .run();
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector('.obsidian-embed-image img')).toBeTruthy();
+    });
+    const newImg = document.querySelector('.obsidian-embed-image img') as HTMLImageElement;
+    expect(newImg.getAttribute('src')).toBe(
+      `/api/embed?target=${encodeURIComponent('b.png')}&from=${encodeURIComponent('文書.md')}`,
+    );
   });
 
   it('画像以外の拡張子はチップ表示のまま(従来どおり)', async () => {
