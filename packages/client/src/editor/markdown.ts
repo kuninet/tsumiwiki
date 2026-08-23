@@ -1,7 +1,6 @@
 import { Editor, type Extensions } from '@tiptap/core';
 import CodeBlock from '@tiptap/extension-code-block';
 import Image from '@tiptap/extension-image';
-import Link from '@tiptap/extension-link';
 import Table from '@tiptap/extension-table';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
@@ -14,6 +13,7 @@ import { Markdown } from 'tiptap-markdown';
 import { CodeBlockWithPreview } from './extensions/code-block-view';
 import { ObsidianEmbed } from './extensions/embed';
 import { ObsidianEmbedWithPreview } from './extensions/embed-view';
+import { LinkWithTitle, MarkdownLinkSchemes } from './extensions/link-markdown';
 import { ImageWithResolvedSrc } from './extensions/image-view';
 import { InlineTagHighlight } from './extensions/inline-tag-highlight';
 import { ListKeymap } from './extensions/list-keymap';
@@ -36,7 +36,9 @@ export function createEditorExtensions(options: EditorExtensionOptions = {}): Ex
   return [
     StarterKit.configure({ codeBlock: false }),
     nodeViews ? CodeBlockWithPreview : CodeBlock,
-    Link.configure({ openOnClick: false, autolink: false }),
+    // 相対パス・title・file: を往復で落とさないリンク(issue #207。link-markdown.ts 参照)
+    LinkWithTitle,
+    MarkdownLinkSchemes,
     // 段落内画像(![alt](path))を分断しない。NodeViewは表示解決のみでシリアライズには無関係
     (nodeViews ? ImageWithResolvedSrc : Image).configure({ inline: true }),
     Table, // GFMパイプ表としてシリアライズされる

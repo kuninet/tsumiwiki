@@ -57,6 +57,20 @@ export function buildApp(options: BuildAppOptions) {
   // loggerInstance未指定時はログ無効(Fastifyの既定)
   const app = Fastify({ loggerInstance: logger === false ? undefined : logger });
 
+  // 想定外の例外(fs の ENAMETOOLONG/EPERM 等)で OS のエラー文字列(ライブラリの絶対パス込み)を
+  // 利用者に返さない(issue #206)。Fastify 由来の 4xx(JSON 不正・ペイロード超過等)は既定の
+  // 形式のまま、それ以外は固定文言の 500 にしてログにのみ詳細を残す
+  app.setErrorHandler((err, req, reply) => {
+    const statusCode = (err as { statusCode?: number }).statusCode;
+    if (statusCode !== undefined && statusCode >= 400 && statusCode < 500) {
+      return reply.send(err);
+    }
+    req.log.error({ err }, '未処理の例外');
+    return reply
+      .code(500)
+      .send({ error: { code: 'INTERNAL_ERROR', message: 'サーバー内部でエラーが発生しました' } });
+  });
+
   app.decorate('config', config);
   app.decorate('db', db);
 

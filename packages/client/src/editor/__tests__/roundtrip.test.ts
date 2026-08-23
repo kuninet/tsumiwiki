@@ -1,5 +1,6 @@
+import { Editor } from '@tiptap/core';
 import { describe, expect, it } from 'vitest';
-import { roundtripMarkdown } from '../markdown';
+import { createEditorExtensions, roundtripMarkdown } from '../markdown';
 
 // 往復変換テスト(FR-EDIT-06 / 設計05章5.7)
 // 方針: 1回目の変換で正規化差分(記号の統一等)は許容し、
@@ -89,4 +90,59 @@ describe('基本記法の保全', () => {
       expect(roundtripMarkdown(src).trim()).toBe(src);
     });
   }
+});
+
+describe('Markdown リンクの往復保全(issue #207)', () => {
+  it.each([
+    ['[a](sub/old.png)', '/ を含む相対パス'],
+    ['[a](sub/doc.md)', '/ を含む文書への相対パス'],
+    ['[a](a/b/c.png)', '複数階層の相対パス'],
+    ['[a](./sub/old.png)', './ 始まりの相対パス'],
+    ['[a](../up.png)', '../ 始まりの相対パス'],
+    ['[a](old.png)', 'ファイル名のみ'],
+    ['[a](#anchor)', 'アンカーのみ'],
+    ['[a](https://example.com/x?y=1)', '絶対URL'],
+    ['[a](mailto:x@example.com)', 'mailto'],
+    ['[a](file:///c/x.txt)', 'file スキーム(FR-LINK-02)'],
+    ['[a](file://server/share/x.txt)', 'UNC 相当の file スキーム'],
+  ])('%s が原文のまま保全される(%s)', (source) => {
+    expect(roundtripMarkdown(source)).toBe(source);
+  });
+
+  it('title 付きリンクの title が保全される', () => {
+    expect(roundtripMarkdown('[説明](old.png "タイトル")')).toBe('[説明](old.png "タイトル")');
+    expect(roundtripMarkdown('[説明](sub/old.png "タイトル")')).toBe('[説明](sub/old.png "タイトル")');
+  });
+
+  // Markdown をパースした結果に link マークが含まれるか(リンク化されたか)
+  function hasLinkMark(markdown: string): boolean {
+    const editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false }),
+      content: markdown,
+    });
+    try {
+      return JSON.stringify(editor.getJSON()).includes('"type":"link"');
+    } finally {
+      editor.destroy();
+    }
+  }
+
+  it('許可スキームと相対パスはリンクになる', () => {
+    expect(hasLinkMark('[a](sub/old.png)')).toBe(true);
+    expect(hasLinkMark('[a](file:///c/x.txt)')).toBe(true);
+    expect(hasLinkMark('[a](https://example.com)')).toBe(true);
+  });
+
+  it('実行系スキームはリンクにならない(XSS 防止)', () => {
+    for (const source of [
+      '[a](javascript:alert(1))',
+      '[a](JAVASCRIPT:alert(1))',
+      '[a](vbscript:x)',
+      '[a](data:text/html;base64,AAAA)',
+      // 実体参照で空白を挟んだ偽装(ブラウザは空白を無視して javascript: と解釈する)
+      '[a](java&#9;script:alert(1))',
+    ]) {
+      expect(hasLinkMark(source), source).toBe(false);
+    }
+  });
 });
