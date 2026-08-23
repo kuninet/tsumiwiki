@@ -121,6 +121,25 @@ function rewriteImageSrcFile(src: string, to: string): string {
   return `${to}${suffix}`;
 }
 
+// `[[ old.png ]]`/`[[old.png#anchor|別名]]` のtarget属性(from・trim済み)をtoに置き換える。
+// 前後の空白・`#anchor` はそのまま保持する(別名はalias属性に分離されておりtargetには含まれない)
+function rewriteWikilinkTargetFile(target: string, to: string): string {
+  const hashOrQueryIdx = target.search(/[?#]/);
+  const base = hashOrQueryIdx === -1 ? target : target.slice(0, hashOrQueryIdx);
+  const suffix = hashOrQueryIdx === -1 ? '' : target.slice(hashOrQueryIdx);
+  const leadingWs = /^\s*/.exec(base)?.[0] ?? '';
+  const trailingWs = /\s*$/.exec(base)?.[0] ?? '';
+  return `${leadingWs}${to}${trailingWs}${suffix}`;
+}
+
+// `[説明](old.png "title")` のhref(from。`?query`・`#anchor`を含む場合はそこまで)をtoに置き換える。
+// `?query`・`#anchor` はそのまま保持する
+function rewriteLinkHrefFile(href: string, to: string): string {
+  const hashOrQueryIdx = href.search(/[?#]/);
+  const suffix = hashOrQueryIdx === -1 ? '' : href.slice(hashOrQueryIdx);
+  return `${to}${suffix}`;
+}
+
 export function DocView({
   doc,
   currentUser,
@@ -589,22 +608,32 @@ export function DocView({
   }
 
   // サーバーから返る replacements(この文書で実際に書き換えたtarget→新target)に厳密一致する
-  // ノード(obsidianEmbed / image)だけをProseMirrorトランザクションで置換する。
-  // 一致が無ければ何もしない。戻り値は実際に置換したかどうか(呼び出し側のキャッシュ更新判定に使う)。
+  // ノード(obsidianEmbed / image / wikilink)・マーク(text上のlinkマークのhref)だけを
+  // ProseMirrorトランザクションで置換する。一致が無ければ何もしない。
+  // 戻り値は実際に置換したかどうか(呼び出し側のキャッシュ更新判定に使う)。
   // dispatch前にsuppressNextUpdateRefを立て、この1回だけonUpdateのdirty化を抑止する
   // (#199: サーバー側で既にファイルを書き換え済みのため、この置換自体は未保存編集として扱わない)
+  //
+  // Opusレビュー中A: 以前はobsidianEmbed/imageしか走査しておらず、サーバーが書き換える
+  // `[[old.png]]`(wikilinkノード)・`[説明](old.png)`(linkマーク)がエディタに追随せず、
+  // 次の保存でサーバーの書き換えが巻き戻ってしまうバグがあった(updatedAtは更新済みのため
+  // 保存時の競合検知にも掛からず、リンク切れが静かに発生する)
   function applyAttachmentReplacementsToEditor(
     replacements: { from: string; to: string }[],
   ): boolean {
     if (!editor || editor.isDestroyed || replacements.length === 0) return false;
     const { state } = editor;
+    const linkMarkType = state.schema.marks.link;
     let tr = state.tr;
     let changed = false;
     state.doc.descendants((node, pos) => {
       if (node.type.name === 'obsidianEmbed') {
         const target = node.attrs.target as string;
         const { file } = parseEmbedTarget(target);
-        const hit = replacements.find((r) => r.from === file.trim());
+        // 軽微1: image側(src.split(/[?#]/,1)[0])と判定基準を揃える
+        // (parseEmbedTargetは既に#anchorを除去済みだが、?queryは対象外のため念のため揃える)
+        const base = (file.split(/[?#]/, 1)[0] ?? '').trim();
+        const hit = replacements.find((r) => r.from === base);
         if (hit) {
           const nextTarget = rewriteEmbedTargetFile(target, hit.to);
           if (nextTarget !== target) {
@@ -621,6 +650,34 @@ export function DocView({
           if (nextSrc !== src) {
             tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: nextSrc });
             changed = true;
+          }
+        }
+      } else if (node.type.name === 'wikilink') {
+        const target = node.attrs.target as string;
+        const base = (target.split(/[?#]/, 1)[0] ?? '').trim();
+        const hit = replacements.find((r) => r.from === base);
+        if (hit) {
+          const nextTarget = rewriteWikilinkTargetFile(target, hit.to);
+          if (nextTarget !== target) {
+            tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, target: nextTarget });
+            changed = true;
+          }
+        }
+      } else if (node.isText && linkMarkType) {
+        const mark = node.marks.find((m) => m.type === linkMarkType);
+        if (mark) {
+          const href = mark.attrs.href as string;
+          const base = (href.split(/[?#]/, 1)[0] ?? '').trim();
+          const hit = replacements.find((r) => r.from === base);
+          if (hit) {
+            const nextHref = rewriteLinkHrefFile(href, hit.to);
+            if (nextHref !== href) {
+              const from = pos;
+              const to = pos + node.nodeSize;
+              tr = tr.removeMark(from, to, linkMarkType);
+              tr = tr.addMark(from, to, linkMarkType.create({ ...mark.attrs, href: nextHref }));
+              changed = true;
+            }
           }
         }
       }

@@ -928,4 +928,14 @@ describe('Opusレビュー指摘の追加テスト(issue #199)', () => {
     );
     expect(entry.replacements).toHaveLength(2);
   }, 20_000);
+
+  it('【中B】Markdown/Obsidian記法上の意味を持つ文字(#・]・(・)・`)を含む新名は400', async () => {
+    const up = await uploadTo(docPath, '記法文字対象.png');
+    for (const newName of ['a#b.png', 'a]b.png', 'a(b).png', 'a`b.png']) {
+      const res = await api('POST', '/api/attachments/rename', { path: up.path, newName });
+      expect(res.statusCode).toBe(400);
+      // 利用者が原因を判断できる文言を返す(固定の「パスが不正です」ではない)
+      expect(res.json().error.message).toContain('リンク記法');
+    }
+  }, 20_000);
 });

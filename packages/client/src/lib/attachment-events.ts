@@ -18,8 +18,28 @@ export interface AttachmentChangedDetail {
   names: string[];
 }
 
+// #199軽微4: 再取得用のキャッシュバスター番号(reloadKey)をNodeViewのローカルstateだけに
+// 持たせると、タブ切替等でNodeViewが再マウントされたときに`v=`が失われる。再マウント後の
+// 初回レンダーでも同じ(またはそれ以上の)番号を付けられるよう、basename単位の世代カウンタを
+// モジュールスコープで保持する(ページを離れずSPA内で戻ってきた場合のみ有効。フルリロード後は
+// HTTPキャッシュのmax-ageが切れていれば問題にならない)
+const generationByName = new Map<string, number>();
+
+export function getAttachmentGeneration(name: string): number {
+  return generationByName.get(name.toLowerCase()) ?? 0;
+}
+
+// テスト用: モジュールスコープの世代カウンタをリセットする(他テストの影響を受けないように)
+export function resetAttachmentGenerations(): void {
+  generationByName.clear();
+}
+
 export function dispatchAttachmentChanged(names: string[]): void {
   if (names.length === 0) return;
+  for (const name of names) {
+    const key = name.toLowerCase();
+    generationByName.set(key, (generationByName.get(key) ?? 0) + 1);
+  }
   window.dispatchEvent(
     new CustomEvent<AttachmentChangedDetail>(ATTACHMENT_CHANGED_EVENT, { detail: { names } }),
   );

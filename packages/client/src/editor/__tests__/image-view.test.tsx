@@ -1,11 +1,16 @@
 import { EditorContent, useEditor } from '@tiptap/react';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { dispatchAttachmentChanged, resetAttachmentGenerations } from '../../lib/attachment-events';
 import type { TsumiwikiDocStorage } from '../doc-storage';
 import { createEditorExtensions } from '../markdown';
 
 // vitestのglobals無効構成ではTesting Libraryの自動cleanupが効かないため明示する
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // #199軽微4: reloadKeyの世代カウンタはモジュールスコープのため、テスト間の汚染を避ける
+  resetAttachmentGenerations();
+});
 
 // tsumiwikiDocストレージはeditor.storageに直接書き込む値のためエディタ生成時には
 // まだ反映されない(onCreateは初期NodeViewマウント後に発火する)。NodeView側は
@@ -248,17 +253,15 @@ describe('ImageWithResolvedSrc の画像メニュー(#199)', () => {
       expect(document.querySelector('.attachment-menu-button')).toBeNull();
     });
 
-    // 無関係な名前のイベントでは何も起きない
-    window.dispatchEvent(
-      new CustomEvent('tsumiwiki:attachment-changed', { detail: { names: ['other.png'] } }),
-    );
+    // 無関係な名前のイベントでは何も起きない。dispatchAttachmentChanged経由で発火する
+    // (モジュールスコープの世代カウンタも一緒に更新されるため、window.dispatchEventで
+    // 直接CustomEventを組み立てない)
+    dispatchAttachmentChanged(['other.png']);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(document.querySelector('.attachment-menu-button')).toBeNull();
 
     // 一致する名前(basename)のイベントで壊れた状態が解け、primaryから再取得される
-    window.dispatchEvent(
-      new CustomEvent('tsumiwiki:attachment-changed', { detail: { names: ['a.png'] } }),
-    );
+    dispatchAttachmentChanged(['a.png']);
     await waitFor(() => {
       expect(img!.getAttribute('src')).toBe(`/api/files/${encodeURIComponent('フォルダ')}/sub/a.png?v=1`);
     });

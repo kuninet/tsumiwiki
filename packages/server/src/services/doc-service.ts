@@ -111,17 +111,33 @@ export function sanitizeTitle(title: string): string {
 // 避けるため。NFC正規化・前後空白除去のみ行い、以降は不正なら例外。
 function validateAttachmentName(name: string): string {
   const normalized = name.normalize('NFC').trim();
-  if (!normalized) throw new InvalidPathError(name);
-  if (/[\u0000-\u001f\u007f]/.test(normalized)) throw new InvalidPathError(name);
-  if ([...normalized].some((c) => FORBIDDEN_CHAR_MAP[c] !== undefined)) {
-    throw new InvalidPathError(name);
+  if (!normalized) throw new InvalidPathError(name, 'ファイル名を入力してください');
+  if (/[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new InvalidPathError(name, 'ファイル名に制御文字は使えません');
   }
-  if (normalized.startsWith('.') || /[. ]$/.test(normalized)) throw new InvalidPathError(name);
+  if ([...normalized].some((c) => FORBIDDEN_CHAR_MAP[c] !== undefined)) {
+    throw new InvalidPathError(name, 'ファイル名に / \\ : * ? " < > | は使えません');
+  }
+  // Markdown/Obsidian記法上の意味を持つ文字も拒否する(issue #199 再レビュー中B)。
+  // 例: `a#b.png`は`![[a#b.png]]`で`#`以降がアンカー扱いになり埋め込みが解決不能になる、
+  // `]`・`(`・`)`・バッククォート入りはWIKILINK_REWRITE_RE/MD_LINK_REWRITE_REで
+  // targetとして捕捉できず、以後の参照検出・リネーム対象から外れてしまう。
+  // 既存ファイルの表示・添付索引解決には影響しない(「この名前へ変更する」操作だけを拒否する)
+  if (/[#[\]()`]/.test(normalized)) {
+    throw new InvalidPathError(name, 'ファイル名に # [ ] ( ) ` は使えません(リンク記法と衝突するため)');
+  }
+  if (normalized.startsWith('.') || /[. ]$/.test(normalized)) {
+    throw new InvalidPathError(name, 'ファイル名の先頭の . や末尾の . / 空白は使えません');
+  }
   // 多くのファイルシステムはファイル名をUTF-8で255byteまでしか扱えない(NFR-COMP-04)
-  if (Buffer.byteLength(normalized, 'utf8') > 255) throw new InvalidPathError(name);
+  if (Buffer.byteLength(normalized, 'utf8') > 255) {
+    throw new InvalidPathError(name, 'ファイル名が長すぎます');
+  }
   const ext = path.posix.extname(normalized);
   const stem = ext ? normalized.slice(0, normalized.length - ext.length) : normalized;
-  if (WINDOWS_RESERVED_RE.test(stem)) throw new InvalidPathError(name);
+  if (WINDOWS_RESERVED_RE.test(stem)) {
+    throw new InvalidPathError(name, 'Windows の予約名(CON, PRN, AUX, NUL, COM1〜9, LPT1〜9)は使えません');
+  }
   return normalized;
 }
 
@@ -949,7 +965,7 @@ export class DocService {
     }
     if (candidateExt !== oldExt) {
       // 画像形式の変更はしない
-      throw new InvalidPathError(newName);
+      throw new InvalidPathError(newName, `拡張子は ${oldExt} のまま変更できません`);
     }
 
     const dir = path.posix.dirname(normalized);

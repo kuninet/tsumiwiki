@@ -3,6 +3,7 @@ import { type MouseEvent as ReactMouseEvent, useEffect, useState } from 'react';
 import {
   ATTACHMENT_CHANGED_EVENT,
   type AttachmentChangedDetail,
+  getAttachmentGeneration,
   withCacheBuster,
 } from '../../lib/attachment-events';
 import { embedSrc, isAbsoluteUrl, parseEmbedTarget } from '../../lib/resolve-embed-src';
@@ -41,17 +42,21 @@ function ObsidianEmbedView({ node, editor }: NodeViewProps) {
   const failed = failedTarget === target;
   // #199実機確認: 削除/リネーム後、ブラウザが同じURLの<img>を再取得しないため
   // 古い画像が残り続ける不具合への対応。ATTACHMENT_CHANGED_EVENTを受けたら
-  // このノードのbasenameが対象に含まれる場合だけ再取得(キャッシュバスター付与)する
-  const [reloadKey, setReloadKey] = useState(0);
+  // このノードのbasenameが対象に含まれる場合だけ再取得(キャッシュバスター付与)する。
+  // #199軽微4: reloadKeyの初期値もモジュールスコープの世代カウンタから読むことで、
+  // タブ切替等でこのNodeViewが再マウントされても`v=`が失われず、HTTPキャッシュ
+  // (max-age=60)から消えた画像が再表示されてしまう問題を避ける
+  const [reloadKey, setReloadKey] = useState(() => getAttachmentGeneration(basenameOf(file)));
 
   useEffect(() => {
+    setReloadKey(getAttachmentGeneration(basenameOf(file)));
     function handleAttachmentChanged(e: Event) {
       const detail = (e as CustomEvent<AttachmentChangedDetail>).detail;
       if (!detail?.names.some((name) => name.toLowerCase() === basenameOf(file).toLowerCase())) {
         return;
       }
       setFailedTarget(null);
-      setReloadKey((k) => k + 1);
+      setReloadKey(getAttachmentGeneration(basenameOf(file)));
     }
     window.addEventListener(ATTACHMENT_CHANGED_EVENT, handleAttachmentChanged);
     return () => window.removeEventListener(ATTACHMENT_CHANGED_EVENT, handleAttachmentChanged);

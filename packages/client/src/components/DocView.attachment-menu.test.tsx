@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import type { DocResponse, User } from '@tsumiwiki/shared';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resetAttachmentGenerations } from '../lib/attachment-events';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
@@ -83,6 +84,8 @@ describe('DocView の画像管理メニュー(#199)', () => {
     useEditStore.setState({ mode: 'view', dirty: false, lockedPath: null, lastDraftSavedAt: null });
     useToastStore.setState({ toast: null });
     useUIStore.getState().resetEditorChrome();
+    // #199軽微4: reloadKeyの世代カウンタはモジュールスコープのため、テスト間の汚染を避ける
+    resetAttachmentGenerations();
   });
 
   it('右クリック→名前を変更で、リネームAPIを呼びreplacementsに厳密一致するノードだけ書き換わる(重大1)', async () => {
@@ -145,6 +148,72 @@ describe('DocView の画像管理メニュー(#199)', () => {
       expect(useToastStore.getState().toast?.message).toBe(
         '名前を変更しました(1件の文書の参照を更新)',
       );
+    });
+  });
+
+  it('wikilink([[old.png]])・linkマーク([説明](old.png))もreplacementsに従って書き換わる(中A)', async () => {
+    const docWithLinks: DocResponse = {
+      ...DOC,
+      body: '![[old.png]]\n\n[[old.png]]\n\n[説明](old.png)\n',
+    };
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/attachments/resolve': { path: 'old.png', name: 'old.png' },
+      'POST /api/attachments/rename': {
+        path: 'new.png',
+        name: 'new.png',
+        rewrittenDocs: [
+          {
+            path: 'メモ.md',
+            updatedAt: '2026-08-23T00:00:00+09:00',
+            // 埋め込み・wikilink・linkはいずれも同じtarget文字列'old.png'を参照するため
+            // replacementsは1件で3箇所すべてをカバーする
+            replacements: [{ from: 'old.png', to: 'new.png' }],
+          },
+        ],
+      },
+      'PUT /api/docs': { updatedAt: '2026-08-23T00:10:00+09:00' },
+    });
+    renderDocView(docWithLinks);
+
+    await openEmbedMenuAndClick('名前を変更');
+    const input = await screen.findByLabelText('新しいファイル名');
+    fireEvent.change(input, { target: { value: 'new.png' } });
+    fireEvent.click(screen.getByRole('button', { name: '変更' }));
+
+    // embed: target=new.png
+    await waitFor(() => {
+      const img = document.querySelector('.obsidian-embed-image img') as HTMLImageElement | null;
+      expect(img?.getAttribute('src')).toContain(encodeURIComponent('new.png'));
+    });
+
+    // wikilink: data-target=new.png(NodeView無しのプレーンノードなのでrenderHTMLの属性を見る)
+    await waitFor(() => {
+      const wikilinkEl = document.querySelector('.wikilink') as HTMLElement | null;
+      expect(wikilinkEl?.getAttribute('data-target')).toBe('new.png');
+    });
+
+    // linkマーク: href=new.png
+    const anchor = screen.getByText('説明').closest('a');
+    expect(anchor?.getAttribute('href')).toBe('new.png');
+
+    // 別の編集(タグ削除)でdirty化してから保存し、PUTのbodyにも3箇所ともnew.pngが
+    // 反映されている(=getMarkdown()に反映されている)ことを確認する
+    fireEvent.click(screen.getByRole('button', { name: 'タグ #設計 を削除' }));
+    await waitFor(() => {
+      expect((screen.getByRole('button', { name: /保存/ }) as HTMLButtonElement).disabled).toBe(
+        false,
+      );
+    });
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+
+    await waitFor(() => {
+      const saveCall = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs');
+      expect(saveCall).toBeTruthy();
+      expect(saveCall!.body).toMatchObject({
+        body: '![[new.png]]\n\n[[new.png]]\n\n[説明](new.png)',
+      });
     });
   });
 
