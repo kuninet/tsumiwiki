@@ -268,7 +268,7 @@ export function FolderTree() {
       { path: oldFolder, newPath },
       {
         onSuccess: (data) => {
-          // #212 展開状態を新パスに付け替える。付け替えないと refetch 後に折り畳まれて
+          // #216 展開状態を新パスに付け替える。付け替えないと refetch 後に折り畳まれて
           // 見えてサブフォルダが消えたように見える(=リネームが反映されていない体感)
           repathExpandedFolder(oldFolder, data.path);
           const nowPath = currentPathRef.current;
@@ -533,7 +533,7 @@ export function FolderTree() {
           oldPath = node.path;
           newPath = data.path;
           kind = 'folder';
-          // #212 展開状態を新パスに付け替える(一括移動経路)
+          // #216 展開状態を新パスに付け替える(一括移動経路)
           repathExpandedFolder(oldPath, newPath);
         }
         succeeded++;
@@ -613,7 +613,7 @@ export function FolderTree() {
         { path: oldPath, newPath },
         {
           onSuccess: (data) => {
-            // #212 展開状態を新パスに付け替える(D&D経路)
+            // #216 展開状態を新パスに付け替える(D&D経路)
             repathExpandedFolder(oldPath, data.path);
           },
         },

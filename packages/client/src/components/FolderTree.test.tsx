@@ -136,7 +136,7 @@ describe('FolderTree', () => {
     expect(await screen.findByTestId('inline-rename-input')).toBeTruthy();
   });
 
-  it('#212 サブフォルダを持つフォルダをリネームしても、展開状態が新パスに追従して子が消えない', async () => {
+  it('#216 サブフォルダを持つフォルダをリネームしても、展開状態が新パスに追従して子が消えない', async () => {
     // ネスト構造: 親 → 親/子 → 親/子/メモ.md
     const nested = {
       folders: ['親', '親/子'],
@@ -207,6 +207,161 @@ describe('FolderTree', () => {
     expect(screen.getByText('子')).toBeTruthy();
     expect(useUIStore.getState().expandedFolders.has('新親')).toBe(true);
     expect(useUIStore.getState().expandedFolders.has('親')).toBe(false);
+  });
+
+  it('#216 深いネスト(親と親/子の両方展開)のリネームで prefix 経路が新パスに追従する', async () => {
+    // 親も 親/子 も両方 expanded になっている状態でリネームすると、
+    // repathExpandedFolder の `startsWith(${oldPath}/)` 分岐が正しく効いて
+    // 新親/子 まで展開状態を維持する必要がある(#216 の主目的の一つ)
+    const nested = {
+      folders: ['親', '親/子', '親/子/孫'],
+      docs: [
+        { path: '親/子/孫/メモ.md', title: 'メモ', folder: '親/子/孫', updatedAt: '2026-08-23T00:00:00+09:00' },
+      ],
+    };
+    const nestedAfter = {
+      folders: ['新親', '新親/子', '新親/子/孫'],
+      docs: [
+        { path: '新親/子/孫/メモ.md', title: 'メモ', folder: '新親/子/孫', updatedAt: '2026-08-23T00:00:00+09:00' },
+      ],
+    };
+    let renamed = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        const method = (init?.method ?? 'GET').toUpperCase();
+        const [reqPath] = url.split('?');
+        const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+        if (method === 'GET' && reqPath === '/api/tree') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve(renamed ? nestedAfter : nested),
+          });
+        }
+        if (method === 'POST' && reqPath === '/api/folders/move') {
+          const b = body as { newPath: string };
+          renamed = true;
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ path: b.newPath }),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+      }),
+    );
+    // 事前に「親」「親/子」両方を展開状態としてストアに積む
+    useUIStore.setState({ expandedFolders: new Set(['親', '親/子']) });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<FolderTree />} />
+            <Route path="/doc/*" element={<FolderTree />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // 深いネストの孫まで見えている(親と親/子 が展開されているため)
+    expect(await screen.findByText('孫')).toBeTruthy();
+
+    // 親を F2 → 新親 にリネーム
+    const parentRow = (await screen.findByText('親')).closest('button')!;
+    parentRow.focus();
+    fireEvent.keyDown(parentRow, { key: 'F2' });
+    const input = await screen.findByTestId('inline-rename-input');
+    fireEvent.change(input, { target: { value: '新親' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    // 新親/子/孫 まで expanded が付け替わっており、孫が引き続き見える
+    await waitFor(() => expect(screen.getByText('新親')).toBeTruthy());
+    expect(screen.getByText('子')).toBeTruthy();
+    expect(screen.getByText('孫')).toBeTruthy();
+    const exp = useUIStore.getState().expandedFolders;
+    expect(exp.has('新親')).toBe(true);
+    expect(exp.has('新親/子')).toBe(true);
+    expect(exp.has('親')).toBe(false);
+    expect(exp.has('親/子')).toBe(false);
+  });
+
+  it('#216 フォルダを D&D で別フォルダへ移動しても展開状態が新パスに追従する', async () => {
+    // 移動元: A/子(展開)、移動先: B(空)。A/子 を B の中にドロップして B/子 へ。
+    const initial = {
+      folders: ['A', 'A/子', 'B'],
+      docs: [
+        { path: 'A/子/メモ.md', title: 'メモ', folder: 'A/子', updatedAt: '2026-08-23T00:00:00+09:00' },
+      ],
+    };
+    const after = {
+      folders: ['A', 'B', 'B/子'],
+      docs: [
+        { path: 'B/子/メモ.md', title: 'メモ', folder: 'B/子', updatedAt: '2026-08-23T00:00:00+09:00' },
+      ],
+    };
+    let moved = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        const method = (init?.method ?? 'GET').toUpperCase();
+        const [reqPath] = url.split('?');
+        const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+        if (method === 'GET' && reqPath === '/api/tree') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve(moved ? after : initial),
+          });
+        }
+        if (method === 'POST' && reqPath === '/api/folders/move') {
+          const b = body as { newPath: string };
+          moved = true;
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ path: b.newPath }),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+      }),
+    );
+    // 「A」「A/子」を展開状態にしておく
+    useUIStore.setState({ expandedFolders: new Set(['A', 'A/子']) });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<FolderTree />} />
+            <Route path="/doc/*" element={<FolderTree />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // 事前確認: A/子 の中のメモが見えている
+    expect(await screen.findByText('メモ')).toBeTruthy();
+
+    // A/子 を B にドラッグアンドドロップ
+    const src = (await screen.findByText('子')).closest('button')!;
+    const dst = (await screen.findByText('B')).closest('button')!;
+    fireEvent.dragStart(src);
+    fireEvent.dragEnter(dst);
+    fireEvent.dragOver(dst);
+    fireEvent.drop(dst);
+    fireEvent.dragEnd(src);
+
+    // 展開状態が A/子 → B/子 に付け替わる
+    await waitFor(() => {
+      const exp = useUIStore.getState().expandedFolders;
+      expect(exp.has('B/子')).toBe(true);
+    });
+    const exp = useUIStore.getState().expandedFolders;
+    expect(exp.has('A/子')).toBe(false);
+    // A 自体は動いていないので expanded のまま
+    expect(exp.has('A')).toBe(true);
   });
 
   it('Deleteキーで削除確認ダイアログが開く', async () => {
