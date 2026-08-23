@@ -14,7 +14,7 @@ import { ApiRequestError } from '../api/client';
 import { isAllowedLinkUrl } from '../lib/allowed-link';
 import { docQueryKey, useTree } from '../api/docs';
 import { useExpandTemplate } from '../api/templates';
-import type { AttachmentMenuRequest } from '../editor/doc-storage';
+import type { AttachmentLightboxRequest, AttachmentMenuRequest } from '../editor/doc-storage';
 import { createEditorExtensions } from '../editor/markdown';
 import { parseMarkdownFragment } from '../editor/parse-fragment';
 import '../editor/editor.css';
@@ -24,13 +24,14 @@ import { dispatchAttachmentChanged } from '../lib/attachment-events';
 import { titleFromPath } from '../lib/doc-path';
 import { handleWikilinkClick } from '../lib/handle-wikilink-click';
 import { removeInlineTag, renameInlineTag } from '../lib/inline-tag-rewrite';
-import { parseEmbedTarget } from '../lib/resolve-embed-src';
+import { isPdfFile, parseEmbedTarget, toFilesUrl } from '../lib/resolve-embed-src';
 import { saveBadge } from '../lib/save-badge';
 import { registerTabActions } from '../lib/tab-actions-registry';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
 import { contentWidthMaxClass, useUserSettingsStore } from '../stores/user-settings';
+import { AttachmentLightbox } from './AttachmentLightbox';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ContextMenu } from './ContextMenu';
 import { EditorToolbar } from './EditorToolbar';
@@ -163,6 +164,8 @@ export function DocView({
   const [attachmentMenu, setAttachmentMenu] = useState<
     (AttachmentMenuRequest & { resolved: { path: string; name: string } }) | null
   >(null);
+  // #211: 画像クリック/PDFの「拡大表示」メニューで開くライトボックスの表示状態
+  const [lightbox, setLightbox] = useState<AttachmentLightboxRequest | null>(null);
   const [renameDialog, setRenameDialog] = useState<{
     resolved: { path: string; name: string };
   } | null>(null);
@@ -247,6 +250,11 @@ export function DocView({
   const openAttachmentMenu = useRef((req: AttachmentMenuRequest) => {
     handleOpenAttachmentMenuRef.current(req);
   }).current;
+  // #211: setLightbox(useStateのセッター)は常に同一参照のため、openAttachmentMenuのような
+  // ref経由の間接呼び出しは不要で直接ラップするだけでNodeViewに渡せる安定参照になる
+  const openAttachmentLightbox = useRef((req: AttachmentLightboxRequest) => {
+    setLightbox(req);
+  }).current;
   // 添付リネームでエディタ内ノードをプログラム的に書き換えるとき、その1回だけ
   // onUpdate→session.updateBody(dirty化)を抑止するフラグ。既にサーバー側でファイルを
   // 書き換え済みのため、この置換自体はユーザーの未保存編集として扱わない
@@ -263,6 +271,7 @@ export function DocView({
         folder: folderOfPath(docPathRef.current),
         path: docPathRef.current,
         openAttachmentMenu,
+        openAttachmentLightbox,
       };
     },
     onUpdate: ({ editor: e }) => {
@@ -309,8 +318,16 @@ export function DocView({
       folder: folderOfPath(doc.path),
       path: doc.path,
       openAttachmentMenu,
+      openAttachmentLightbox,
     };
-  }, [editor, doc.path, openAttachmentMenu]);
+  }, [editor, doc.path, openAttachmentMenu, openAttachmentLightbox]);
+
+  // #211: タブ切替等でdoc.pathが変わったら、前の文書で開いたままのライトボックス/
+  // 添付メニューは意味を失うので明示的に閉じる(レビュー中#9)
+  useEffect(() => {
+    setLightbox(null);
+    setAttachmentMenu(null);
+  }, [doc.path]);
 
   useEffect(() => {
     if (!editor) return;
@@ -556,6 +573,17 @@ export function DocView({
   // NodeViewに渡すopenAttachmentMenuは生成時に固定される安定参照のため、
   // 実処理を持つ最新のhandleOpenAttachmentMenuを毎レンダリングでrefに反映する
   handleOpenAttachmentMenuRef.current = handleOpenAttachmentMenu;
+
+  // #211 PDFの「拡大表示」: attachmentMenu.resolvedは既に解決済みのため/api/embedを経由せず
+  // /api/files/...を直接組み立てる。埋め込みiframeと同じページを開けるよう、
+  // menuに乗ってきたanchor(`#page=3`等)をsrc末尾のfragmentに引き継ぐ(レビュー重大#5)
+  function handleOpenAttachmentLightboxFromMenu() {
+    if (!attachmentMenu) return;
+    const { resolved, anchor } = attachmentMenu;
+    const base = toFilesUrl(resolved.path);
+    const src = anchor ? `${base}#${encodeURI(anchor)}` : base;
+    setLightbox({ kind: 'pdf', src, alt: resolved.name });
+  }
 
   function handleCopyAttachmentPath() {
     if (!attachmentMenu) return;
@@ -1021,12 +1049,16 @@ export function DocView({
         />
       )}
 
-      {/* #199 画像の管理メニュー */}
+      {/* #199 画像の管理メニュー / #211 PDFの拡大表示 */}
       {attachmentMenu && (
         <ContextMenu
           x={attachmentMenu.x}
           y={attachmentMenu.y}
           items={[
+            // #211: PDFのみ「拡大表示」を先頭に追加する(画像はクリックで直接開くため不要)
+            ...(isPdfFile(attachmentMenu.target)
+              ? [{ label: '拡大表示', onSelect: handleOpenAttachmentLightboxFromMenu }]
+              : []),
             {
               label: '名前を変更',
               onSelect: () => setRenameDialog({ resolved: attachmentMenu.resolved }),
@@ -1035,6 +1067,16 @@ export function DocView({
             { label: '削除', onSelect: handleOpenDeleteAttachmentDialog, danger: true },
           ]}
           onClose={() => setAttachmentMenu(null)}
+        />
+      )}
+
+      {/* #211 画像・PDFの拡大表示 */}
+      {lightbox && (
+        <AttachmentLightbox
+          kind={lightbox.kind}
+          src={lightbox.src}
+          alt={lightbox.alt}
+          onClose={() => setLightbox(null)}
         />
       )}
 

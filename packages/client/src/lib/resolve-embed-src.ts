@@ -28,7 +28,8 @@ export function isPdfFile(file: string): boolean {
   return PDF_EXTENSIONS.has(extOf(file));
 }
 
-function toFilesUrl(relPath: string): string {
+// #211: 添付管理メニューの「拡大表示」でも resolved.path から直接URLを組み立てるため公開する
+export function toFilesUrl(relPath: string): string {
   return `/api/files/${relPath.split('/').map(encodeURIComponent).join('/')}`;
 }
 
