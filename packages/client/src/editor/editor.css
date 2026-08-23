@@ -274,6 +274,14 @@
   border-radius: var(--radius-sm);
 }
 
+/* #211: クリックで拡大表示できる img にだけ zoom-in カーソルを出す。
+   絶対URL・壊れた画像はクリックしても開かないためデフォルトカーソルのまま
+   (NodeView側で is-zoomable class を条件付与する。レビュー中#7) */
+.ProseMirror .obsidian-embed-image img.is-zoomable,
+.ProseMirror .tiptap-image img.is-zoomable {
+  cursor: zoom-in;
+}
+
 /* #199: 画像の管理メニュー(名前変更/削除/パスをコピー)の起動口。
    画像を包む相対配置のフレームに「⋯」ボタンを重ねる。既定は非表示かつクリック不可
    (pointer-events:none)にし、ホバー/フォーカス/ホバー操作のない端末(タッチ)でのみ
@@ -331,6 +339,13 @@
   opacity: 1;
   pointer-events: auto;
   z-index: 1;
+}
+
+/* #211: PDFの埋め込みは既定で横幅いっぱいに広げる。inline-blockのままだと
+   子iframeのwidth="100%"が親幅を決められず、iframe既定幅(~300px)になってしまう */
+.ProseMirror .attachment-frame--persistent {
+  display: block;
+  width: 100%;
 }
 
 /* PDF埋め込み(#204)。iframeなのでmax-widthのみで縦横比は幅/高さ属性側に委ねる */

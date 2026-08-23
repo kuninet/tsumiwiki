@@ -69,7 +69,7 @@ function ObsidianEmbedView({ node, editor }: NodeViewProps) {
   const showMenu = !isAbsoluteUrl(file);
 
   function openMenu(x: number, y: number) {
-    docStorage?.openAttachmentMenu?.({ target: file, kind: 'embed', x, y });
+    docStorage?.openAttachmentMenu?.({ target: file, kind: 'embed', anchor, x, y });
   }
 
   function handleContextMenu(e: ReactMouseEvent) {
@@ -83,6 +83,15 @@ function ObsidianEmbedView({ node, editor }: NodeViewProps) {
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
     openMenu(rect.left, rect.bottom);
+  }
+
+  // #211: 画像クリックで拡大表示(ライトボックス)を開く。絶対URL(添付索引の管理対象外)には
+  // 出さない。到達するのは isPdfFile 早期return と failed 判定を通過した画像 img のみ
+  function handleImageClick(e: ReactMouseEvent<HTMLImageElement>) {
+    if (!showMenu) return;
+    e.preventDefault();
+    e.stopPropagation();
+    docStorage?.openAttachmentLightbox?.({ kind: 'image', src, alt: file });
   }
 
   if (isPdfFile(file)) {
@@ -142,6 +151,8 @@ function ObsidianEmbedView({ node, editor }: NodeViewProps) {
             alt={file}
             width={width}
             height={height}
+            className={showMenu ? 'is-zoomable' : undefined}
+            onClick={handleImageClick}
             onError={() => setFailedTarget(target)}
           />
           {showMenu && (

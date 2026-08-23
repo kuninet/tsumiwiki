@@ -122,10 +122,26 @@ function ImageView({ node, editor }: NodeViewProps) {
     openMenu(rect.left, rect.bottom);
   }
 
+  // #211: 画像クリックで拡大表示(ライトボックス)を開く。絶対URL・壊れた画像には出さない
+  // (showMenuと同じ条件)
+  function handleImageClick(e: ReactMouseEvent<HTMLImageElement>) {
+    if (!showMenu) return;
+    e.preventDefault();
+    e.stopPropagation();
+    docStorage?.openAttachmentLightbox?.({ kind: 'image', src: currentSrc, alt: alt ?? src });
+  }
+
   return (
     <NodeViewWrapper as="span" className="tiptap-image">
       <span className="attachment-frame" onContextMenu={handleContextMenu}>
-        <img src={currentSrc} alt={alt} title={title} onError={handleError} />
+        <img
+          src={currentSrc}
+          alt={alt}
+          title={title}
+          className={showMenu ? 'is-zoomable' : undefined}
+          onClick={handleImageClick}
+          onError={handleError}
+        />
         {showMenu && (
           <button
             type="button"
