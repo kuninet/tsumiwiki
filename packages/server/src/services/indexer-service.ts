@@ -252,7 +252,9 @@ export class IndexerService {
     // パス指定時のみ「ヴォルトルート起点の完全パス一致」を最優先にする(仕様外/レビュー指摘)。
     // 名前のみ指定(hasPath=false)でこれを有効にすると、ルート直下の同名ファイルが
     // 同フォルダ優先より不当に優先されてしまうため対象外とする
-    const isExactPath = hasPath ? (relPath: string) => relPath.toLowerCase() === targetLower : () => false;
+    const isExactPath = hasPath
+      ? (relPath: string) => relPath.toLowerCase() === targetLower
+      : () => false;
     return this.pickBestCandidate(fromFolder, candidates, isExactPath);
   }
 
