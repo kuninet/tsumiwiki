@@ -245,17 +245,18 @@ export class DocService {
     return this.config.libraryPath;
   }
 
-  // 添付索引の更新はbest-effort: 失敗しても呼び出し元の後続処理(ロック・下書きの
-  // repath等)は必ず継続する。索引はキャッシュであり、次回のscanAll・外部変更sync
-  // (設計06章6.4)で整合が回復するため
-  private async tryIndexAttachment(
-    op: () => Promise<void>,
+  // 索引の更新はbest-effort: 失敗しても呼び出し元の後続処理(コミット後のロック・
+  // 下書きのrepath等)は必ず継続する。索引はキャッシュであり、次回のscanAll・
+  // 外部変更sync(設計06章6.4)で整合が回復するため(文書・添付・フォルダ共通。issue #203)
+  private async tryUpdateIndex(
+    op: () => Promise<unknown>,
     context: Record<string, unknown>,
+    what: string,
   ): Promise<void> {
     try {
       await op();
     } catch (e) {
-      this.logger?.warn({ err: e, ...context }, '添付索引の更新に失敗しました(次回走査で回復)');
+      this.logger?.warn({ err: e, ...context }, `${what}の索引更新に失敗しました(次回走査で回復)`);
     }
   }
 
@@ -392,7 +393,7 @@ export class DocService {
     const content = `---\ncreated: ${now}\nupdated: ${now}\n---\n\n`;
     await this.writeAtomic(abs, content);
     await this.tryCommit([relPath], `add: ${relPath}`, author);
-    await this.indexer.indexFile(relPath);
+    await this.tryUpdateIndex(() => this.indexer.indexFile(relPath), { relPath }, '文書');
     const st = await stat(abs);
     return { path: relPath, updatedAt: st.mtime.toISOString() };
   }
@@ -419,7 +420,7 @@ export class DocService {
       throw new DocConflictError(`既に存在します: ${normalized}`);
     }
     await this.tryCommit([normalized], `add: ${normalized}`, author);
-    await this.indexer.indexFile(normalized);
+    await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
     const st = await stat(abs);
     return { path: normalized, updatedAt: st.mtime.toISOString() };
   }
@@ -456,7 +457,7 @@ export class DocService {
     const content = this.composeContent(current, body, tags).replace(/\r\n/g, '\n');
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `edit: ${normalized}`, author);
-    await this.indexer.indexFile(normalized);
+    await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
     // 明示保存に成功したら本人の下書きは不要になる(FR-EDIT-08)
     this.drafts.removeOwn(normalized, userId);
     const after = await stat(abs);
@@ -497,7 +498,7 @@ export class DocService {
     const content = this.composeContent(current, body, tags).replace(/\r\n/g, '\n');
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `edit: ${normalized}`, author);
-    await this.indexer.indexFile(normalized);
+    await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
     const after = await stat(abs);
     return { updatedAt: after.mtime.toISOString() };
   }
@@ -563,7 +564,7 @@ export class DocService {
     await rename(abs, path.join(trashDir, trashName));
     // スコープコミット: 無関係な外部変更を巻き込まない(それらはsyncが拾う)
     await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}`, author);
-    this.indexer.removeFile(normalized);
+    await this.tryUpdateIndex(async () => this.indexer.removeFile(normalized), { path: normalized }, '文書');
     this.locks.forceRelease(normalized);
     this.drafts.removeAll(normalized);
   }
@@ -675,12 +676,17 @@ export class DocService {
       }
     }
     await this.tryCommit(commitPaths, `move: ${oldNorm} -> ${newNorm}`, author);
-    await this.indexer.moveFile(oldNorm, newNorm);
+    await this.tryUpdateIndex(
+      () => this.indexer.moveFile(oldNorm, newNorm),
+      { oldPath: oldNorm, newPath: newNorm },
+      '文書',
+    );
     // 同伴した添付も索引を付け替える(issue #198。#159の添付同伴に追随)
     for (const m of movedAttachments) {
-      await this.tryIndexAttachment(
+      await this.tryUpdateIndex(
         () => this.indexer.moveAttachment(m.oldRel, m.newRel),
         { oldRel: m.oldRel, newRel: m.newRel },
+        '添付',
       );
     }
     // ロック・下書きも新パスへ追随させる
@@ -773,7 +779,7 @@ export class DocService {
     const relPath = dirNorm ? `${dirNorm}/${fileName}` : fileName;
     await this.tryCommit([relPath], `attach: ${relPath}`, author);
     // 添付索引に即時反映(issue #198。/api/embedで直後から解決できるように)
-    await this.tryIndexAttachment(() => this.indexer.indexAttachment(relPath), { relPath });
+    await this.tryUpdateIndex(() => this.indexer.indexAttachment(relPath), { relPath }, '添付');
     return { fileName, path: relPath };
   }
 
@@ -949,16 +955,14 @@ export class DocService {
       `rename attachment: ${normalized} -> ${newNorm}`,
       author,
     );
-    await this.tryIndexAttachment(() => this.indexer.moveAttachment(normalized, newNorm), {
-      oldRel: normalized,
-      newRel: newNorm,
-    });
-    // 書き換えた文書の索引も更新する(既存best-effort方針に合わせる。
-    // TODO(#203): tryUpdateIndex的な共通ヘルパーが入ったら揃える)
+    await this.tryUpdateIndex(
+      () => this.indexer.moveAttachment(normalized, newNorm),
+      { oldRel: normalized, newRel: newNorm },
+      '添付',
+    );
+    // 書き換えた文書の索引も更新する
     for (const d of rewrittenDocs) {
-      await this.tryIndexAttachment(() => this.indexer.indexFile(d.path), {
-        docPath: d.path,
-      });
+      await this.tryUpdateIndex(() => this.indexer.indexFile(d.path), { docPath: d.path }, '文書');
     }
 
     return { path: newNorm, name: candidateName, rewrittenDocs };
@@ -984,9 +988,11 @@ export class DocService {
     }
     await rename(abs, path.join(trashDir, trashName));
     await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}`, author);
-    await this.tryIndexAttachment(async () => this.indexer.removeAttachment(normalized), {
-      relPath: normalized,
-    });
+    await this.tryUpdateIndex(
+      async () => this.indexer.removeAttachment(normalized),
+      { relPath: normalized },
+      '添付',
+    );
   }
 
   // ---- ごみ箱(FR-DOC-07) ----
@@ -1122,11 +1128,11 @@ export class DocService {
     }
     await this.tryCommit([normalized, dest], `untrash: ${dest}${isFolder ? '/' : ''}`, author);
     if (isFolder) {
-      await this.indexer.scanAll();
+      await this.tryUpdateIndex(() => this.indexer.scanAll(), { dest }, 'フォルダ配下の全走査');
     } else if (dest.toLowerCase().endsWith('.md')) {
-      await this.indexer.indexFile(dest);
+      await this.tryUpdateIndex(() => this.indexer.indexFile(dest), { path: dest }, '文書');
     } else if (isIndexedFileName(dest)) {
-      await this.tryIndexAttachment(() => this.indexer.indexAttachment(dest), { dest });
+      await this.tryUpdateIndex(() => this.indexer.indexAttachment(dest), { dest }, '添付');
     }
     return { path: dest };
   }
@@ -1237,7 +1243,7 @@ export class DocService {
     const content = await this.contentAt(normalized, rev);
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `restore: ${normalized} @${rev.slice(0, 7)}`, author);
-    await this.indexer.indexFile(normalized);
+    await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
     this.drafts.removeOwn(normalized, userId);
     const after = await stat(abs);
     return { updatedAt: after.mtime.toISOString() };
@@ -1288,7 +1294,11 @@ export class DocService {
     await rename(oldAbs, newAbs);
     await this.tryCommit([oldNorm, newNorm], `move: ${oldNorm}/ -> ${newNorm}/`, author);
     // 配下の全文書のパスが変わるため差分走査で付け替える
-    await this.indexer.scanAll();
+    await this.tryUpdateIndex(
+      () => this.indexer.scanAll(),
+      { oldPath: oldNorm, newPath: newNorm },
+      'フォルダ配下の全走査',
+    );
     this.locks.repathFolder(oldNorm, newNorm);
     this.drafts.repathFolder(oldNorm, newNorm);
     return { path: newNorm };
@@ -1323,7 +1333,7 @@ export class DocService {
       'utf8',
     );
     await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}/`, author);
-    await this.indexer.scanAll();
+    await this.tryUpdateIndex(() => this.indexer.scanAll(), { path: normalized }, 'フォルダ配下の全走査');
     this.locks.removeUnder(normalized);
     this.drafts.removeUnder(normalized);
   }
