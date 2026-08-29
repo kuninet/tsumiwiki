@@ -307,6 +307,9 @@ export function DocView({
             if (!findTableAt($from)) return false;
             const cursor = view.coordsAtPos(view.state.selection.from);
             event.preventDefault();
+            // ContextMenuはwindowのcontextmenuで自身を閉じるため、開いた同じイベントが
+            // windowまで昇って即closeしないよう伝播を止める(実機Chromiumで確認した挙動)
+            event.stopPropagation();
             setTableMenu({ x: cursor.left, y: cursor.bottom });
             return true;
           }
@@ -317,6 +320,8 @@ export function DocView({
           // クリック位置へselectionを合わせてからメニューを開く
           editor?.commands.setTextSelection(coords.pos);
           event.preventDefault();
+          // 同上: 同一イベントのwindowバブルによる即closeを防ぐ
+          event.stopPropagation();
           setTableMenu({ x: event.clientX, y: event.clientY });
           return true;
         },
