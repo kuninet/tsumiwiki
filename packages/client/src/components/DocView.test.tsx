@@ -5,7 +5,6 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
-import { useUIStore } from '../stores/ui';
 import { useUserSettingsStore } from '../stores/user-settings';
 import { DocView } from './DocView';
 
@@ -95,7 +94,6 @@ describe('DocView', () => {
     vi.unstubAllGlobals();
     useEditStore.setState({ mode: 'view', dirty: false, lockedPath: null, lastDraftSavedAt: null });
     useToastStore.setState({ toast: null });
-    useUIStore.getState().resetEditorChrome();
     // #212 レビュー M2: persist ミドルウェアが localStorage に書き戻すため
     // state リセットと合わせて permanent storage も掃除する(他 test suite への漏出防止)
     useUserSettingsStore.setState({

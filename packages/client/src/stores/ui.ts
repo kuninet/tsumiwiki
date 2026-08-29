@@ -20,10 +20,6 @@ interface UIState {
   // nonce は毎回インクリメントし、folder に初期フォルダを載せる
   // (nonce だけでは連続要求で同じ folder を再指定できないため)
   createDocRequest: { nonce: number; folder: string };
-  // 文書オープン直後(即編集モード時)は false。ユーザーが編集操作を始めた時点で true。
-  // DocView 側で本文への click/keydown/touchstart/paste を検知したら showEditorChrome を呼ぶ。
-  // 別文書へ遷移するときは resetEditorChrome で false に戻す。
-  editorChromeVisible: boolean;
   setSidebarWidth: (width: number) => void;
   toggleSidebarCollapsed: () => void;
   setSidebarTab: (tab: SidebarTab) => void;
@@ -33,8 +29,6 @@ interface UIState {
   toggleTag: (tag: string) => void;
   clearTags: () => void;
   requestCreateDoc: (folder?: string) => void;
-  showEditorChrome: () => void;
-  resetEditorChrome: () => void;
 }
 
 function clampSidebarWidth(width: number): number {
@@ -55,7 +49,6 @@ export const useUIStore = create<UIState>((set) => ({
   expandedFolders: new Set(),
   selectedTags: [],
   createDocRequest: { nonce: 0, folder: '' },
-  editorChromeVisible: false,
   setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
@@ -100,6 +93,4 @@ export const useUIStore = create<UIState>((set) => ({
       sidebarTab: 'folder',
       createDocRequest: { nonce: s.createDocRequest.nonce + 1, folder },
     })),
-  showEditorChrome: () => set({ editorChromeVisible: true }),
-  resetEditorChrome: () => set({ editorChromeVisible: false }),
 }));

@@ -5,6 +5,7 @@ import {
   type ChangeEvent as ReactChangeEvent,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -185,6 +186,12 @@ export function DocView({
   // ソース切替の入口で取ったMarkdown。無変更往復のdirty化防止に使う(レビュー中2)
   const sourceEntryRef = useRef('');
   const [sourceText, setSourceText] = useState('');
+  // 文書オープン直後(即編集モード時)はツールバー非表示。ユーザーが編集操作を始めた時点で
+  // 表示する(#175)。#245: 以前はグローバルストア(useUIStore)で持っていたが、別文書の
+  // DocView がリセットするとこのタブのツールバーまで消えるため、DocView ローカルで持つ。
+  // DocView は文書パスごとに key 付きマウントされる(PaneView)ので、リセットは初期値で足りる
+  const [editorChromeVisible, setEditorChromeVisible] = useState(false);
+  const showEditorChrome = useCallback(() => setEditorChromeVisible(true), []);
   const [renameDialog, setRenameDialog] = useState<{
     resolved: { path: string; name: string };
   } | null>(null);
@@ -202,9 +209,6 @@ export function DocView({
   const setLockedByOtherName = useEditStore((s) => s.setLockedByOtherName);
   const setSidebarTab = useUIStore((s) => s.setSidebarTab);
   const toggleTag = useUIStore((s) => s.toggleTag);
-  const editorChromeVisible = useUIStore((s) => s.editorChromeVisible);
-  const showEditorChrome = useUIStore((s) => s.showEditorChrome);
-  const resetEditorChrome = useUIStore((s) => s.resetEditorChrome);
   // #212: 本文最大幅の個人設定(normal/wide/full)。編集/閲覧共通
   const contentWidth = useUserSettingsStore((s) => s.contentWidth);
   // #175: 仮想キーボード出現時に scroll 領域下端へ空ける px 数
@@ -412,12 +416,6 @@ export function DocView({
     }
     setSourceMode(false);
   }, [session.mode, editor]);
-
-  // 文書オープン/切替時はツールバーを非表示にリセットする。
-  // その後ユーザーがエディタで実操作したら showEditorChrome で表示ONになる(下の useEffect)。
-  useEffect(() => {
-    resetEditorChrome();
-  }, [doc.path, resetEditorChrome]);
 
   // editor.commands.focus('start') は自動発火なので focus イベントを条件にすると即出てしまう。
   // 代わりに click / keydown / touchstart / paste を捕捉して、ユーザー起因の操作を検知する
