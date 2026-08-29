@@ -182,6 +182,8 @@ export function DocView({
   // textareaで直接編集できるようにする。グローバルなsession.mode('view'/'edit')は変えず、
   // 「editモードの表示形態」としてDocViewローカルで持つ(タブ複製・分割ペインでも独立に動く)
   const [sourceMode, setSourceMode] = useState(false);
+  // ソース切替の入口で取ったMarkdown。無変更往復のdirty化防止に使う(レビュー中2)
+  const sourceEntryRef = useRef('');
   const [sourceText, setSourceText] = useState('');
   const [renameDialog, setRenameDialog] = useState<{
     resolved: { path: string; name: string };
@@ -470,8 +472,10 @@ export function DocView({
         return;
       }
       // Mod+Shift+K は wikilink サジェスト(#195)。ProseMirror の keymap は
-      // preventDefault するが stopPropagation しないので window まで届く
+      // preventDefault するが stopPropagation しないので window まで届く。
+      // #224: ソース編集中はリンクダイアログが隠れたエディタへ書き込んでしまうため無効化
       if (isMod && !e.shiftKey && e.key.toLowerCase() === 'k') {
+        if (sourceModeRef.current) return;
         e.preventDefault();
         showEditorChrome();
         setLinkDialogVisible(true);
@@ -583,14 +587,17 @@ export function DocView({
     if (!editor || editor.isDestroyed) return;
     if (sourceMode) {
       // source→edit(WYSIWYG): textareaの内容をtiptap-markdown経由でパースして反映する。
-      // emitUpdate=false(既定)でonUpdateの再正規化を経由させず、textareaの原文そのままを
+      // emitUpdate=falseでonUpdateの再正規化を経由させず、textareaの原文そのままを
       // session.updateBodyへ渡す(setContentが再シリアライズした結果と食い違わせないため)
-      editor.commands.setContent(sourceText);
-      session.updateBody(sourceText);
+      editor.commands.setContent(sourceText, false);
+      // 無変更のまま往復しただけではdirtyにしない(レビュー中2。dirty化すると
+      // 表示切替だけで下書き保存・離脱警告が走ってしまう)
+      if (sourceText !== sourceEntryRef.current) session.updateBody(sourceText);
       setSourceMode(false);
     } else {
       // edit(WYSIWYG)→source: 現在の内容をMarkdownとして取り出しtextareaの初期値にする
       const markdown = editor.storage.markdown.getMarkdown() as string;
+      sourceEntryRef.current = markdown;
       setSourceText(markdown);
       setSourceMode(true);
     }
@@ -607,6 +614,9 @@ export function DocView({
   function handleRestoreDraft() {
     const content = session.restoreDraft();
     editor?.commands.setContent(content);
+    // ソース編集中に復元が走った場合もtextareaを追随させる(現状この経路では
+    // sourceModeは必ずfalseだが、将来draftPromptが別経路で立ったときの防御)
+    setSourceText(content);
   }
 
   function handleConfirmLink(url: string) {
@@ -997,7 +1007,9 @@ export function DocView({
               閲覧モードでは TagPane フィルタ連動、編集モードでは各チップから改名/削除できる */}
           <TagChipEditor
             tags={session.mode === 'edit' ? pendingTags : doc.tags}
-            editable={session.mode === 'edit'}
+            // #224: ソース編集中のタグ操作は隠れたエディタ由来の本文で上書きし
+            // textareaの編集内容と食い違うため編集不可にする(レビュー中1)
+            editable={session.mode === 'edit' && !sourceMode}
             onNavigate={handleTagNavigate}
             onRename={handleTagRename}
             onRemove={handleTagRemove}

@@ -140,7 +140,10 @@ export const TableMarkdown = Table.extend({
               if (cellContent && cellContent.content.size > 0) {
                 const cellStart = state.out.length;
                 state.renderInline(cellContent);
-                if (state.out.length > cellStart) {
+                // out の書き換えは renderInline 完了時点(inlines のオフセット記録が
+                // すべて解決・pop 済み)だから安全。tiptap-markdown 更新時は要再確認。
+                // パイプを含まないセルではスライス連結(O(出力長))を省略する
+                if (state.out.indexOf('|', cellStart) >= 0) {
                   state.out =
                     state.out.slice(0, cellStart) + escapeCellPipes(state.out.slice(cellStart));
                 }
