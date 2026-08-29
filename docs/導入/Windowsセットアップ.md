@@ -223,19 +223,27 @@ nssm set TsumiWiki ObjectName DOMAIN\tsumiwiki-svc "パスワード"
 
 ## 6.5 アプリの更新
 
-新しいバージョンを取り込むには `scripts\windows\update.bat`(または `update.ps1`)を実行する:
+新しいバージョンを取り込むには `scripts\windows\update.bat`(または `update.ps1`)を実行する。NSSM運用中はサービスの停止・再開を含むため**管理者**プロンプトで実行する:
 
 ```powershell
+# 管理者 PowerShell で実行(NSSM運用中の場合)
 cd C:\tsumiwiki
 .\scripts\windows\update.bat
 ```
 
-中でやっていること: `git pull` → `pnpm install`(依存が増えた場合) → `pnpm build`(SPAリビルド)。
+実体は `update.ps1` で、`update.bat` は薄いラッパー(`git pull` が実行中のバッチ自身を書き換えると cmd.exe が誤動作するため。PowerShell はスクリプト全体を先に読むので安全)。中でやっていること:
 
-サーバー本体は再起動しないので手動で:
+1. git / pnpm が PATH にあるか確認(管理者昇格でPATHが変わる環境への対策。無ければ何もせず中断)
+2. サービス `TsumiWiki` が動いていれば停止(管理者権限が無い場合は**何もせず中断**する。`git pull` も走らない)
+3. `git pull` → `pnpm install`(依存が増えた場合) → `pnpm build`(SPAリビルド)
+4. 停止したサービスを再開
 
-- NSSM運用中: `nssm restart TsumiWiki`
-- start.bat / start-local.bat 起動中: そのコンソールで Ctrl+C → 再度実行
+途中で失敗したときの挙動(失敗時は終了コード1):
+
+- `git pull` 失敗: まだ何も変わっていないのでサービスを再開して終了
+- `pnpm install` / `pnpm build` 失敗: 中途半端なビルド(ビルド開始時に `dist` が消される)を配信しないよう、サービスは**意図的に停止したまま**にする。エラーを解消して再実行するか、旧版に戻して `nssm start TsumiWiki`
+
+start.bat / start-local.bat 起動中(サービス未登録)の場合、サーバーは再起動されないので、そのコンソールで Ctrl+C → 再度実行する。
 
 ローカルに変更(例: start-local.bat 以外の追跡ファイル)を残していると `git pull` が中断するので、その場合はメッセージに従ってstash等で退避する。
 
