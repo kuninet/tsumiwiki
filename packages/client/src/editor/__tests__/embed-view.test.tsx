@@ -276,7 +276,13 @@ describe('ObsidianEmbedWithPreview の画像メニュー(#199)', () => {
   });
 
   it('tsumiwiki:attachment-changedでbasenameが一致すると再取得され、失敗表示もリセットされる(実機確認対応)', async () => {
-    render(<TestEditorWithMenu content={'![[a.png]]'} docPath={'文書.md'} onOpenAttachmentMenu={vi.fn()} />);
+    render(
+      <TestEditorWithMenu
+        content={'![[a.png]]'}
+        docPath={'文書.md'}
+        onOpenAttachmentMenu={vi.fn()}
+      />,
+    );
     let img: HTMLImageElement;
     await waitFor(() => {
       const el = document.querySelector('.obsidian-embed-image img');

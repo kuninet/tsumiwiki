@@ -111,7 +111,9 @@ describe('Markdown リンクの往復保全(issue #207)', () => {
 
   it('title 付きリンクの title が保全される', () => {
     expect(roundtripMarkdown('[説明](old.png "タイトル")')).toBe('[説明](old.png "タイトル")');
-    expect(roundtripMarkdown('[説明](sub/old.png "タイトル")')).toBe('[説明](sub/old.png "タイトル")');
+    expect(roundtripMarkdown('[説明](sub/old.png "タイトル")')).toBe(
+      '[説明](sub/old.png "タイトル")',
+    );
   });
 
   // Markdown をパースした結果に link マークが含まれるか(リンク化されたか)
@@ -143,7 +145,9 @@ describe('Markdown リンクの往復保全(issue #207)', () => {
     // 画像として許可しても Image 拡張の既定(allowBase64: false)で落ちて原文が消えるため、
     // 許可集合から外してリテラル化する
     expect(hasLinkMark('[a](data:image/png;base64,AAAA)')).toBe(false);
-    expect(roundtripMarkdown('![a](data:image/png;base64,AAAA)')).toContain('data:image/png;base64,AAAA');
+    expect(roundtripMarkdown('![a](data:image/png;base64,AAAA)')).toContain(
+      'data:image/png;base64,AAAA',
+    );
   });
 
   it('許可スキームと相対パスはリンクになる', () => {

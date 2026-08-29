@@ -37,6 +37,37 @@ function serializeTableNodeToHtml(editor: Editor, node: ProseMirrorNode): string
   return container.innerHTML;
 }
 
+// 同期のcopyイベント+execCommandでクリップボードへ書き込む。issue #238:
+// Safariはasync Clipboard APIのwriteが「成功扱いなのに実際は書き込まれない」ことが
+// あるため、ユーザージェスチャ内で完結するこの経路を最優先にする。非secure context
+// (http運用のLAN環境)でも動く。copyイベントを発火させるため一時textareaを選択する。
+function copyViaCopyEvent(markdown: string, html: string | null): boolean {
+  if (typeof document.execCommand !== 'function') return false;
+  let handled = false;
+  const onCopy = (e: ClipboardEvent) => {
+    if (!e.clipboardData) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', markdown);
+    if (html !== null) e.clipboardData.setData('text/html', html);
+    handled = true;
+  };
+  const textarea = document.createElement('textarea');
+  textarea.value = markdown;
+  textarea.setAttribute('readonly', '');
+  textarea.style.cssText = 'position:fixed;top:-1000px;left:0;opacity:0;';
+  document.body.appendChild(textarea);
+  document.addEventListener('copy', onCopy, true);
+  try {
+    textarea.select();
+    return document.execCommand('copy') && handled;
+  } catch {
+    return false;
+  } finally {
+    document.removeEventListener('copy', onCopy, true);
+    textarea.remove();
+  }
+}
+
 // 表をクリップボードへコピーする。issue #234:
 // text/plainのMarkdownだけだと、エディタへのCmd+V貼り付けがプレーンテキスト扱いに
 // なって表に戻らないため、text/html(HTML表)も併せて書き込む。エディタへは
@@ -59,6 +90,9 @@ export async function copyTableToClipboard(editor: Editor): Promise<boolean> {
   } catch {
     // Markdownのみで続行
   }
+
+  // 同期経路を最優先(#238)。失敗したらasync Clipboard APIへ
+  if (copyViaCopyEvent(markdown, html)) return true;
 
   try {
     if (html !== null && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {

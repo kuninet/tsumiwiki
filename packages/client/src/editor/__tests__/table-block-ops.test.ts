@@ -105,6 +105,60 @@ describe('copyTableToClipboard(ClipboardItem対応環境)', () => {
     return FakeClipboardItem;
   }
 
+  it('execCommandが使える環境では同期のcopyイベント経路を最優先する(#238)', async () => {
+    stubClipboardItem();
+    const write = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { write, writeText: vi.fn() },
+      configurable: true,
+    });
+    // jsdomにexecCommandは無いため、copyイベントを発火する実装を模擬する
+    const setData = vi.fn();
+    (document as unknown as { execCommand: () => boolean }).execCommand = () => {
+      const ev = new Event('copy');
+      (ev as unknown as { clipboardData: unknown }).clipboardData = {
+        setData,
+      };
+      document.dispatchEvent(ev);
+      return true;
+    };
+
+    const editor = createDocWithTable();
+    placeCursorInsideTable(editor);
+    try {
+      await expect(copyTableToClipboard(editor)).resolves.toBe(true);
+      // 同期経路で書き込まれ、async Clipboard APIは呼ばれない
+      expect(write).not.toHaveBeenCalled();
+      expect(setData).toHaveBeenCalledWith('text/plain', expect.stringContaining('| --- |'));
+      expect(setData).toHaveBeenCalledWith('text/html', expect.stringContaining('<table'));
+      // 一時textareaが残っていない
+      expect(document.querySelector('textarea')).toBeNull();
+    } finally {
+      delete (document as unknown as { execCommand?: unknown }).execCommand;
+      editor.destroy();
+    }
+  });
+
+  it('execCommandがfalseを返したらasync Clipboard APIへフォールバックする', async () => {
+    stubClipboardItem();
+    const write = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { write, writeText: vi.fn() },
+      configurable: true,
+    });
+    (document as unknown as { execCommand: () => boolean }).execCommand = () => false;
+
+    const editor = createDocWithTable();
+    placeCursorInsideTable(editor);
+    try {
+      await expect(copyTableToClipboard(editor)).resolves.toBe(true);
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (document as unknown as { execCommand?: unknown }).execCommand;
+      editor.destroy();
+    }
+  });
+
   it('text/plainのMarkdownとtext/htmlのHTML表の両方を書き込む', async () => {
     stubClipboardItem();
     const write = vi.fn().mockResolvedValue(undefined);
