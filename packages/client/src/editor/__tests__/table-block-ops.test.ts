@@ -75,6 +75,94 @@ describe('findParentTable / serializeTableToMarkdown', () => {
   });
 });
 
+// #234: ClipboardItem対応環境ではtext/plain(Markdown)+text/html(HTML表)の両方を書き込む。
+// エディタへのCmd+V貼り付けはtext/html経由で表に戻る
+describe('copyTableToClipboard(ClipboardItem対応環境)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    // @ts-expect-error テスト用に定義したプロパティを剥がす
+    delete navigator.clipboard;
+  });
+
+  // jsdomのBlobにはtext()が無いためFileReaderで読む
+  function blobText(blob: Blob): Promise<string> {
+    return new Promise((resolve) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.readAsText(blob);
+    });
+  }
+
+  function stubClipboardItem() {
+    class FakeClipboardItem {
+      items: Record<string, Blob>;
+      constructor(items: Record<string, Blob>) {
+        this.items = items;
+      }
+    }
+    vi.stubGlobal('ClipboardItem', FakeClipboardItem);
+    return FakeClipboardItem;
+  }
+
+  it('text/plainのMarkdownとtext/htmlのHTML表の両方を書き込む', async () => {
+    stubClipboardItem();
+    const write = vi.fn().mockResolvedValue(undefined);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { write, writeText },
+      configurable: true,
+    });
+
+    const editor = createDocWithTable();
+    placeCursorInsideTable(editor);
+    await expect(copyTableToClipboard(editor)).resolves.toBe(true);
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(writeText).not.toHaveBeenCalled();
+    const item = write.mock.calls[0][0][0] as { items: Record<string, Blob> };
+    const plain = await blobText(item.items['text/plain']);
+    const html = await blobText(item.items['text/html']);
+    expect(plain).toContain('| --- |');
+    expect(html).toContain('<table');
+    expect(html).toContain('<th');
+    expect(html).toContain('あ');
+    editor.destroy();
+  });
+
+  it('write(ClipboardItem)が拒否されたらwriteTextへフォールバックする', async () => {
+    stubClipboardItem();
+    const write = vi.fn().mockRejectedValue(new Error('not allowed'));
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { write, writeText },
+      configurable: true,
+    });
+
+    const editor = createDocWithTable();
+    placeCursorInsideTable(editor);
+    await expect(copyTableToClipboard(editor)).resolves.toBe(true);
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText.mock.calls[0][0]).toContain('| --- |');
+    editor.destroy();
+  });
+
+  it('write・writeTextの両方が失敗したらfalse', async () => {
+    stubClipboardItem();
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        write: vi.fn().mockRejectedValue(new Error('x')),
+        writeText: vi.fn().mockRejectedValue(new Error('y')),
+      },
+      configurable: true,
+    });
+
+    const editor = createDocWithTable();
+    placeCursorInsideTable(editor);
+    await expect(copyTableToClipboard(editor)).resolves.toBe(false);
+    editor.destroy();
+  });
+});
+
 describe('copyTableToClipboard', () => {
   let writeText: ReturnType<typeof vi.fn>;
 

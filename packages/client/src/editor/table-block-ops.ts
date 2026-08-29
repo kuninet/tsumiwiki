@@ -1,5 +1,5 @@
 import type { Editor } from '@tiptap/core';
-import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { DOMSerializer, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { TextSelection } from '@tiptap/pm/state';
 import { withHeadlessEditor } from './markdown';
 import { findTableAt } from './table-utils';
@@ -28,12 +28,39 @@ export function serializeTableToMarkdown(editor: Editor): string | null {
   return serializeTableNode(found.node);
 }
 
-// 表をGFM Markdownとしてクリップボードへコピーする。
+// 表ノードをHTML表(<table>...)へシリアライズする(スキーマのrenderHTML準拠)
+function serializeTableNodeToHtml(editor: Editor, node: ProseMirrorNode): string {
+  const container = document.createElement('div');
+  container.appendChild(DOMSerializer.fromSchema(editor.schema).serializeNode(node));
+  return container.innerHTML;
+}
+
+// 表をクリップボードへコピーする。issue #234:
+// text/plainのMarkdownだけだと、エディタへのCmd+V貼り付けがプレーンテキスト扱いに
+// なって表に戻らないため、text/html(HTML表)も併せて書き込む。エディタへは
+// ProseMirror標準のHTML貼り付け経路で表として貼り付き、外部エディタへはMarkdown、
+// Excel等の表計算へは表形式で貼り付く。
 // クリップボードAPIが使えない・拒否された場合は例外を投げずfalseを返す。
 export async function copyTableToClipboard(editor: Editor): Promise<boolean> {
-  const markdown = serializeTableToMarkdown(editor);
-  if (markdown === null) return false;
+  const found = findParentTable(editor);
+  if (!found) return false;
+  const markdown = serializeTableNode(found.node);
 
+  try {
+    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': new Blob([markdown], { type: 'text/plain' }),
+          'text/html': new Blob([serializeTableNodeToHtml(editor, found.node)], {
+            type: 'text/html',
+          }),
+        }),
+      ]);
+      return true;
+    }
+  } catch {
+    // write(ClipboardItem)が拒否された環境でもwriteTextへフォールバックして試す
+  }
   try {
     await navigator.clipboard.writeText(markdown);
     return true;

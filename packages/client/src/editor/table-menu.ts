@@ -75,6 +75,9 @@ export function getTableMenuItems(
     {
       label: '表をコピー',
       onSelect: () => {
+        // メニューが閉じるとフォーカスがbodyに落ち、直後のCmd+Vが効かなくなるため
+        // エディタへフォーカスを戻してからコピーする(#234)
+        editor.commands.focus();
         void copyTableToClipboard(editor).then((ok) =>
           showToast?.(ok ? 'success' : 'error', ok ? '表をコピーしました' : 'コピーに失敗しました'),
         );
@@ -83,6 +86,7 @@ export function getTableMenuItems(
     {
       label: '表をカット',
       onSelect: () => {
+        editor.commands.focus();
         void cutTableToClipboard(editor).then((ok) =>
           showToast?.(ok ? 'success' : 'error', ok ? '表をカットしました' : 'カットに失敗しました'),
         );
