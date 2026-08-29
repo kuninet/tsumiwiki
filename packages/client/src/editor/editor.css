@@ -25,6 +25,8 @@
 .editor-demo .ProseMirror {
   outline: none;
   min-height: 260px;
+  /* デモページはscroll past end余白(#240)を適用しない */
+  padding-bottom: 0;
 }
 
 .editor-demo pre.markdown-output {
@@ -41,8 +43,10 @@
   line-height: 1.75;
   /* #240 scroll past end: 最終行が画面下端に張り付かず中央あたりまでスクロールできる
      下余白(行は増やさない)。余白内のクリックはPMの既定挙動で文末にカーソルが入る。
-     閲覧・編集の表示一致方針のため両モード共通 */
-  padding-bottom: 45vh;
+     閲覧・編集の表示一致方針のため両モード共通。
+     仮想キーボード表示中はDocViewが--scroll-past-end: 0pxを渡して#175の余白と
+     二重加算にならないようにする */
+  padding-bottom: var(--scroll-past-end, 45vh);
 }
 
 /* 編集モード時のフォーカス枠(browserデフォルト青枠)は表示しない。デザインhandoff準拠 */
