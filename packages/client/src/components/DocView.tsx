@@ -301,7 +301,8 @@ export function DocView({
         contextmenu: (view, event) => {
           if (!view.editable) return false;
           // キーボード起動(メニューキー/Shift+F10)はclientX/Yが0で座標が使えないため、
-          // 現在のカーソル位置で判定し、メニューもカーソル座標に出す
+          // 現在のカーソル位置で判定し、メニューもカーソル座標に出す。
+          // この経路はsetTextSelectionを呼ばず、現在の選択(CellSelection含む)をそのまま操作対象にする
           if (event.clientX === 0 && event.clientY === 0) {
             const { $from } = view.state.selection;
             if (!findTableAt($from)) return false;
@@ -1122,7 +1123,7 @@ export function DocView({
         <ContextMenu
           x={tableMenu.x}
           y={tableMenu.y}
-          items={getTableMenuItems(editor)}
+          items={getTableMenuItems(editor, { showToast })}
           onClose={() => setTableMenu(null)}
         />
       )}
