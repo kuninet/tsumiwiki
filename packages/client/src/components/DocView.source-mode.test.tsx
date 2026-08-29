@@ -122,6 +122,23 @@ describe('DocView のソース編集モード(#224)', () => {
     });
   });
 
+  it('無変更のままソース往復してもdirtyにならない(レビュー中2)', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+    });
+    renderDocView();
+    await revealToolbar();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Markdownソースを編集' }));
+    await screen.findByTestId('source-editor');
+    // 何も編集せずWYSIWYGへ戻す
+    fireEvent.click(screen.getByRole('button', { name: 'WYSIWYG表示に戻す' }));
+    expect(screen.queryByTestId('source-editor')).toBeNull();
+    // 表示切替だけでは保存ボタンが活性化しない
+    expect((screen.getByRole('button', { name: /保存/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('閲覧モードに戻ると(破棄)ソースモードも解除される', async () => {
     stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
