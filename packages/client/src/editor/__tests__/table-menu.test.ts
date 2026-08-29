@@ -107,6 +107,15 @@ describe('findTableAt / getTableMenuItems', () => {
     ]);
   });
 
+  it('1列だけの表では「列を削除」が出ない(prosemirror-tablesが拒否して無反応になるため)', () => {
+    editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false }),
+      content: '| A |\n| --- |\n| 1 |\n',
+    });
+    editor.commands.setTextSelection(posBeforeText('1'));
+    expect(itemLabels()).not.toContain('列を削除');
+  });
+
   it('表外(段落)では findTableAt が null になる', () => {
     editor = new Editor({
       extensions: createEditorExtensions({ nodeViews: false }),

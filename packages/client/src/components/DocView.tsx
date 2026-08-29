@@ -300,6 +300,16 @@ export function DocView({
         // #222 表のコンテキストメニュー: 表内での右クリックだけ乗っ取り、それ以外はブラウザ標準メニューに任せる
         contextmenu: (view, event) => {
           if (!view.editable) return false;
+          // キーボード起動(メニューキー/Shift+F10)はclientX/Yが0で座標が使えないため、
+          // 現在のカーソル位置で判定し、メニューもカーソル座標に出す
+          if (event.clientX === 0 && event.clientY === 0) {
+            const { $from } = view.state.selection;
+            if (!findTableAt($from)) return false;
+            const cursor = view.coordsAtPos(view.state.selection.from);
+            event.preventDefault();
+            setTableMenu({ x: cursor.left, y: cursor.bottom });
+            return true;
+          }
           const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
           if (!coords) return false;
           if (!findTableAt(view.state.doc.resolve(coords.pos))) return false;
