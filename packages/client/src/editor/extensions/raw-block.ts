@@ -19,10 +19,17 @@ function renderHtmlBlock(tokens: TokenLike[], idx: number): string {
 // TaskItemノードへの変換に必要なため、エスケープせず通過させる
 const TASK_CHECKBOX_RE = /^<input class="task-list-item-checkbox"/;
 
+// #229: GFMパイプ表はセル内の改行を表現できず、tiptap-markdown自身がセル内の
+// hardBreakを<br>としてシリアライズする。これをエスケープすると次回パースで
+// 「<br>」がテキストとして見えてしまい往復も壊れるため、<br>だけは実際の
+// 改行(hardBreakノード)として通過させる(Obsidianの表示とも一致する)
+const BR_RE = /^<br\s*\/?>$/i;
+
 function renderHtmlInline(tokens: TokenLike[], idx: number): string {
   const content = tokens[idx].content;
   if (TASK_CHECKBOX_RE.test(content)) return content;
-  // それ以外のインラインHTML(<br>等)は実行せずプレーンテキストとして保持する
+  if (BR_RE.test(content)) return '<br>';
+  // それ以外のインラインHTMLは実行せずプレーンテキストとして保持する
   return escapeHtml(content);
 }
 
