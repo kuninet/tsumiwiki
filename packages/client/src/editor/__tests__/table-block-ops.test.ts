@@ -201,6 +201,19 @@ describe('cutTableToClipboard', () => {
     expect(writeText).not.toHaveBeenCalled();
     editor.destroy();
   });
+
+  it('カット後のundo 1回で表が復元される', async () => {
+    const editor = createDocWithTable();
+    placeCursorInsideTable(editor);
+    await expect(cutTableToClipboard(editor)).resolves.toBe(true);
+
+    editor.commands.undo();
+    const topLevel: string[] = [];
+    editor.state.doc.forEach((node) => topLevel.push(node.type.name));
+    expect(topLevel).toEqual(['paragraph', 'table', 'paragraph']);
+    expect(editor.storage.markdown.getMarkdown()).toContain('| --- |');
+    editor.destroy();
+  });
 });
 
 describe('moveTableUp / moveTableDown', () => {
@@ -284,6 +297,57 @@ describe('moveTableUp / moveTableDown', () => {
     placeCursorOutsideTable(editor);
     expect(moveTableUp(editor)).toBe(false);
     expect(moveTableDown(editor)).toBe(false);
+    editor.destroy();
+  });
+
+  it('moveTableDownの連続実行: 末尾に達したらfalseで止まる', () => {
+    const editor = createDocWithTable();
+    placeCursorInsideTable(editor);
+    expect(moveTableDown(editor)).toBe(true);
+    expect(moveTableDown(editor)).toBe(false);
+
+    const topLevel: string[] = [];
+    editor.state.doc.forEach((node) => topLevel.push(node.type.name));
+    expect(topLevel).toEqual(['paragraph', 'paragraph', 'table']);
+    editor.destroy();
+  });
+
+  it('移動後もカーソルは編集中のセルに留まる', () => {
+    const editor = createDocWithTable();
+    // 2行目bodyセル「う」にカーソルを置く
+    let pos = -1;
+    editor.state.doc.descendants((node, p) => {
+      if (node.isText && node.text === 'う') pos = p;
+      return true;
+    });
+    editor.commands.setTextSelection(pos);
+    expect(moveTableUp(editor)).toBe(true);
+    expect(editor.state.selection.$from.parent.textContent).toBe('う');
+    editor.destroy();
+  });
+
+  it('blockquote内の表はblockquote内の兄弟とだけ入れ替わり、外へ飛び出さない', () => {
+    const md = '> 引用段落\n>\n> | 列A | 列B |\n> | --- | --- |\n> | あ | い |\n';
+    const editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false }),
+      content: md,
+    });
+    placeCursorInsideTable(editor);
+    expect(moveTableUp(editor)).toBe(true);
+
+    // blockquote内で表が先頭になる
+    let blockquoteChildren: string[] = [];
+    editor.state.doc.forEach((node) => {
+      if (node.type.name === 'blockquote') {
+        blockquoteChildren = [];
+        node.forEach((child) => blockquoteChildren.push(child.type.name));
+      }
+    });
+    expect(blockquoteChildren).toEqual(['table', 'paragraph']);
+
+    // blockquote先頭からはさらに上へは出ない
+    expect(moveTableUp(editor)).toBe(false);
+    expect(roundtripMarkdown(editor.storage.markdown.getMarkdown())).toContain('> | --- |');
     editor.destroy();
   });
 });

@@ -15,10 +15,11 @@ afterEach(() => {
 
 const TABLE_MD = '| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n';
 
+// 前後に段落がある表(上下移動の項目が出る配置)
 function newTableEditor(): void {
   editor = new Editor({
     extensions: createEditorExtensions({ nodeViews: false }),
-    content: TABLE_MD,
+    content: `前の段落\n\n${TABLE_MD}\n後の段落\n`,
   });
 }
 
@@ -117,6 +118,16 @@ describe('findTableAt / getTableMenuItems', () => {
       '表を下へ移動',
       '表を削除',
     ]);
+  });
+
+  it('表だけの文書では「上へ移動」「下へ移動」が出ない(動かせないため)', () => {
+    editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false }),
+      content: TABLE_MD,
+    });
+    editor.commands.setTextSelection(posBeforeText('1'));
+    expect(itemLabels()).not.toContain('表を上へ移動');
+    expect(itemLabels()).not.toContain('表を下へ移動');
   });
 
   it('1列だけの表では「列を削除」が出ない(prosemirror-tablesが拒否して無反応になるため)', () => {

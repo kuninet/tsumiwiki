@@ -1,7 +1,7 @@
-import { Editor } from '@tiptap/core';
+import type { Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { TextSelection } from '@tiptap/pm/state';
-import { createEditorExtensions } from './markdown';
+import { withHeadlessEditor } from './markdown';
 import { findTableAt } from './table-utils';
 
 // 表ブロックの丸ごと操作(コピー・カット・上下移動)。issue #223。
@@ -14,17 +14,11 @@ export function findParentTable(editor: Editor): { node: ProseMirrorNode; pos: n
 }
 
 // 表ノード単体をヘッドレスエディタに包んでGFM Markdownへシリアライズする
-// (markdown.ts の roundtripMarkdown と同じパターン)
 function serializeTableNode(node: ProseMirrorNode): string {
-  const tmp = new Editor({
-    extensions: createEditorExtensions({ nodeViews: false }),
-    content: { type: 'doc', content: [node.toJSON()] },
-  });
-  try {
-    return tmp.storage.markdown.getMarkdown() as string;
-  } finally {
-    tmp.destroy();
-  }
+  return withHeadlessEditor(
+    { type: 'doc', content: [node.toJSON()] },
+    (tmp) => tmp.storage.markdown.getMarkdown() as string,
+  );
 }
 
 // カーソルを含む表をGFM Markdownへシリアライズする。表外なら null。
@@ -78,6 +72,12 @@ function moveTable(editor: Editor, direction: 'up' | 'down'): boolean {
   if (!found) return false;
   const { node: tableNode, pos: tableStart } = found;
   const tableEnd = tableStart + tableNode.nodeSize;
+  // 移動後も編集中のセルにカーソルを保つため、表内の相対位置を控えておく
+  // (表の内容は移動で変わらないため、新しい表開始位置+同じオフセットが同じセルを指す)
+  const selOffset = Math.min(
+    Math.max(editor.state.selection.from - tableStart, 1),
+    tableNode.nodeSize - 1,
+  );
 
   return editor.commands.command(({ tr, dispatch }) => {
     if (direction === 'up') {
@@ -90,7 +90,7 @@ function moveTable(editor: Editor, direction: 'up' | 'down'): boolean {
         const prevStart = tableStart - prevSibling.nodeSize;
         tr.delete(tableStart, tableEnd);
         tr.insert(prevStart, tableNode);
-        const $cursor = tr.doc.resolve(prevStart + 1);
+        const $cursor = tr.doc.resolve(prevStart + selOffset);
         tr.setSelection(TextSelection.near($cursor, 1));
       }
       return true;
@@ -105,7 +105,7 @@ function moveTable(editor: Editor, direction: 'up' | 'down'): boolean {
       // 削除で兄弟が表のサイズ分手前にずれるため、その分を差し引いた位置が新しい挿入先
       const newTablePos = nextEnd - tableNode.nodeSize;
       tr.insert(newTablePos, tableNode);
-      const $cursor = tr.doc.resolve(newTablePos + 1);
+      const $cursor = tr.doc.resolve(newTablePos + selOffset);
       tr.setSelection(TextSelection.near($cursor, 1));
     }
     return true;

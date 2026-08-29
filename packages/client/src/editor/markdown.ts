@@ -1,4 +1,4 @@
-import { Editor, type Extensions } from '@tiptap/core';
+import { type Content, Editor, type Extensions } from '@tiptap/core';
 import CodeBlock from '@tiptap/extension-code-block';
 import Image from '@tiptap/extension-image';
 import Table from '@tiptap/extension-table';
@@ -71,15 +71,20 @@ export function createEditorExtensions(options: EditorExtensionOptions = {}): Ex
   ];
 }
 
-// Markdown→エディタ→Markdownの変換(ヘッドレス)。往復変換テストの対象。
-export function roundtripMarkdown(markdown: string): string {
+// ヘッドレスエディタを一時生成して変換処理を行う共通ヘルパー(必ずdestroyする)
+export function withHeadlessEditor<T>(content: Content, fn: (editor: Editor) => T): T {
   const editor = new Editor({
     extensions: createEditorExtensions({ nodeViews: false }),
-    content: markdown,
+    content,
   });
   try {
-    return editor.storage.markdown.getMarkdown() as string;
+    return fn(editor);
   } finally {
     editor.destroy();
   }
+}
+
+// Markdown→エディタ→Markdownの変換(ヘッドレス)。往復変換テストの対象。
+export function roundtripMarkdown(markdown: string): string {
+  return withHeadlessEditor(markdown, (editor) => editor.storage.markdown.getMarkdown() as string);
 }

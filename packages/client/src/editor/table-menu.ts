@@ -86,19 +86,30 @@ export function getTableMenuItems(
         );
       },
     },
-    {
-      label: '表を上へ移動',
-      onSelect: () => moveTableUp(editor),
-    },
-    {
-      label: '表を下へ移動',
-      onSelect: () => moveTableDown(editor),
-    },
-    {
-      label: '表を削除',
-      onSelect: () => editor.chain().focus().deleteTable().run(),
-      danger: true,
-    },
   );
+  // コンテナの先頭/末尾では移動できず無反応になるため、動かせる方向だけ項目を出す
+  if (table && editor.state.doc.resolve(table.pos).nodeBefore) {
+    items.push({
+      label: '表を上へ移動',
+      onSelect: () => {
+        moveTableUp(editor);
+        editor.commands.focus();
+      },
+    });
+  }
+  if (table && editor.state.doc.resolve(table.pos + table.node.nodeSize).nodeAfter) {
+    items.push({
+      label: '表を下へ移動',
+      onSelect: () => {
+        moveTableDown(editor);
+        editor.commands.focus();
+      },
+    });
+  }
+  items.push({
+    label: '表を削除',
+    onSelect: () => editor.chain().focus().deleteTable().run(),
+    danger: true,
+  });
   return items;
 }
