@@ -157,21 +157,19 @@ describe('リスト直後の空段落のBackspace(issue #220)', () => {
     expect(editor.state.selection.$from.parent.textContent).toBe('項目');
   });
 
-  it('Mod-Backspace / Shift-Backspaceでもビュレットが復活しない', () => {
-    for (const init of [{ ctrlKey: true }, { shiftKey: true }] as KeyboardEventInit[]) {
-      editor = new Editor({ extensions: createEditorExtensions(), content: '- 項目' });
-      editor.commands.focus('end');
-      pressKey('Enter');
-      pressKey('Backspace');
-      expect(topLevelTypes()).toEqual(['bulletList', 'paragraph']);
+  it.each([
+    ['Mod-Backspace', { ctrlKey: true }],
+    ['Shift-Backspace', { shiftKey: true }],
+  ] as [string, KeyboardEventInit][])('%sでもビュレットが復活しない', (_name, init) => {
+    editor = new Editor({ extensions: createEditorExtensions(), content: '- 項目' });
+    editor.commands.focus('end');
+    pressKey('Enter');
+    pressKey('Backspace');
+    expect(topLevelTypes()).toEqual(['bulletList', 'paragraph']);
 
-      pressKey('Backspace', init);
-      expect(topLevelTypes()).toEqual(['bulletList']);
-      expect(editor.state.doc.firstChild!.childCount).toBe(1);
-      editor.destroy();
-    }
-    // afterEachのdestroyが二重にならないようダミーを残す
-    editor = new Editor({ extensions: createEditorExtensions(), content: '' });
+    pressKey('Backspace', init);
+    expect(topLevelTypes()).toEqual(['bulletList']);
+    expect(editor.state.doc.firstChild!.childCount).toBe(1);
   });
 
   it('段落直後の空段落BSは既定動作のまま(カスタム介入しない)', () => {

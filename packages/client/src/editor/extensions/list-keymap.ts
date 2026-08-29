@@ -1,4 +1,4 @@
-import { Extension } from '@tiptap/core';
+import { Extension, isMacOS, isiOS } from '@tiptap/core';
 import { Selection } from '@tiptap/pm/state';
 
 const LIST_TYPES = ['bulletList', 'orderedList', 'taskList'];
@@ -50,10 +50,16 @@ export const ListKeymap = Extension.create({
       return this.editor.commands.liftListItem(container.type.name);
     };
 
-    return {
+    const shortcuts: Record<string, () => boolean> = {
       Backspace: handleBackspace,
       'Mod-Backspace': handleBackspace,
       'Shift-Backspace': handleBackspace,
     };
+    // tiptap既定のmacKeymapと同じgatingでmacOS/iOS限定バリアントも揃える
+    if (isMacOS() || isiOS()) {
+      shortcuts['Ctrl-h'] = handleBackspace;
+      shortcuts['Alt-Backspace'] = handleBackspace;
+    }
+    return shortcuts;
   },
 });
