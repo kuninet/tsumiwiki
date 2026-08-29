@@ -1,11 +1,27 @@
 import type { Editor } from '@tiptap/core';
 import type { ContextMenuItem } from '../components/ContextMenu';
+import {
+  copyTableToClipboard,
+  cutTableToClipboard,
+  moveTableDown,
+  moveTableUp,
+} from './table-block-ops';
 import { findTableAt } from './table-utils';
 
 // issue #222: 表のコンテキストメニュー(行/列の追加・削除、表の削除)
+// issue #223: 表の丸ごと操作(コピー・カット・上下移動)も同じメニューに載せる
 // ロジックをDocViewから切り出した純粋関数。カーソル位置に応じた項目の出し分けはここに集約する。
 
-export function getTableMenuItems(editor: Editor): ContextMenuItem[] {
+export interface TableMenuOptions {
+  // コピー/カットの結果通知(DocViewがトーストを渡す。テスト等では省略可)
+  showToast?: (kind: 'success' | 'error', message: string) => void;
+}
+
+export function getTableMenuItems(
+  editor: Editor,
+  options: TableMenuOptions = {},
+): ContextMenuItem[] {
+  const { showToast } = options;
   const table = findTableAt(editor.state.selection.$from);
   // tiptap-markdownはヘッダ行のない表をHTML表としてシリアライズしてしまうため、
   // ヘッダ行を消せる/ヘッダの上に行を作れる操作(行追加・行削除)はヘッダ行に掛かる選択では出さない。
@@ -53,10 +69,36 @@ export function getTableMenuItems(editor: Editor): ContextMenuItem[] {
       onSelect: () => editor.chain().focus().deleteColumn().run(),
     });
   }
-  items.push({
-    label: '表を削除',
-    onSelect: () => editor.chain().focus().deleteTable().run(),
-    danger: true,
-  });
+  items.push(
+    {
+      label: '表をコピー',
+      onSelect: () => {
+        void copyTableToClipboard(editor).then((ok) =>
+          showToast?.(ok ? 'success' : 'error', ok ? '表をコピーしました' : 'コピーに失敗しました'),
+        );
+      },
+    },
+    {
+      label: '表をカット',
+      onSelect: () => {
+        void cutTableToClipboard(editor).then((ok) =>
+          showToast?.(ok ? 'success' : 'error', ok ? '表をカットしました' : 'カットに失敗しました'),
+        );
+      },
+    },
+    {
+      label: '表を上へ移動',
+      onSelect: () => moveTableUp(editor),
+    },
+    {
+      label: '表を下へ移動',
+      onSelect: () => moveTableDown(editor),
+    },
+    {
+      label: '表を削除',
+      onSelect: () => editor.chain().focus().deleteTable().run(),
+      danger: true,
+    },
+  );
   return items;
 }

@@ -1122,7 +1122,7 @@ export function DocView({
         <ContextMenu
           x={tableMenu.x}
           y={tableMenu.y}
-          items={getTableMenuItems(editor)}
+          items={getTableMenuItems(editor, { showToast })}
           onClose={() => setTableMenu(null)}
         />
       )}

@@ -1,6 +1,6 @@
 import { Editor } from '@tiptap/core';
 import { CellSelection } from '@tiptap/pm/tables';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createEditorExtensions } from '../markdown';
 import { getTableMenuItems } from '../table-menu';
 import { findTableAt } from '../table-utils';
@@ -61,7 +61,7 @@ function cellPosAround(text: string): number {
 }
 
 describe('findTableAt / getTableMenuItems', () => {
-  it('bodyセル選択時: 7項目すべて出る', () => {
+  it('bodyセル選択時: 全11項目が出る', () => {
     newTableEditor();
     editor.commands.setTextSelection(posBeforeText('1'));
     expect(findTableAt(editor.state.selection.$from)).not.toBeNull();
@@ -72,12 +72,16 @@ describe('findTableAt / getTableMenuItems', () => {
       '左に列を追加',
       '右に列を追加',
       '列を削除',
+      '表をコピー',
+      '表をカット',
+      '表を上へ移動',
+      '表を下へ移動',
       '表を削除',
     ]);
     expect(getTableMenuItems(editor).find((i) => i.label === '表を削除')?.danger).toBe(true);
   });
 
-  it('ヘッダセル選択時: 「上に行を追加」「行を削除」が出ない(5項目)', () => {
+  it('ヘッダセル選択時: 「上に行を追加」「行を削除」が出ない(9項目)', () => {
     newTableEditor();
     editor.commands.setTextSelection(posBeforeText('A'));
     expect(itemLabels()).toEqual([
@@ -85,6 +89,10 @@ describe('findTableAt / getTableMenuItems', () => {
       '左に列を追加',
       '右に列を追加',
       '列を削除',
+      '表をコピー',
+      '表をカット',
+      '表を上へ移動',
+      '表を下へ移動',
       '表を削除',
     ]);
   });
@@ -103,6 +111,10 @@ describe('findTableAt / getTableMenuItems', () => {
       '左に列を追加',
       '右に列を追加',
       '列を削除',
+      '表をコピー',
+      '表をカット',
+      '表を上へ移動',
+      '表を下へ移動',
       '表を削除',
     ]);
   });
@@ -207,6 +219,40 @@ describe('表操作後もGFMパイプ表を維持する', () => {
     expectGfmTable(md);
     // カーソルは1列目(A列)のセルにあるため、削除されるのはA列
     expect(md).not.toContain('A');
+  });
+
+  it('表をコピーでクリップボードへ書き込みトースト通知する', async () => {
+    newTableEditor();
+    editor.commands.setTextSelection(posBeforeText('1'));
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    // jsdomにclipboardは無いため、テスト用に定義する(table-block-ops.test.tsと同じ方式)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const showToast = vi.fn();
+    try {
+      getTableMenuItems(editor, { showToast })
+        .find((i) => i.label === '表をコピー')!
+        .onSelect();
+      await vi.waitFor(() =>
+        expect(showToast).toHaveBeenCalledWith('success', '表をコピーしました'),
+      );
+      expect(writeText.mock.calls[0][0]).toContain('| --- |');
+    } finally {
+      // @ts-expect-error テスト用に定義したプロパティを剥がす
+      delete navigator.clipboard;
+    }
+  });
+
+  it('表を上へ移動で直前の段落と入れ替わる', () => {
+    editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false }),
+      content: `前の段落\n\n${TABLE_MD}`,
+    });
+    editor.commands.setTextSelection(posBeforeText('1'));
+    getTableMenuItems(editor)
+      .find((i) => i.label === '表を上へ移動')!
+      .onSelect();
+    const md = getMarkdown();
+    expect(md.indexOf('| --- |')).toBeLessThan(md.indexOf('前の段落'));
   });
 
   it('表を削除で表が消える', () => {
