@@ -298,4 +298,61 @@ describe('EditorToolbar', () => {
 
     editor.destroy();
   });
+
+  it('onToggleSourceModeを渡さない場合はソースボタンを表示しない(#224)', () => {
+    const editor = createTestEditor('本文');
+
+    render(<EditorToolbar editor={editor} onOpenLinkDialog={vi.fn()} onPickImage={vi.fn()} />);
+
+    expect(screen.queryByRole('button', { name: /ソース/ })).toBeNull();
+
+    editor.destroy();
+  });
+
+  it('ソースボタンをクリックするとonToggleSourceModeが呼ばれる(#224)', () => {
+    const editor = createTestEditor('本文');
+    const onToggleSourceMode = vi.fn();
+
+    render(
+      <EditorToolbar
+        editor={editor}
+        onOpenLinkDialog={vi.fn()}
+        onPickImage={vi.fn()}
+        sourceMode={false}
+        onToggleSourceMode={onToggleSourceMode}
+      />,
+    );
+    const sourceButton = screen.getByRole('button', { name: 'Markdownソースを編集' });
+    expect(sourceButton.getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(sourceButton);
+    expect(onToggleSourceMode).toHaveBeenCalledTimes(1);
+
+    editor.destroy();
+  });
+
+  it('sourceMode中はWYSIWYG用ボタンがdisabledになり、ソースボタンはactive表示になる(#224)', () => {
+    const editor = createTestEditor('本文');
+
+    render(
+      <EditorToolbar
+        editor={editor}
+        onOpenLinkDialog={vi.fn()}
+        onPickImage={vi.fn()}
+        sourceMode={true}
+        onToggleSourceMode={vi.fn()}
+      />,
+    );
+
+    expect((screen.getByRole('button', { name: '太字' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: '表を挿入(3x3)' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    const sourceButton = screen.getByRole('button', { name: 'WYSIWYG表示に戻す' });
+    expect((sourceButton as HTMLButtonElement).disabled).toBeFalsy();
+    expect(sourceButton.getAttribute('aria-pressed')).toBe('true');
+
+    editor.destroy();
+  });
 });

@@ -1,6 +1,7 @@
 import type { Editor } from '@tiptap/core';
 import { useEditorState } from '@tiptap/react';
 import {
+  Braces,
   Code2,
   FileText,
   Image as ImageIcon,
@@ -28,6 +29,10 @@ interface EditorToolbarProps {
   onPickImage: (file: File) => void;
   // #84 Phase C: テンプレート適用モーダルを開く(null なら非表示)
   onOpenTemplateApply?: () => void;
+  // #224 ソース編集モード: 現在ソース表示中かどうか。トグルボタンのactive表示に使う。
+  // 未指定時は「ソース」ボタン自体を表示しない(既存の呼び出し元・テストは非表示のまま)
+  sourceMode?: boolean;
+  onToggleSourceMode?: () => void;
 }
 
 interface ToolbarButtonProps {
@@ -106,8 +111,13 @@ export function EditorToolbar({
   onOpenLinkDialog,
   onPickImage,
   onOpenTemplateApply,
+  sourceMode = false,
+  onToggleSourceMode,
 }: EditorToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // #224 ソース編集モード中はWYSIWYG用ボタン(B/I/表など)を操作不能にする。
+  // 「ソース」トグル自体は常に押せる(sourceMode解除の唯一の経路のため)
+  const wysiwygDisabled = sourceMode;
   // #175: タッチ端末で仮想キーボードが出ている間は、ツールバーをキーボード直上へ貼り付ける。
   // デスクトップ(hover 可 or ポインタ粗くない)は常に通常フロー。
   // z-index 45: 既存の z-40 群(AppShell モバイルドロワー・DropZoneOverlay・SearchBox 等)より
@@ -158,16 +168,19 @@ export function EditorToolbar({
         <ToolbarButton
           label="H1"
           active={active.h1}
+          disabled={wysiwygDisabled}
           onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
         />
         <ToolbarButton
           label="H2"
           active={active.h2}
+          disabled={wysiwygDisabled}
           onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
         />
         <ToolbarButton
           label="H3"
           active={active.h3}
+          disabled={wysiwygDisabled}
           onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
         />
         <Separator />
@@ -176,6 +189,7 @@ export function EditorToolbar({
           title="太字"
           labelClassName="font-bold"
           active={active.bold}
+          disabled={wysiwygDisabled}
           onClick={() => editor.chain().focus().toggleBold().run()}
         />
         <ToolbarButton
@@ -183,6 +197,7 @@ export function EditorToolbar({
           title="斜体"
           labelClassName="italic"
           active={active.italic}
+          disabled={wysiwygDisabled}
           onClick={() => editor.chain().focus().toggleItalic().run()}
         />
         <ToolbarButton
@@ -190,6 +205,7 @@ export function EditorToolbar({
           title="打消し"
           labelClassName="line-through"
           active={active.strike}
+          disabled={wysiwygDisabled}
           onClick={() => editor.chain().focus().toggleStrike().run()}
         />
         <Separator />
@@ -197,7 +213,7 @@ export function EditorToolbar({
           icon={<IndentIncrease size={ICON_SIZE} aria-hidden="true" />}
           label="インデント"
           title="インデント追加(Tab)"
-          disabled={!active.canIndent}
+          disabled={wysiwygDisabled || !active.canIndent}
           onClick={() => {
             const type = sinkableListItem(editor);
             if (type) editor.chain().focus().sinkListItem(type).run();
@@ -207,7 +223,7 @@ export function EditorToolbar({
           icon={<IndentDecrease size={ICON_SIZE} aria-hidden="true" />}
           label="戻す"
           title="インデント戻し(Shift+Tab)"
-          disabled={!active.canOutdent}
+          disabled={wysiwygDisabled || !active.canOutdent}
           onClick={() => {
             const type = liftableListItem(editor);
             if (type) editor.chain().focus().liftListItem(type).run();
@@ -219,6 +235,7 @@ export function EditorToolbar({
           label="箇条書き"
           title="箇条書き"
           active={active.bulletList}
+          disabled={wysiwygDisabled}
           onClick={() => editor.chain().focus().toggleBulletList().run()}
         />
         <ToolbarButton
@@ -226,6 +243,7 @@ export function EditorToolbar({
           label="番号"
           title="番号付きリスト"
           active={active.orderedList}
+          disabled={wysiwygDisabled}
           onClick={() => editor.chain().focus().toggleOrderedList().run()}
         />
         <ToolbarButton
@@ -233,6 +251,7 @@ export function EditorToolbar({
           label="チェック"
           title="チェックリスト"
           active={active.taskList}
+          disabled={wysiwygDisabled}
           onClick={() => editor.chain().focus().toggleTaskList().run()}
         />
         <Separator />
@@ -240,6 +259,7 @@ export function EditorToolbar({
           icon={<Table size={ICON_SIZE} aria-hidden="true" />}
           label="表"
           title="表を挿入(3x3)"
+          disabled={wysiwygDisabled}
           onClick={() =>
             editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
           }
@@ -249,6 +269,7 @@ export function EditorToolbar({
           label="コード"
           title="コードブロック"
           active={active.codeBlock}
+          disabled={wysiwygDisabled}
           onClick={() => editor.chain().focus().toggleCodeBlock().run()}
         />
         <ToolbarButton
@@ -256,12 +277,14 @@ export function EditorToolbar({
           label="引用"
           title="引用"
           active={active.blockquote}
+          disabled={wysiwygDisabled}
           onClick={() => editor.chain().focus().toggleBlockquote().run()}
         />
         <ToolbarButton
           icon={<Minus size={ICON_SIZE} aria-hidden="true" />}
           label="区切り線"
           title="区切り線"
+          disabled={wysiwygDisabled}
           onClick={() => editor.chain().focus().setHorizontalRule().run()}
         />
         <Separator />
@@ -270,12 +293,14 @@ export function EditorToolbar({
           label="リンク"
           title="リンク(Ctrl/Cmd+K)"
           active={active.link}
+          disabled={wysiwygDisabled}
           onClick={onOpenLinkDialog}
         />
         <ToolbarButton
           icon={<ImageIcon size={ICON_SIZE} aria-hidden="true" />}
           label="画像/PDF"
           title="画像/PDF"
+          disabled={wysiwygDisabled}
           onClick={() => fileInputRef.current?.click()}
         />
         <input
@@ -289,6 +314,7 @@ export function EditorToolbar({
           icon={<Workflow size={ICON_SIZE} aria-hidden="true" />}
           label="Mermaid"
           title="Mermaid"
+          disabled={wysiwygDisabled}
           onClick={() =>
             editor
               .chain()
@@ -302,8 +328,21 @@ export function EditorToolbar({
             icon={<FileText size={ICON_SIZE} aria-hidden="true" />}
             label="テンプレ適用"
             title="テンプレート適用(挿入/追記)"
+            disabled={wysiwygDisabled}
             onClick={onOpenTemplateApply}
           />
+        )}
+        {onToggleSourceMode && (
+          <>
+            <Separator />
+            <ToolbarButton
+              icon={<Braces size={ICON_SIZE} aria-hidden="true" />}
+              label="ソース"
+              title={sourceMode ? 'WYSIWYG表示に戻す' : 'Markdownソースを編集'}
+              active={sourceMode}
+              onClick={onToggleSourceMode}
+            />
+          </>
         )}
       </div>
     </div>
