@@ -17,6 +17,8 @@ import { useExpandTemplate } from '../api/templates';
 import type { AttachmentLightboxRequest, AttachmentMenuRequest } from '../editor/doc-storage';
 import { createEditorExtensions } from '../editor/markdown';
 import { parseMarkdownFragment } from '../editor/parse-fragment';
+import { getTableMenuItems } from '../editor/table-menu';
+import { findTableAt } from '../editor/table-utils';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
 import { useVirtualKeyboard } from '../hooks/use-virtual-keyboard';
@@ -40,7 +42,7 @@ import { PromptDialog } from './PromptDialog';
 import { TagChipEditor } from './TagChipEditor';
 import { TemplatePickerDialog } from './TemplatePickerDialog';
 
-// 文書閲覧・編集画面(SC-02のMainPane。設計04章4.2/4.4・05章5.3〜5.5・デザインhandoff components.md)
+// 文書閲覧・編集画面(SC-02のMainPane。設計04章4.2/4.4・05章5.3〜5.6・デザインhandoff components.md)
 // 閲覧・編集は同じTiptapインスタンスのeditable切り替えで実現し、表示を完全一致させる
 
 interface DocViewProps {
@@ -166,6 +168,8 @@ export function DocView({
   >(null);
   // #211: 画像クリック/PDFの「拡大表示」メニューで開くライトボックスの表示状態
   const [lightbox, setLightbox] = useState<AttachmentLightboxRequest | null>(null);
+  // #222 表のコンテキストメニュー: 右クリック位置(表内のときだけセットする)
+  const [tableMenu, setTableMenu] = useState<{ x: number; y: number } | null>(null);
   const [renameDialog, setRenameDialog] = useState<{
     resolved: { path: string; name: string };
   } | null>(null);
@@ -293,6 +297,34 @@ export function DocView({
       // 経由なのでそちらは触らない)
       handleDOMEvents: {
         keydown: (_view, event) => event.isComposing && event.key === ' ',
+        // #222 表のコンテキストメニュー: 表内での右クリックだけ乗っ取り、それ以外はブラウザ標準メニューに任せる
+        contextmenu: (view, event) => {
+          if (!view.editable) return false;
+          // キーボード起動(メニューキー/Shift+F10)はclientX/Yが0で座標が使えないため、
+          // 現在のカーソル位置で判定し、メニューもカーソル座標に出す
+          if (event.clientX === 0 && event.clientY === 0) {
+            const { $from } = view.state.selection;
+            if (!findTableAt($from)) return false;
+            const cursor = view.coordsAtPos(view.state.selection.from);
+            event.preventDefault();
+            // ContextMenuはwindowのcontextmenuで自身を閉じるため、開いた同じイベントが
+            // windowまで昇って即closeしないよう伝播を止める(実機Chromiumで確認した挙動)
+            event.stopPropagation();
+            setTableMenu({ x: cursor.left, y: cursor.bottom });
+            return true;
+          }
+          const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
+          if (!coords) return false;
+          if (!findTableAt(view.state.doc.resolve(coords.pos))) return false;
+          // 右クリックはカーソルを移動しないブラウザがあるため、判定・操作対象を確実にするため
+          // クリック位置へselectionを合わせてからメニューを開く
+          editor?.commands.setTextSelection(coords.pos);
+          event.preventDefault();
+          // 同上: 同一イベントのwindowバブルによる即closeを防ぐ
+          event.stopPropagation();
+          setTableMenu({ x: event.clientX, y: event.clientY });
+          return true;
+        },
       },
       handleDrop: (_view, event) => {
         const files = Array.from(event.dataTransfer?.files ?? []).filter(isAttachmentFile);
@@ -327,6 +359,7 @@ export function DocView({
   useEffect(() => {
     setLightbox(null);
     setAttachmentMenu(null);
+    setTableMenu(null);
   }, [doc.path]);
 
   useEffect(() => {
@@ -339,6 +372,11 @@ export function DocView({
       editor.commands.focus('start');
     }
   }, [editor, session.mode]);
+
+  // #222: 編集モードを抜けたら開いたままの表メニューを閉じる
+  useEffect(() => {
+    if (session.mode !== 'edit') setTableMenu(null);
+  }, [session.mode]);
 
   // 文書オープン/切替時はツールバーを非表示にリセットする。
   // その後ユーザーがエディタで実操作したら showEditorChrome で表示ONになる(下の useEffect)。
@@ -545,7 +583,10 @@ export function DocView({
           .run();
         inserted++;
       } catch (err) {
-        showToast('error', err instanceof Error ? err.message : 'ファイルのアップロードに失敗しました');
+        showToast(
+          'error',
+          err instanceof Error ? err.message : 'ファイルのアップロードに失敗しました',
+        );
       }
     }
     if (inserted > 0) {
@@ -567,7 +608,10 @@ export function DocView({
         showToast('error', '画像ファイルが見つかりません');
         return;
       }
-      showToast('error', err instanceof ApiRequestError ? err.message : '画像情報の取得に失敗しました');
+      showToast(
+        'error',
+        err instanceof ApiRequestError ? err.message : '画像情報の取得に失敗しました',
+      );
     }
   }
   // NodeViewに渡すopenAttachmentMenuは生成時に固定される安定参照のため、
@@ -725,7 +769,10 @@ export function DocView({
       if (err instanceof ApiRequestError && err.code === 'CONFLICT') {
         showToast('error', '同名のファイルがあります');
       } else {
-        showToast('error', err instanceof ApiRequestError ? err.message : '名前の変更に失敗しました');
+        showToast(
+          'error',
+          err instanceof ApiRequestError ? err.message : '名前の変更に失敗しました',
+        );
       }
       return;
     }
@@ -1067,6 +1114,16 @@ export function DocView({
             { label: '削除', onSelect: handleOpenDeleteAttachmentDialog, danger: true },
           ]}
           onClose={() => setAttachmentMenu(null)}
+        />
+      )}
+
+      {/* #222 表のコンテキストメニュー */}
+      {tableMenu && editor && (
+        <ContextMenu
+          x={tableMenu.x}
+          y={tableMenu.y}
+          items={getTableMenuItems(editor)}
+          onClose={() => setTableMenu(null)}
         />
       )}
 
