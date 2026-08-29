@@ -17,6 +17,7 @@ import { useExpandTemplate } from '../api/templates';
 import type { AttachmentLightboxRequest, AttachmentMenuRequest } from '../editor/doc-storage';
 import { createEditorExtensions } from '../editor/markdown';
 import { parseMarkdownFragment } from '../editor/parse-fragment';
+import { getTableMenuItems } from '../editor/table-menu';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
 import { useVirtualKeyboard } from '../hooks/use-virtual-keyboard';
@@ -166,6 +167,8 @@ export function DocView({
   >(null);
   // #211: 画像クリック/PDFの「拡大表示」メニューで開くライトボックスの表示状態
   const [lightbox, setLightbox] = useState<AttachmentLightboxRequest | null>(null);
+  // #222 表のコンテキストメニュー: 右クリック位置(表内のときだけセットする)
+  const [tableMenu, setTableMenu] = useState<{ x: number; y: number } | null>(null);
   const [renameDialog, setRenameDialog] = useState<{
     resolved: { path: string; name: string };
   } | null>(null);
@@ -293,6 +296,27 @@ export function DocView({
       // 経由なのでそちらは触らない)
       handleDOMEvents: {
         keydown: (_view, event) => event.isComposing && event.key === ' ',
+        // #222 表のコンテキストメニュー: 表内での右クリックだけ乗っ取り、それ以外はブラウザ標準メニューに任せる
+        contextmenu: (view, event) => {
+          if (!view.editable) return false;
+          const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
+          if (!coords) return false;
+          const $pos = view.state.doc.resolve(coords.pos);
+          let inTable = false;
+          for (let d = $pos.depth; d > 0; d--) {
+            if ($pos.node(d).type.name === 'table') {
+              inTable = true;
+              break;
+            }
+          }
+          if (!inTable) return false;
+          // 右クリックはカーソルを移動しないブラウザがあるため、判定・操作対象を確実にするため
+          // クリック位置へselectionを合わせてからメニューを開く
+          editor?.commands.setTextSelection(coords.pos);
+          event.preventDefault();
+          setTableMenu({ x: event.clientX, y: event.clientY });
+          return true;
+        },
       },
       handleDrop: (_view, event) => {
         const files = Array.from(event.dataTransfer?.files ?? []).filter(isAttachmentFile);
@@ -327,6 +351,7 @@ export function DocView({
   useEffect(() => {
     setLightbox(null);
     setAttachmentMenu(null);
+    setTableMenu(null);
   }, [doc.path]);
 
   useEffect(() => {
@@ -339,6 +364,11 @@ export function DocView({
       editor.commands.focus('start');
     }
   }, [editor, session.mode]);
+
+  // #222: 編集モードを抜けたら開いたままの表メニューを閉じる
+  useEffect(() => {
+    if (session.mode !== 'edit') setTableMenu(null);
+  }, [session.mode]);
 
   // 文書オープン/切替時はツールバーを非表示にリセットする。
   // その後ユーザーがエディタで実操作したら showEditorChrome で表示ONになる(下の useEffect)。
@@ -1067,6 +1097,16 @@ export function DocView({
             { label: '削除', onSelect: handleOpenDeleteAttachmentDialog, danger: true },
           ]}
           onClose={() => setAttachmentMenu(null)}
+        />
+      )}
+
+      {/* #222 表のコンテキストメニュー */}
+      {tableMenu && editor && (
+        <ContextMenu
+          x={tableMenu.x}
+          y={tableMenu.y}
+          items={getTableMenuItems(editor)}
+          onClose={() => setTableMenu(null)}
         />
       )}
 
