@@ -1,7 +1,9 @@
 import { Editor } from '@tiptap/core';
+import { CellSelection } from '@tiptap/pm/tables';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createEditorExtensions } from '../markdown';
-import { getTableMenuItems, isInTable } from '../table-menu';
+import { getTableMenuItems } from '../table-menu';
+import { findTableAt } from '../table-utils';
 
 // issue #222: 表のコンテキストメニュー(行/列の追加・削除、表の削除)
 
@@ -14,7 +16,10 @@ afterEach(() => {
 const TABLE_MD = '| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n';
 
 function newTableEditor(): void {
-  editor = new Editor({ extensions: createEditorExtensions({ nodeViews: false }), content: TABLE_MD });
+  editor = new Editor({
+    extensions: createEditorExtensions({ nodeViews: false }),
+    content: TABLE_MD,
+  });
 }
 
 function getMarkdown(): string {
@@ -45,11 +50,21 @@ function expectGfmTable(md: string) {
   expect(md).not.toContain('<table');
 }
 
-describe('isInTable / getTableMenuItems', () => {
+// 指定テキストを含むセル(tableCell/tableHeader)ノードの直前位置を返す(CellSelection用)
+function cellPosAround(text: string): number {
+  const $pos = editor.state.doc.resolve(posBeforeText(text));
+  for (let d = $pos.depth; d > 0; d--) {
+    const name = $pos.node(d).type.name;
+    if (name === 'tableCell' || name === 'tableHeader') return $pos.before(d);
+  }
+  throw new Error(`cell not found around: ${text}`);
+}
+
+describe('findTableAt / getTableMenuItems', () => {
   it('bodyセル選択時: 7項目すべて出る', () => {
     newTableEditor();
     editor.commands.setTextSelection(posBeforeText('1'));
-    expect(isInTable(editor)).toBe(true);
+    expect(findTableAt(editor.state.selection.$from)).not.toBeNull();
     expect(itemLabels()).toEqual([
       '上に行を追加',
       '下に行を追加',
@@ -65,14 +80,40 @@ describe('isInTable / getTableMenuItems', () => {
   it('ヘッダセル選択時: 「上に行を追加」「行を削除」が出ない(5項目)', () => {
     newTableEditor();
     editor.commands.setTextSelection(posBeforeText('A'));
-    expect(isInTable(editor)).toBe(true);
-    expect(itemLabels()).toEqual(['下に行を追加', '左に列を追加', '右に列を追加', '列を削除', '表を削除']);
+    expect(itemLabels()).toEqual([
+      '下に行を追加',
+      '左に列を追加',
+      '右に列を追加',
+      '列を削除',
+      '表を削除',
+    ]);
   });
 
-  it('表外(段落)では isInTable が false になる', () => {
-    editor = new Editor({ extensions: createEditorExtensions({ nodeViews: false }), content: '本文' });
+  it('ヘッダ+bodyまたぎのCellSelectionでも「上に行を追加」「行を削除」が出ない', () => {
+    // isActive('tableHeader')は非空選択でfalseになるため、選択範囲ベースの判定であることを保証する
+    newTableEditor();
+    editor.commands.command(({ tr, dispatch }) => {
+      if (dispatch) {
+        tr.setSelection(CellSelection.create(tr.doc, cellPosAround('A'), cellPosAround('1')));
+      }
+      return true;
+    });
+    expect(itemLabels()).toEqual([
+      '下に行を追加',
+      '左に列を追加',
+      '右に列を追加',
+      '列を削除',
+      '表を削除',
+    ]);
+  });
+
+  it('表外(段落)では findTableAt が null になる', () => {
+    editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false }),
+      content: '本文',
+    });
     editor.commands.setTextSelection(1);
-    expect(isInTable(editor)).toBe(false);
+    expect(findTableAt(editor.state.selection.$from)).toBeNull();
     // getTableMenuItemsは表内であることを呼び出し側(DocView)が保証した上で使う前提のため、
     // 表外での戻り値は仕様の対象外
   });
@@ -91,6 +132,27 @@ describe('表操作後もGFMパイプ表を維持する', () => {
   it('下に行を追加', () => {
     newTableEditor();
     editor.commands.setTextSelection(posBeforeText('1'));
+    getTableMenuItems(editor)
+      .find((i) => i.label === '下に行を追加')!
+      .onSelect();
+    expectGfmTable(getMarkdown());
+  });
+
+  it('ヘッダセルで「下に行を追加」(ヘッダ直下にbody行が入る)', () => {
+    newTableEditor();
+    editor.commands.setTextSelection(posBeforeText('A'));
+    getTableMenuItems(editor)
+      .find((i) => i.label === '下に行を追加')!
+      .onSelect();
+    expectGfmTable(getMarkdown());
+  });
+
+  it('ヘッダ行のみの表でも「下に行を追加」でGFMを維持する', () => {
+    editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false }),
+      content: '| A | B |\n| --- | --- |\n',
+    });
+    editor.commands.setTextSelection(posBeforeText('A'));
     getTableMenuItems(editor)
       .find((i) => i.label === '下に行を追加')!
       .onSelect();

@@ -18,6 +18,7 @@ import type { AttachmentLightboxRequest, AttachmentMenuRequest } from '../editor
 import { createEditorExtensions } from '../editor/markdown';
 import { parseMarkdownFragment } from '../editor/parse-fragment';
 import { getTableMenuItems } from '../editor/table-menu';
+import { findTableAt } from '../editor/table-utils';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
 import { useVirtualKeyboard } from '../hooks/use-virtual-keyboard';
@@ -301,15 +302,7 @@ export function DocView({
           if (!view.editable) return false;
           const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
           if (!coords) return false;
-          const $pos = view.state.doc.resolve(coords.pos);
-          let inTable = false;
-          for (let d = $pos.depth; d > 0; d--) {
-            if ($pos.node(d).type.name === 'table') {
-              inTable = true;
-              break;
-            }
-          }
-          if (!inTable) return false;
+          if (!findTableAt(view.state.doc.resolve(coords.pos))) return false;
           // 右クリックはカーソルを移動しないブラウザがあるため、判定・操作対象を確実にするため
           // クリック位置へselectionを合わせてからメニューを開く
           editor?.commands.setTextSelection(coords.pos);
@@ -575,7 +568,10 @@ export function DocView({
           .run();
         inserted++;
       } catch (err) {
-        showToast('error', err instanceof Error ? err.message : 'ファイルのアップロードに失敗しました');
+        showToast(
+          'error',
+          err instanceof Error ? err.message : 'ファイルのアップロードに失敗しました',
+        );
       }
     }
     if (inserted > 0) {
@@ -597,7 +593,10 @@ export function DocView({
         showToast('error', '画像ファイルが見つかりません');
         return;
       }
-      showToast('error', err instanceof ApiRequestError ? err.message : '画像情報の取得に失敗しました');
+      showToast(
+        'error',
+        err instanceof ApiRequestError ? err.message : '画像情報の取得に失敗しました',
+      );
     }
   }
   // NodeViewに渡すopenAttachmentMenuは生成時に固定される安定参照のため、
@@ -755,7 +754,10 @@ export function DocView({
       if (err instanceof ApiRequestError && err.code === 'CONFLICT') {
         showToast('error', '同名のファイルがあります');
       } else {
-        showToast('error', err instanceof ApiRequestError ? err.message : '名前の変更に失敗しました');
+        showToast(
+          'error',
+          err instanceof ApiRequestError ? err.message : '名前の変更に失敗しました',
+        );
       }
       return;
     }
