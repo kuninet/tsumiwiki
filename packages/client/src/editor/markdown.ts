@@ -1,7 +1,6 @@
 import { type Content, Editor, type Extensions } from '@tiptap/core';
 import CodeBlock from '@tiptap/extension-code-block';
 import Image from '@tiptap/extension-image';
-import Table from '@tiptap/extension-table';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import TableRow from '@tiptap/extension-table-row';
@@ -19,6 +18,7 @@ import { InlineTagHighlight } from './extensions/inline-tag-highlight';
 import { LinkWithTitle, MarkdownLinkSchemes } from './extensions/link-markdown';
 import { ListKeymap } from './extensions/list-keymap';
 import { RawBlock } from './extensions/raw-block';
+import { TableMarkdown } from './extensions/table-markdown';
 import { Wikilink } from './extensions/wikilink';
 import { WikilinkSuggestion } from './extensions/wikilink-suggestion';
 
@@ -44,7 +44,9 @@ export function createEditorExtensions(options: EditorExtensionOptions = {}): Ex
     MarkdownLinkSchemes,
     // 段落内画像(![alt](path))を分断しない。NodeViewは表示解決のみでシリアライズには無関係
     (nodeViews ? ImageWithResolvedSrc : Image).configure({ inline: true }),
-    Table, // GFMパイプ表としてシリアライズされる
+    // GFMパイプ表としてシリアライズされる。セル内`|`のエスケープ・空テキストセルの
+    // 出力漏れを修正した自前シリアライザに置き換える(#235。table-markdown.ts参照)
+    TableMarkdown,
     TableRow,
     TableHeader,
     TableCell,

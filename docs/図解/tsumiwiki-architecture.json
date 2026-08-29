@@ -1,0 +1,329 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "TsumiWiki 全体アーキテクチャ",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1200,
+      660
+    ],
+    "views": [
+      {
+        "id": "edit-path",
+        "label": "ブラウザ編集経路",
+        "focus": [
+          "browser",
+          "api",
+          "docsvc",
+          "library",
+          "git"
+        ],
+        "note": "SPAからREST API経由で文書を保存し、保存ごとにGitコミットされる主経路。"
+      },
+      {
+        "id": "mcp-path",
+        "label": "MCP連携",
+        "focus": [
+          "mcpclient",
+          "mcp",
+          "docsvc"
+        ],
+        "note": "AIエージェントはBearerトークン認証の/mcpから同じDocServiceを使う。"
+      },
+      {
+        "id": "sync-path",
+        "label": "外部変更の同期",
+        "focus": [
+          "obsidian",
+          "library",
+          "watcher",
+          "git",
+          "db"
+        ],
+        "note": "外部エディタの直接編集をchokidarが検知し、syncコミットと再索引を行う。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "browser",
+      "type": "frontend",
+      "label": "ブラウザ SPA",
+      "sublabel": "React 18 + TipTap v2",
+      "pos": [
+        40,
+        90
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "mcpclient",
+      "type": "external",
+      "label": "MCPクライアント",
+      "sublabel": "Claude Code / Desktop",
+      "pos": [
+        40,
+        230
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "backup",
+      "type": "external",
+      "label": "バックアップ先",
+      "sublabel": "git bareリポジトリ",
+      "pos": [
+        40,
+        400
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "REST API",
+      "sublabel": "Fastify 5 /api/*",
+      "pos": [
+        330,
+        90
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "mcp",
+      "type": "backend",
+      "label": "MCPハンドラ",
+      "sublabel": "/mcp Streamable HTTP",
+      "pos": [
+        330,
+        230
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "docsvc",
+      "type": "backend",
+      "label": "DocService",
+      "sublabel": "文書CRUD・添付・履歴",
+      "pos": [
+        630,
+        160
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "git",
+      "type": "backend",
+      "label": "GitService",
+      "sublabel": "simple-git 履歴管理",
+      "pos": [
+        630,
+        400
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "watcher",
+      "type": "backend",
+      "label": "LibraryWatcher",
+      "sublabel": "chokidar + ポーリング",
+      "pos": [
+        630,
+        540
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "SQLite",
+      "sublabel": "FTS5索引 / セッション",
+      "pos": [
+        940,
+        30
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "library",
+      "type": "database",
+      "label": "ライブラリ",
+      "sublabel": ".md + 添付ファイル",
+      "pos": [
+        940,
+        260
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "obsidian",
+      "type": "external",
+      "label": "外部エディタ",
+      "sublabel": "Obsidian など",
+      "pos": [
+        940,
+        540
+      ],
+      "size": [
+        150,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Node.js サーバープロセス",
+      "wraps": [
+        "api",
+        "git",
+        "mcp",
+        "docsvc",
+        "watcher"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "browser-api",
+      "from": "browser",
+      "to": "api",
+      "label": "HTTP/JSON + Cookie",
+      "variant": "emphasis"
+    },
+    {
+      "id": "mcpclient-mcp",
+      "from": "mcpclient",
+      "to": "mcp",
+      "label": "JSON-RPC + Bearer",
+      "variant": "security"
+    },
+    {
+      "id": "api-docsvc",
+      "from": "api",
+      "to": "docsvc",
+      "label": "文書操作",
+      "variant": "emphasis"
+    },
+    {
+      "id": "mcp-docsvc",
+      "from": "mcp",
+      "to": "docsvc",
+      "label": "ツール実行"
+    },
+    {
+      "id": "api-db",
+      "from": "api",
+      "to": "db",
+      "label": "検索 (FTS5)"
+    },
+    {
+      "id": "docsvc-library",
+      "from": "docsvc",
+      "to": "library",
+      "label": "アトミック書込",
+      "variant": "emphasis"
+    },
+    {
+      "id": "docsvc-db",
+      "from": "docsvc",
+      "to": "db",
+      "label": "索引更新",
+      "variant": "dashed"
+    },
+    {
+      "id": "docsvc-git",
+      "from": "docsvc",
+      "to": "git",
+      "label": "保存ごとにコミット",
+      "labelDy": 24
+    },
+    {
+      "id": "git-backup",
+      "from": "git",
+      "to": "backup",
+      "label": "定期push (10分)",
+      "variant": "dashed"
+    },
+    {
+      "id": "library-watcher",
+      "from": "library",
+      "to": "watcher",
+      "label": "変更検知",
+      "variant": "dashed"
+    },
+    {
+      "id": "watcher-git",
+      "from": "watcher",
+      "to": "git",
+      "label": "syncコミット"
+    },
+    {
+      "id": "obsidian-library",
+      "from": "obsidian",
+      "to": "library",
+      "label": "直接編集",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "クライアント",
+      "items": [
+        "React 18 SPA + TipTap v2 エディタ(Wikilink・埋め込み・mermaid対応)",
+        "MCPクライアントは11ツールで文書を読み書き",
+        "Obsidianなど外部エディタとライブラリを共有"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "サーバー",
+      "items": [
+        "Fastify 5 の単一Node.jsプロセス(REST + MCP + 静的配信)",
+        "書込はSerialQueueで直列化、保存ごとにGitコミット",
+        "認証はセッションCookie + X-Requested-With、MCPは別系統のBearerトークン"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "データ",
+      "items": [
+        "文書の実体はプレーンな.mdファイル(frontmatter保全)",
+        "SQLiteは再構築可能な索引 + 運用データのみ(FTS5 trigramで日本語全文検索)",
+        "chokidar監視 + 5分ポーリングで外部変更をsyncコミット・再索引"
+      ]
+    }
+  ]
+}

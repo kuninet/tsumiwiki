@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { EditorContent, useEditor } from '@tiptap/react';
 import { CURSOR_MARKER, type DocResponse, type DocSummary, type User } from '@tsumiwiki/shared';
 import {
+  type ChangeEvent as ReactChangeEvent,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   useEffect,
@@ -177,6 +178,11 @@ export function DocView({
   const [lightbox, setLightbox] = useState<AttachmentLightboxRequest | null>(null);
   // #222 表のコンテキストメニュー: 右クリック位置(表内のときだけセットする)
   const [tableMenu, setTableMenu] = useState<{ x: number; y: number } | null>(null);
+  // #224 ソース編集モード: 編集モード中に限り、WYSIWYG(Tiptap)ではなくMarkdown原文を
+  // textareaで直接編集できるようにする。グローバルなsession.mode('view'/'edit')は変えず、
+  // 「editモードの表示形態」としてDocViewローカルで持つ(タブ複製・分割ペインでも独立に動く)
+  const [sourceMode, setSourceMode] = useState(false);
+  const [sourceText, setSourceText] = useState('');
   const [renameDialog, setRenameDialog] = useState<{
     resolved: { path: string; name: string };
   } | null>(null);
@@ -364,10 +370,12 @@ export function DocView({
 
   // #211: タブ切替等でdoc.pathが変わったら、前の文書で開いたままのライトボックス/
   // 添付メニューは意味を失うので明示的に閉じる(レビュー中#9)
+  // #224: ソース編集モードも同様に、文書が切り替わったら前の文書のソース表示を持ち越さない
   useEffect(() => {
     setLightbox(null);
     setAttachmentMenu(null);
     setTableMenu(null);
+    setSourceMode(false);
   }, [doc.path]);
 
   useEffect(() => {
@@ -385,6 +393,23 @@ export function DocView({
   useEffect(() => {
     if (session.mode !== 'edit') setTableMenu(null);
   }, [session.mode]);
+
+  // #224: 編集モードを抜けたらソース編集モードも解除する(破棄・ロック失効・競合解消など、
+  // 編集セッションが閉じる経路はすべて session.mode の 'view' 遷移に集約されている)。
+  // textarea内容をWYSIWYGへ反映してから解除する(直後に走る「閲覧モードではdoc.bodyへ追随」
+  // のeffectがサーバー側の真値で上書きするため、破棄系の遷移では最終的にdoc.body側が勝つ)
+  const sourceModeRef = useRef(sourceMode);
+  sourceModeRef.current = sourceMode;
+  const sourceTextRef = useRef(sourceText);
+  sourceTextRef.current = sourceText;
+  useEffect(() => {
+    if (session.mode === 'edit') return;
+    if (!sourceModeRef.current) return;
+    if (editor && !editor.isDestroyed) {
+      editor.commands.setContent(sourceTextRef.current, false);
+    }
+    setSourceMode(false);
+  }, [session.mode, editor]);
 
   // 文書オープン/切替時はツールバーを非表示にリセットする。
   // その後ユーザーがエディタで実操作したら showEditorChrome で表示ONになる(下の useEffect)。
@@ -551,6 +576,32 @@ export function DocView({
     const nextTags = [...pendingTags, name];
     setPendingTags(nextTags);
     session.updateTags(nextTags);
+  }
+
+  // #224 ソース編集モードのトグル。WYSIWYG⇔textareaの間でMarkdown原文を直接受け渡しする
+  function handleToggleSourceMode() {
+    if (!editor || editor.isDestroyed) return;
+    if (sourceMode) {
+      // source→edit(WYSIWYG): textareaの内容をtiptap-markdown経由でパースして反映する。
+      // emitUpdate=false(既定)でonUpdateの再正規化を経由させず、textareaの原文そのままを
+      // session.updateBodyへ渡す(setContentが再シリアライズした結果と食い違わせないため)
+      editor.commands.setContent(sourceText);
+      session.updateBody(sourceText);
+      setSourceMode(false);
+    } else {
+      // edit(WYSIWYG)→source: 現在の内容をMarkdownとして取り出しtextareaの初期値にする
+      const markdown = editor.storage.markdown.getMarkdown() as string;
+      setSourceText(markdown);
+      setSourceMode(true);
+    }
+  }
+
+  // sourceモード中のtextarea入力: 都度session.updateBodyを呼び、dirty管理・下書き自動保存・
+  // 保存ボタン活性化を既存の経路のまま効かせる(IME変換中の特別処理は不要)
+  function handleSourceTextChange(e: ReactChangeEvent<HTMLTextAreaElement>) {
+    const value = e.target.value;
+    setSourceText(value);
+    session.updateBody(value);
   }
 
   function handleRestoreDraft() {
@@ -1005,6 +1056,8 @@ export function DocView({
           onOpenLinkDialog={() => setLinkDialogVisible(true)}
           onPickImage={(file) => void handleUploadFiles([file])}
           onOpenTemplateApply={() => setTemplateApplyOpen(true)}
+          sourceMode={sourceMode}
+          onToggleSourceMode={handleToggleSourceMode}
         />
       )}
 
@@ -1034,7 +1087,22 @@ export function DocView({
           data-testid="doc-content-wrap"
           className={`mx-auto ${contentWidthMaxClass(contentWidth)} px-4 py-4 sm:px-6 lg:px-8`}
         >
-          <EditorContent editor={editor} />
+          {/* #224 ソース編集モード: editorインスタンスはunmountせず保持したままCSSで隠す
+              (エディタ状態・NodeView等を保ったまま行き来できるようにするため) */}
+          <div hidden={sourceMode}>
+            <EditorContent editor={editor} />
+          </div>
+          {sourceMode && (
+            <textarea
+              data-testid="source-editor"
+              className="min-h-[60vh] w-full resize-y rounded border border-line bg-canvas p-3 font-mono text-base leading-relaxed text-ink-soft focus:outline-none focus-visible:outline-none"
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              value={sourceText}
+              onChange={handleSourceTextChange}
+            />
+          )}
         </div>
       </div>
 
