@@ -12,6 +12,8 @@ afterEach(() => {
 });
 
 function newEditor(content: string): Editor {
+  // モジュール変数を上書きする前に前のインスタンスを破棄する(リーク防止)
+  editor?.destroy();
   editor = new Editor({ extensions: createEditorExtensions({ nodeViews: false }), content });
   return editor;
 }
@@ -66,6 +68,44 @@ describe('表のセル内改行(#229)', () => {
   it('段落内の<br>も改行になり、hardBreakのMarkdown記法(バックスラッシュ改行)で安定する', () => {
     const pass1 = roundtripMarkdown('前<br>後\n');
     expect(pass1).toBe('前\\\n後');
+    expect(roundtripMarkdown(pass1)).toBe(pass1);
+  });
+
+  it('太字マーク内のセル内改行がHTML増殖せず冪等(レビュー重大指摘の回帰テスト)', () => {
+    // 旧実装は表内のhardBreakをマークごとHTML化し、外側の**と内側の<strong>が
+    // 二重になって開く→保存のたびにHTMLが1段ずつ増えていた
+    const md = '| A |\n| --- |\n| **1行目<br>2行目** |\n';
+    const pass1 = roundtripMarkdown(md);
+    expect(pass1).not.toContain('<strong');
+    expect(pass1).not.toContain('&lt;');
+    expect(pass1).toContain('<br>');
+    expect(roundtripMarkdown(pass1)).toBe(pass1);
+  });
+
+  it('リンク内のセル内改行も増殖せず冪等', () => {
+    const md = '| A |\n| --- |\n| [1行目<br>2行目](x.md) |\n';
+    const pass1 = roundtripMarkdown(md);
+    expect(pass1).not.toContain('&lt;a');
+    expect(pass1).not.toContain('<a ');
+    expect(roundtripMarkdown(pass1)).toBe(pass1);
+  });
+
+  it('セル末尾の改行が保存で消えない', () => {
+    const md = '| A |\n| --- |\n| 1<br> |\n';
+    const pass1 = roundtripMarkdown(md);
+    expect(pass1).toContain('1<br>');
+    expect(roundtripMarkdown(pass1)).toBe(pass1);
+  });
+
+  it('見出し内の<br>は<br>のまま維持され、見出しが分裂しない', () => {
+    const pass1 = roundtripMarkdown('# 見出し<br>続き\n');
+    expect(pass1).toBe('# 見出し<br>続き');
+    expect(roundtripMarkdown(pass1)).toBe(pass1);
+  });
+
+  it('属性付きの<br class="x">は対象外(テキスト保全のまま・冪等)', () => {
+    const pass1 = roundtripMarkdown('| A |\n| --- |\n| 1<br class="x">2 |\n');
+    expect(pass1).toContain('&lt;br class="x"&gt;');
     expect(roundtripMarkdown(pass1)).toBe(pass1);
   });
 

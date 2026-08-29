@@ -11,6 +11,7 @@ import StarterKit from '@tiptap/starter-kit';
 import type { DocSummary } from '@tsumiwiki/shared';
 import { Markdown } from 'tiptap-markdown';
 import { CodeBlockWithPreview } from './extensions/code-block-view';
+import { HardBreakMarkdown } from './extensions/hard-break-markdown';
 import { ObsidianEmbed } from './extensions/embed';
 import { ObsidianEmbedWithPreview } from './extensions/embed-view';
 import { ImageWithResolvedSrc } from './extensions/image-view';
@@ -34,7 +35,9 @@ export interface EditorExtensionOptions {
 export function createEditorExtensions(options: EditorExtensionOptions = {}): Extensions {
   const { nodeViews = true, getWikilinkDocs } = options;
   return [
-    StarterKit.configure({ codeBlock: false }),
+    StarterKit.configure({ codeBlock: false, hardBreak: false }),
+    // 表セル内・見出し内のhardBreakを安全にシリアライズする置き換え(#229)
+    HardBreakMarkdown,
     nodeViews ? CodeBlockWithPreview : CodeBlock,
     // 相対パス・title・file: を往復で落とさないリンク(issue #207。link-markdown.ts 参照)
     LinkWithTitle,
