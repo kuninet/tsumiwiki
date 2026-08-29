@@ -44,6 +44,55 @@ describe('空リスト項目のBackspace(ListKeymap)', () => {
     expect(topLevelTypes()).toEqual(['taskList', 'paragraph']);
   });
 
+  it('リスト解除後の空段落でさらにBSすると、空段落が消えて前項目の行末に戻る(ビュレット復活しない)', () => {
+    editor = new Editor({ extensions: createEditorExtensions(), content: '- 項目' });
+    editor.commands.focus('end');
+    editor.commands.keyboardShortcut('Enter'); // 空アイテム作成
+    editor.commands.keyboardShortcut('Backspace'); // リスト解除 → [bulletList, paragraph]
+    expect(topLevelTypes()).toEqual(['bulletList', 'paragraph']);
+
+    editor.commands.keyboardShortcut('Backspace');
+    // 既定動作だと空段落がlistItemとしてリストに再取り込みされてしまう。
+    // Obsidian同様、空段落は削除されて前項目の行末にカーソルが戻る
+    expect(topLevelTypes()).toEqual(['bulletList']);
+    const list = editor.state.doc.firstChild!;
+    expect(list.childCount).toBe(1); // 空のlistItemが増えていない
+
+    // カーソルは「項目」の行末
+    const { $from } = editor.state.selection;
+    expect($from.parent.textContent).toBe('項目');
+    expect($from.parentOffset).toBe($from.parent.content.size);
+
+    // 文字入力すると前項目の続きに入る
+    editor.commands.insertContent('続き');
+    expect(editor.getText()).toContain('項目続き');
+  });
+
+  it('チェックリスト直後の空段落BSも同様に前項目の行末へ戻る', () => {
+    editor = new Editor({ extensions: createEditorExtensions(), content: '- [ ] タスク' });
+    editor.commands.focus('end');
+    editor.commands.keyboardShortcut('Enter');
+    editor.commands.keyboardShortcut('Backspace');
+    expect(topLevelTypes()).toEqual(['taskList', 'paragraph']);
+
+    editor.commands.keyboardShortcut('Backspace');
+    expect(topLevelTypes()).toEqual(['taskList']);
+    expect(editor.state.doc.firstChild!.childCount).toBe(1);
+    expect(editor.state.selection.$from.parent.textContent).toBe('タスク');
+  });
+
+  it('段落直後の空段落BSは既定動作のまま(カスタム介入しない)', () => {
+    editor = new Editor({ extensions: createEditorExtensions(), content: 'テキスト' });
+    editor.commands.focus('end');
+    editor.commands.keyboardShortcut('Enter'); // 空段落を追加
+    expect(topLevelTypes()).toEqual(['paragraph', 'paragraph']);
+
+    editor.commands.keyboardShortcut('Backspace');
+    // 既定のjoinBackwardで空段落が消える(挙動が壊れていないこと)
+    expect(topLevelTypes()).toEqual(['paragraph']);
+    expect(editor.getText()).toBe('テキスト');
+  });
+
   it('文字が残っている項目の行頭BSは既定動作のまま(前の項目と結合)', () => {
     editor = new Editor({ extensions: createEditorExtensions(), content: '- あ\n- い' });
     // 2項目目の段落先頭(テキスト「い」の直前)にカーソルを置く
