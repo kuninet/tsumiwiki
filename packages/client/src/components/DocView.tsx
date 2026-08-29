@@ -470,8 +470,10 @@ export function DocView({
         return;
       }
       // Mod+Shift+K は wikilink サジェスト(#195)。ProseMirror の keymap は
-      // preventDefault するが stopPropagation しないので window まで届く
+      // preventDefault するが stopPropagation しないので window まで届く。
+      // #224: ソース編集中はリンクダイアログが隠れたエディタへ書き込んでしまうため無効化
       if (isMod && !e.shiftKey && e.key.toLowerCase() === 'k') {
+        if (sourceModeRef.current) return;
         e.preventDefault();
         showEditorChrome();
         setLinkDialogVisible(true);
@@ -997,7 +999,9 @@ export function DocView({
               閲覧モードでは TagPane フィルタ連動、編集モードでは各チップから改名/削除できる */}
           <TagChipEditor
             tags={session.mode === 'edit' ? pendingTags : doc.tags}
-            editable={session.mode === 'edit'}
+            // #224: ソース編集中のタグ操作は隠れたエディタ由来の本文で上書きし
+            // textareaの編集内容と食い違うため編集不可にする(レビュー中1)
+            editable={session.mode === 'edit' && !sourceMode}
             onNavigate={handleTagNavigate}
             onRename={handleTagRename}
             onRemove={handleTagRemove}
