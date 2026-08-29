@@ -1,5 +1,5 @@
 import type { Editor } from '@tiptap/core';
-import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { DOMSerializer, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { TextSelection } from '@tiptap/pm/state';
 import { withHeadlessEditor } from './markdown';
 import { findTableAt } from './table-utils';
@@ -22,18 +22,60 @@ function serializeTableNode(node: ProseMirrorNode): string {
 }
 
 // カーソルを含む表をGFM Markdownへシリアライズする。表外なら null。
+// (本体コードは copyTableToClipboard 内で found を再利用するため直接は呼ばない。
+//  テスト・外部利用向けの公開API)
 export function serializeTableToMarkdown(editor: Editor): string | null {
   const found = findParentTable(editor);
   if (!found) return null;
   return serializeTableNode(found.node);
 }
 
-// 表をGFM Markdownとしてクリップボードへコピーする。
+// 表ノードをHTML表(<table>...)へシリアライズする(スキーマのrenderHTML準拠)
+function serializeTableNodeToHtml(editor: Editor, node: ProseMirrorNode): string {
+  const container = document.createElement('div');
+  container.appendChild(DOMSerializer.fromSchema(editor.schema).serializeNode(node));
+  return container.innerHTML;
+}
+
+// 表をクリップボードへコピーする。issue #234:
+// text/plainのMarkdownだけだと、エディタへのCmd+V貼り付けがプレーンテキスト扱いに
+// なって表に戻らないため、text/html(HTML表)も併せて書き込む。エディタへは
+// ProseMirror標準のHTML貼り付け経路で表として貼り付き、外部エディタへはMarkdown、
+// Excel等の表計算へは表形式で貼り付く。
 // クリップボードAPIが使えない・拒否された場合は例外を投げずfalseを返す。
 export async function copyTableToClipboard(editor: Editor): Promise<boolean> {
-  const markdown = serializeTableToMarkdown(editor);
-  if (markdown === null) return false;
+  const found = findParentTable(editor);
+  if (!found) return false;
+  let markdown: string;
+  try {
+    markdown = serializeTableNode(found.node);
+  } catch {
+    return false;
+  }
+  // HTML生成に失敗してもMarkdownだけのコピーは続行する(ClipboardItem経路をスキップ)
+  let html: string | null = null;
+  try {
+    html = serializeTableNodeToHtml(editor, found.node);
+  } catch {
+    // Markdownのみで続行
+  }
 
+  try {
+    if (html !== null && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      // 値をPromiseで渡すのはSafari推奨の書き方(ユーザージェスチャとの紐づけが
+      // 切れにくく、write自体の成功率が上がる)
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': Promise.resolve(new Blob([markdown], { type: 'text/plain' })),
+          'text/html': Promise.resolve(new Blob([html], { type: 'text/html' })),
+        }),
+      ]);
+      return true;
+    }
+  } catch {
+    // write(ClipboardItem)が拒否された環境でもwriteTextへフォールバックして試す
+    // (Safariはジェスチャ外の再試行を拒否することがあり、その場合はfalse=トースト通知)
+  }
   try {
     await navigator.clipboard.writeText(markdown);
     return true;
