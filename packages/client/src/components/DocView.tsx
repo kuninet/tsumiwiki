@@ -41,7 +41,7 @@ import { PromptDialog } from './PromptDialog';
 import { TagChipEditor } from './TagChipEditor';
 import { TemplatePickerDialog } from './TemplatePickerDialog';
 
-// 文書閲覧・編集画面(SC-02のMainPane。設計04章4.2/4.4・05章5.3〜5.5・デザインhandoff components.md)
+// 文書閲覧・編集画面(SC-02のMainPane。設計04章4.2/4.4・05章5.3〜5.6・デザインhandoff components.md)
 // 閲覧・編集は同じTiptapインスタンスのeditable切り替えで実現し、表示を完全一致させる
 
 interface DocViewProps {
