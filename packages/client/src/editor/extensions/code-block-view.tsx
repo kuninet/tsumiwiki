@@ -78,11 +78,7 @@ function CodeBlockView({ node, editor, getPos }: NodeViewProps) {
   const focusSource = () => {
     const pos = getPos();
     if (typeof pos === 'number') {
-      editor
-        .chain()
-        .focus()
-        .setTextSelection(pos + 1)
-        .run();
+      editor.chain().focus().setTextSelection(pos + 1).run();
     }
   };
 

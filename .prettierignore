@@ -1,0 +1,2 @@
+# 往復テストのfixtureはテストデータそのもの(バイト列が意味を持つ)ため整形しない
+packages/client/src/editor/__tests__/fixtures/

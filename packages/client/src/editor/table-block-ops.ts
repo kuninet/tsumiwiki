@@ -59,6 +59,8 @@ function copyViaCopyEvent(markdown: string, html: string | null): boolean {
   document.addEventListener('copy', onCopy, true);
   try {
     textarea.select();
+    // iOS/iPadOS Safariはselect()だけでは選択が入らないことがある(定番の回避策)
+    textarea.setSelectionRange(0, textarea.value.length);
     return document.execCommand('copy') && handled;
   } catch {
     return false;

@@ -139,6 +139,51 @@ describe('copyTableToClipboard(ClipboardItem対応環境)', () => {
     }
   });
 
+  it('同期経路のtext/htmlを貼り付けると表に戻り、Markdown経路と結果が一致する(#238)', async () => {
+    const captured: Record<string, string> = {};
+    (document as unknown as { execCommand: () => boolean }).execCommand = () => {
+      const ev = new Event('copy');
+      (ev as unknown as { clipboardData: unknown }).clipboardData = {
+        setData: (type: string, value: string) => {
+          captured[type] = value;
+        },
+      };
+      document.dispatchEvent(ev);
+      return true;
+    };
+
+    const editor = createDocWithTable();
+    placeCursorInsideTable(editor);
+    try {
+      await expect(copyTableToClipboard(editor)).resolves.toBe(true);
+
+      vi.stubGlobal(
+        'ClipboardEvent',
+        class extends Event {
+          clipboardData: unknown;
+          constructor(type: string, init?: { clipboardData?: unknown } & EventInit) {
+            super(type, init);
+            this.clipboardData = init?.clipboardData ?? null;
+          }
+        },
+      );
+      const target = new Editor({
+        extensions: createEditorExtensions({ nodeViews: false }),
+        content: '',
+      });
+      (target.view as unknown as { pasteHTML: (html: string) => boolean }).pasteHTML(
+        captured['text/html'],
+      );
+      expect((target.storage.markdown.getMarkdown() as string).trim()).toBe(
+        captured['text/plain'].trim(),
+      );
+      target.destroy();
+    } finally {
+      delete (document as unknown as { execCommand?: unknown }).execCommand;
+      editor.destroy();
+    }
+  });
+
   it('execCommandがfalseを返したらasync Clipboard APIへフォールバックする', async () => {
     stubClipboardItem();
     const write = vi.fn().mockResolvedValue(undefined);
