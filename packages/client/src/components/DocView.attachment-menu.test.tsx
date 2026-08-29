@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resetAttachmentGenerations } from '../lib/attachment-events';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
-import { useUIStore } from '../stores/ui';
 import { DocView } from './DocView';
 
 // #199 画像の管理メニュー(右クリック/「⋯」ボタン→名前変更・削除・パスをコピー)の統合テスト。
@@ -83,7 +82,6 @@ describe('DocView の画像管理メニュー(#199)', () => {
     vi.unstubAllGlobals();
     useEditStore.setState({ mode: 'view', dirty: false, lockedPath: null, lastDraftSavedAt: null });
     useToastStore.setState({ toast: null });
-    useUIStore.getState().resetEditorChrome();
     // #199軽微4: reloadKeyの世代カウンタはモジュールスコープのため、テスト間の汚染を避ける
     resetAttachmentGenerations();
   });

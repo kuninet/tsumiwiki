@@ -5,7 +5,6 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
-import { useUIStore } from '../stores/ui';
 import { DocView } from './DocView';
 
 // #224 ソース編集モードの統合テスト。ソーストグル→textareaが表示され、
@@ -81,7 +80,6 @@ describe('DocView のソース編集モード(#224)', () => {
     vi.unstubAllGlobals();
     useEditStore.setState({ mode: 'view', dirty: false, lockedPath: null, lastDraftSavedAt: null });
     useToastStore.setState({ toast: null });
-    useUIStore.getState().resetEditorChrome();
   });
 
   it('ソーストグル→textareaが表示され、入力がdirty化→WYSIWYGへ戻すと反映される', async () => {
@@ -137,6 +135,30 @@ describe('DocView のソース編集モード(#224)', () => {
     expect(screen.queryByTestId('source-editor')).toBeNull();
     // 表示切替だけでは保存ボタンが活性化しない
     expect((screen.getByRole('button', { name: /保存/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('ソース編集中に別文書のDocViewがマウントされてもツールバーが消えない(#245)', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+    });
+    renderDocView();
+    await revealToolbar();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Markdownソースを編集' }));
+    await screen.findByTestId('source-editor');
+
+    // タブで別文書を開いた状況を再現: 別パスの DocView を追加マウントする。
+    // ツールバー表示フラグがグローバル共有だった頃は、このマウント時のリセットで
+    // 元タブのツールバーまで消え、ソース⇔WYSIWYG切替へ到達できなくなっていた
+    renderDocView({ ...DOC, path: '別のメモ.md' });
+
+    // 元タブのツールバーは残り、WYSIWYG へ戻れる
+    await waitFor(() => {
+      expect(screen.getByTestId('editor-toolbar')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'WYSIWYG表示に戻す' }));
+    expect(screen.queryByTestId('source-editor')).toBeNull();
   });
 
   it('閲覧モードに戻ると(破棄)ソースモードも解除される', async () => {
