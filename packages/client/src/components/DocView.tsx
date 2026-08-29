@@ -1095,7 +1095,7 @@ export function DocView({
           {sourceMode && (
             <textarea
               data-testid="source-editor"
-              className="min-h-[60vh] w-full resize-y rounded border border-line bg-canvas p-3 font-mono text-lg leading-relaxed text-ink-soft focus:outline-none focus-visible:outline-none"
+              className="min-h-[60vh] w-full resize-y rounded border border-line bg-canvas p-3 font-mono text-base leading-relaxed text-ink-soft focus:outline-none focus-visible:outline-none"
               spellCheck={false}
               autoCapitalize="off"
               autoCorrect="off"
