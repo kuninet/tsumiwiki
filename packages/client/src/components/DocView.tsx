@@ -1,7 +1,14 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { EditorContent, useEditor } from '@tiptap/react';
 import { CURSOR_MARKER, type DocResponse, type DocSummary, type User } from '@tsumiwiki/shared';
-import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   deleteAttachment,
@@ -1011,10 +1018,12 @@ export function DocView({
         // これがないと caret が浮きツールバー裏へ回り込む(#175 FU3)。
         style={
           keyboardBottomOffset > 0
-            ? {
+            ? ({
                 paddingBottom: `${keyboardBottomOffset + 40}px`,
                 scrollPaddingBottom: `${keyboardBottomOffset + 40}px`,
-              }
+                // #240: キーボード表示中はscroll past end余白を止め、二重加算を防ぐ
+                '--scroll-past-end': '0px',
+              } as CSSProperties)
             : undefined
         }
       >
