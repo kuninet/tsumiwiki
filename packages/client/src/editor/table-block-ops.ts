@@ -47,16 +47,21 @@ export async function copyTableToClipboard(editor: Editor): Promise<boolean> {
   const found = findParentTable(editor);
   if (!found) return false;
   let markdown: string;
-  let html: string;
   try {
     markdown = serializeTableNode(found.node);
-    html = serializeTableNodeToHtml(editor, found.node);
   } catch {
     return false;
   }
+  // HTML生成に失敗してもMarkdownだけのコピーは続行する(ClipboardItem経路をスキップ)
+  let html: string | null = null;
+  try {
+    html = serializeTableNodeToHtml(editor, found.node);
+  } catch {
+    // Markdownのみで続行
+  }
 
   try {
-    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+    if (html !== null && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
       // 値をPromiseで渡すのはSafari推奨の書き方(ユーザージェスチャとの紐づけが
       // 切れにくく、write自体の成功率が上がる)
       await navigator.clipboard.write([
