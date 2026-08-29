@@ -172,6 +172,27 @@ describe('cutTableToClipboard', () => {
     editor.destroy();
   });
 
+  it('await中に文書が変わったら削除せずfalseを返す(位置ズレによる本文破損の防止)', async () => {
+    // クリップボード書き込みのawait中(権限プロンプト等)に文書が変わると、事前に取った
+    // 位置が別範囲を指して本文を破損しうる。削除前に表を取り直し、対象を見失ったら
+    // 何も消さないことを保証する(insertContentAtはカーソルを挿入先へ移すため表外になる)
+    const editor = createDocWithTable();
+    placeCursorInsideTable(editor);
+    let resolveWrite!: () => void;
+    writeText.mockReturnValueOnce(new Promise<void>((resolve) => (resolveWrite = resolve)));
+    const cutPromise = cutTableToClipboard(editor);
+    editor.commands.insertContentAt(0, '割り込み段落\n\n');
+    resolveWrite();
+    await expect(cutPromise).resolves.toBe(false);
+
+    const md = editor.storage.markdown.getMarkdown() as string;
+    expect(md).toContain('割り込み段落');
+    expect(md).toContain('前の段落');
+    expect(md).toContain('後の段落');
+    expect(md).toContain('| --- |'); // 表は残る(何も削除されない)
+    editor.destroy();
+  });
+
   it('表外カーソルではfalseを返す', async () => {
     const editor = createDocWithTable();
     placeCursorOutsideTable(editor);
