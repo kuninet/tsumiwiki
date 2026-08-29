@@ -52,7 +52,9 @@ describe('ImageWithResolvedSrc', () => {
       expect(el).toBeTruthy();
       img = el as HTMLImageElement;
     });
-    expect(img!.getAttribute('src')).toBe(`/api/files/${encodeURIComponent('フォルダ')}/sub/a.png`);
+    expect(img!.getAttribute('src')).toBe(
+      `/api/files/${encodeURIComponent('フォルダ')}/sub/a.png`,
+    );
   });
 
   it('読み込み失敗時はファイル名だけで/api/embedへフォールバックする', async () => {
@@ -280,9 +282,7 @@ describe('ImageWithResolvedSrc の画像メニュー(#199)', () => {
     // 一致する名前(basename)のイベントで壊れた状態が解け、primaryから再取得される
     dispatchAttachmentChanged(['a.png']);
     await waitFor(() => {
-      expect(img!.getAttribute('src')).toBe(
-        `/api/files/${encodeURIComponent('フォルダ')}/sub/a.png?v=1`,
-      );
+      expect(img!.getAttribute('src')).toBe(`/api/files/${encodeURIComponent('フォルダ')}/sub/a.png?v=1`);
     });
     expect(document.querySelector('.attachment-menu-button')).toBeTruthy();
   });

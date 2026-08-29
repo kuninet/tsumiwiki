@@ -1,6 +1,8 @@
 import type { Editor } from '@tiptap/core';
 import type { ContextMenuItem } from '../components/ContextMenu';
 import {
+  canMoveTableDown,
+  canMoveTableUp,
   copyTableToClipboard,
   cutTableToClipboard,
   moveTableDown,
@@ -88,7 +90,7 @@ export function getTableMenuItems(
     },
   );
   // コンテナの先頭/末尾では移動できず無反応になるため、動かせる方向だけ項目を出す
-  if (table && editor.state.doc.resolve(table.pos).nodeBefore) {
+  if (canMoveTableUp(editor)) {
     items.push({
       label: '表を上へ移動',
       onSelect: () => {
@@ -97,7 +99,7 @@ export function getTableMenuItems(
       },
     });
   }
-  if (table && editor.state.doc.resolve(table.pos + table.node.nodeSize).nodeAfter) {
+  if (canMoveTableDown(editor)) {
     items.push({
       label: '表を下へ移動',
       onSelect: () => {

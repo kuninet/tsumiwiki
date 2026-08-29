@@ -64,6 +64,18 @@ export async function cutTableToClipboard(editor: Editor): Promise<boolean> {
     .run();
 }
 
+// 表を上/下へ動かせるか(親コンテナ内に隣接する兄弟ブロックがあるか)。
+// メニューの項目出し分け(table-menu.ts)と moveTable の実行判定を同じ条件に揃えるための関数。
+export function canMoveTableUp(editor: Editor): boolean {
+  const found = findParentTable(editor);
+  return !!found && !!editor.state.doc.resolve(found.pos).nodeBefore;
+}
+
+export function canMoveTableDown(editor: Editor): boolean {
+  const found = findParentTable(editor);
+  return !!found && !!editor.state.doc.resolve(found.pos + found.node.nodeSize).nodeAfter;
+}
+
 // 表ブロックを直前/直後の兄弟ブロックと入れ替える共通実装。
 // 「表を削除して兄弟の前後に挿入し直す」を1トランザクションで行い、undoが1回で戻るようにする。
 // 兄弟は表の直接の親コンテナ内(doc直下とは限らない。blockquote内等も含む)で探す。
