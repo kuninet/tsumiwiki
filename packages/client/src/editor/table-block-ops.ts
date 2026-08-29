@@ -22,6 +22,8 @@ function serializeTableNode(node: ProseMirrorNode): string {
 }
 
 // カーソルを含む表をGFM Markdownへシリアライズする。表外なら null。
+// (本体コードは copyTableToClipboard 内で found を再利用するため直接は呼ばない。
+//  テスト・外部利用向けの公開API)
 export function serializeTableToMarkdown(editor: Editor): string | null {
   const found = findParentTable(editor);
   if (!found) return null;
@@ -44,22 +46,30 @@ function serializeTableNodeToHtml(editor: Editor, node: ProseMirrorNode): string
 export async function copyTableToClipboard(editor: Editor): Promise<boolean> {
   const found = findParentTable(editor);
   if (!found) return false;
-  const markdown = serializeTableNode(found.node);
+  let markdown: string;
+  let html: string;
+  try {
+    markdown = serializeTableNode(found.node);
+    html = serializeTableNodeToHtml(editor, found.node);
+  } catch {
+    return false;
+  }
 
   try {
     if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      // 値をPromiseで渡すのはSafari推奨の書き方(ユーザージェスチャとの紐づけが
+      // 切れにくく、write自体の成功率が上がる)
       await navigator.clipboard.write([
         new ClipboardItem({
-          'text/plain': new Blob([markdown], { type: 'text/plain' }),
-          'text/html': new Blob([serializeTableNodeToHtml(editor, found.node)], {
-            type: 'text/html',
-          }),
+          'text/plain': Promise.resolve(new Blob([markdown], { type: 'text/plain' })),
+          'text/html': Promise.resolve(new Blob([html], { type: 'text/html' })),
         }),
       ]);
       return true;
     }
   } catch {
     // write(ClipboardItem)が拒否された環境でもwriteTextへフォールバックして試す
+    // (Safariはジェスチャ外の再試行を拒否することがあり、その場合はfalse=トースト通知)
   }
   try {
     await navigator.clipboard.writeText(markdown);
