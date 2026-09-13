@@ -1,6 +1,8 @@
 import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { deflateSync } from 'node:zlib';
+import sharp from 'sharp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
@@ -1086,5 +1088,363 @@ describe('PDF添付(issue #204)', () => {
       expect(csp['default-src']).toEqual(["'none'"]);
       expect(csp['script-src']).toBeUndefined();
     }
+  }, 20_000);
+});
+
+// 添付画像の保存時縮小(issue #247)
+describe('保存時リサイズ(issue #247)', () => {
+  const upload = (name: string, content: Buffer, target = docPath) => {
+    const mp = multipart({}, { name, content });
+    return app.inject({
+      method: 'POST',
+      url: `/api/attachments?docPath=${encodeURIComponent(target)}`,
+      headers: { ...CSRF, cookie, ...mp.headers },
+      payload: mp.payload,
+    });
+  };
+
+  it('長辺4000pxのJPEGは長辺2048pxに縮小され、アスペクト比が元と一致する', async () => {
+    const src = await sharp({
+      create: { width: 4000, height: 3000, channels: 3, background: { r: 10, g: 20, b: 200 } },
+    })
+      .jpeg()
+      .toBuffer();
+    const res = await upload('big.jpg', src);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    const md = await sharp(saved).metadata();
+    // 4000x3000(縦横比4:3)を2048x2048へfit insideすると2048x1536になる
+    expect(md.width).toBe(2048);
+    expect(md.height).toBe(1536);
+    expect(saved.equals(src)).toBe(false);
+  }, 20_000);
+
+  it('長辺1024pxのPNGはバイト列が変化しない(再エンコードされない)', async () => {
+    const src = await sharp({
+      create: { width: 1024, height: 768, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    })
+      .png()
+      .toBuffer();
+    const res = await upload('small.png', src);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    expect(saved.equals(src)).toBe(true);
+  }, 20_000);
+
+  it('GPS情報を含むJPEGは、縮小(再エンコード)される場合にEXIFが消える', async () => {
+    const src = await sharp({
+      create: { width: 4000, height: 2000, channels: 3, background: { r: 5, g: 5, b: 5 } },
+    })
+      .jpeg()
+      .withMetadata({
+        exif: {
+          IFD3: { GPSLatitude: '35/1 0/1 0/1', GPSLatitudeRef: 'N' },
+        },
+      })
+      .toBuffer();
+    // 縮小前提: EXIF入りだが長辺は上限超過(4000px)にしてある
+    const before = await sharp(src).metadata();
+    expect(before.exif).toBeTruthy();
+
+    const res = await upload('gps.jpg', src);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    const md = await sharp(saved).metadata();
+    expect(md.exif).toBeUndefined();
+  }, 20_000);
+
+  it('Orientation付きJPEGは、縮小時にOrientationが画像へ適用されてから除去される(向きを保って保存)', async () => {
+    const src = await sharp({
+      create: { width: 4000, height: 2000, channels: 3, background: { r: 9, g: 9, b: 9 } },
+    })
+      .jpeg()
+      .withMetadata({ orientation: 6 }) // 90度回転が必要な向き(横長の生データ)
+      .toBuffer();
+    const before = await sharp(src).metadata();
+    expect(before.orientation).toBe(6);
+
+    const res = await upload('rot.jpg', src);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    const md = await sharp(saved).metadata();
+    expect(md.orientation).toBeUndefined();
+    // orientation=6の適用で横長(4000x2000)が縦長へ補正されるはず
+    expect(md.width).toBeLessThan(md.height);
+  }, 20_000);
+
+  it('SVG・GIFは素通しされる(バイト列不変)', async () => {
+    const svg = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="4000"></svg>',
+    );
+    const gif = Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(100, 1)]);
+
+    const svgRes = await upload('big.svg', svg);
+    expect(svgRes.statusCode).toBe(201);
+    expect((await readFile(join(lib, svgRes.json().path))).equals(svg)).toBe(true);
+
+    const gifRes = await upload('big.gif', gif);
+    expect(gifRes.statusCode).toBe(201);
+    expect((await readFile(join(lib, gifRes.json().path))).equals(gif)).toBe(true);
+  }, 20_000);
+
+  it('ATTACHMENT_MAX_EDGE_PX=0だと縮小されない', async () => {
+    await app.close();
+    await rm(lib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await setup({ ATTACHMENT_MAX_EDGE_PX: '0' });
+
+    const src = await sharp({
+      create: { width: 4000, height: 3000, channels: 3, background: { r: 10, g: 20, b: 200 } },
+    })
+      .jpeg()
+      .toBuffer();
+    const res = await upload('big.jpg', src);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    expect(saved.equals(src)).toBe(true);
+  }, 20_000);
+
+  it('壊れた画像データでもアップロードは成功し、原本がそのまま保存される', async () => {
+    const garbage = Buffer.from('これは画像ではない不正なバイト列です', 'utf8');
+    const res = await upload('broken.jpg', garbage);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    expect(saved.equals(garbage)).toBe(true);
+  }, 20_000);
+});
+
+// Opusレビュー指摘の回帰テスト(issue #247)
+describe('保存時リサイズ Opusレビュー指摘の回帰テスト(issue #247)', () => {
+  const upload = (name: string, content: Buffer, target = docPath) => {
+    const mp = multipart({}, { name, content });
+    return app.inject({
+      method: 'POST',
+      url: `/api/attachments?docPath=${encodeURIComponent(target)}`,
+      headers: { ...CSRF, cookie, ...mp.headers },
+      payload: mp.payload,
+    });
+  };
+
+  it('【重大1】2フレームのアニメーションWebPは静止画に潰されず、バイト列不変のまま保存される', async () => {
+    const frame1 = await sharp({
+      create: { width: 100, height: 60, channels: 3, background: { r: 255, g: 0, b: 0 } },
+    })
+      .png()
+      .toBuffer();
+    const frame2 = await sharp({
+      create: { width: 100, height: 60, channels: 3, background: { r: 0, g: 255, b: 0 } },
+    })
+      .png()
+      .toBuffer();
+    const animated = await sharp([frame1, frame2], { join: { animated: true } }).webp().toBuffer();
+    const before = await sharp(animated).metadata();
+    expect(before.pages).toBe(2);
+
+    const res = await upload('anim.webp', animated);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    expect(saved.equals(animated)).toBe(true);
+    const after = await sharp(saved).metadata();
+    expect(after.pages).toBe(2); // アニメーションが失われていない
+  }, 20_000);
+
+  it('【中1】切り詰められた(壊れた)JPEGは縮小されず原本がそのまま保存される', async () => {
+    const full = await sharp({
+      create: { width: 4000, height: 3000, channels: 3, background: { r: 10, g: 20, b: 200 } },
+    })
+      .jpeg()
+      .toBuffer();
+    const truncated = full.subarray(0, Math.floor(full.length * 0.5));
+
+    const res = await upload('truncated.jpg', truncated);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    expect(saved.equals(truncated)).toBe(true);
+  }, 20_000);
+
+  it('【中3】ロスレスWebPは縮小後もロスレスのままで、サイズが膨らまない', async () => {
+    const src = await sharp({
+      create: { width: 3000, height: 1500, channels: 3, background: { r: 5, g: 5, b: 5 } },
+    })
+      .webp({ lossless: true })
+      .toBuffer();
+    expect(src.subarray(12, 16).toString('ascii')).toBe('VP8L');
+
+    const res = await upload('lossless.webp', src);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    expect(saved.subarray(12, 16).toString('ascii')).toBe('VP8L');
+    expect(saved.length).toBeLessThan(1000); // ロッシー既定で再エンコードすると数千バイトまで膨らむ内容
+  }, 20_000);
+
+  it('【中4】中身がJPEGなのに拡張子が.pngのファイルは、PNG化せずJPEGのまま縮小される', async () => {
+    const src = await sharp({
+      create: { width: 4000, height: 3000, channels: 3, background: { r: 10, g: 20, b: 200 } },
+    })
+      .jpeg()
+      .toBuffer();
+
+    const res = await upload('mislabeled.png', src);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    const md = await sharp(saved).metadata();
+    expect(md.format).toBe('jpeg');
+  }, 20_000);
+
+  it('【中2】上限以下のGPS EXIF付きJPEG(Orientationなし)はEXIFが消え、圧縮データは変化しない', async () => {
+    const src = await sharp({
+      create: { width: 800, height: 600, channels: 3, background: { r: 7, g: 7, b: 7 } },
+    })
+      .jpeg()
+      .withMetadata({ exif: { IFD3: { GPSLatitude: '35/1 0/1 0/1', GPSLatitudeRef: 'N' } } })
+      .toBuffer();
+
+    const res = await upload('gps-small.jpg', src);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    const md = await sharp(saved).metadata();
+    expect(md.exif).toBeUndefined();
+    expect(md.width).toBe(800);
+    expect(md.height).toBe(600);
+  }, 20_000);
+});
+
+// Opusレビュー2周目の回帰テスト(issue #247。マージブロッカー2件+中1件)
+describe('保存時リサイズ Opusレビュー2周目の回帰テスト(issue #247)', () => {
+  const upload = (name: string, content: Buffer, target = docPath) => {
+    const mp = multipart({}, { name, content });
+    return app.inject({
+      method: 'POST',
+      url: `/api/attachments?docPath=${encodeURIComponent(target)}`,
+      headers: { ...CSRF, cookie, ...mp.headers },
+      payload: mp.payload,
+    });
+  };
+
+  // 決定的な擬似乱数ピクセル(Math.random()だとテストがフレーキーになるため乗算ハッシュで代用)。
+  // quality50以下でエンコードすると、既定quality(80)での再エンコード結果の方が大きくなる
+  function noiseRaw(width: number, height: number): Buffer {
+    const raw = Buffer.alloc(width * height * 3);
+    for (let i = 0; i < raw.length; i++) {
+      raw[i] = (i * 2654435761) % 256;
+    }
+    return raw;
+  }
+
+  it('【重大A】低品質(quality50)・Orientation・GPS付きJPEGは、再エンコード結果が原本より大きくてもEXIFを落として保存される', async () => {
+    const src = await sharp(noiseRaw(800, 400), { raw: { width: 800, height: 400, channels: 3 } })
+      .jpeg({ quality: 50 })
+      .withMetadata({
+        orientation: 6,
+        exif: { IFD3: { GPSLatitude: '35/1 0/1 0/1', GPSLatitudeRef: 'N' } },
+      })
+      .toBuffer();
+
+    const res = await upload('low-quality-gps.jpg', src);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    expect(saved.length).toBeGreaterThan(src.length); // 肥大化するが採用される
+    const md = await sharp(saved).metadata();
+    expect(md.exif).toBeUndefined();
+    expect(md.orientation).toBeUndefined();
+    expect(md.width).toBe(400); // orientation=6の適用で800x400→400x800に補正される
+    expect(md.height).toBe(800);
+  }, 20_000);
+
+  it('【重大B】正規のAPNG(acTL+fcTL+IDAT+fcTL+fdAT)は、長辺が上限を超えていてもバイト列不変で保存される', async () => {
+    const width = 3000;
+    const height = 1500;
+
+    const crc32 = (buf: Buffer): number => {
+      let crc = ~0;
+      for (let i = 0; i < buf.length; i++) {
+        crc ^= buf[i];
+        for (let j = 0; j < 8; j++) {
+          crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+        }
+      }
+      return ~crc >>> 0;
+    };
+    const pngChunk = (type: string, data: Buffer): Buffer => {
+      const length = Buffer.alloc(4);
+      length.writeUInt32BE(data.length, 0);
+      const typeAndData = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+      const crc = Buffer.alloc(4);
+      crc.writeUInt32BE(crc32(typeAndData), 0);
+      return Buffer.concat([length, typeAndData, crc]);
+    };
+    const seqNumBuf = (n: number): Buffer => {
+      const b = Buffer.alloc(4);
+      b.writeUInt32BE(n, 0);
+      return b;
+    };
+    const solidRawScanlines = (rgb: [number, number, number]): Buffer => {
+      const rowBytes = 1 + width * 3;
+      const raw = Buffer.alloc(rowBytes * height);
+      for (let y = 0; y < height; y++) {
+        const rowStart = y * rowBytes;
+        raw[rowStart] = 0;
+        for (let x = 0; x < width; x++) {
+          const px = rowStart + 1 + x * 3;
+          raw[px] = rgb[0];
+          raw[px + 1] = rgb[1];
+          raw[px + 2] = rgb[2];
+        }
+      }
+      return raw;
+    };
+    const fcTLData = (seq: number): Buffer => {
+      const b = Buffer.alloc(26);
+      b.writeUInt32BE(seq, 0);
+      b.writeUInt32BE(width, 4);
+      b.writeUInt32BE(height, 8);
+      b.writeUInt32BE(0, 12);
+      b.writeUInt32BE(0, 16);
+      b.writeUInt16BE(1, 20);
+      b.writeUInt16BE(2, 22);
+      b[24] = 0;
+      b[25] = 0;
+      return b;
+    };
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(width, 0);
+    ihdr.writeUInt32BE(height, 4);
+    ihdr[8] = 8;
+    ihdr[9] = 2;
+    ihdr[10] = 0;
+    ihdr[11] = 0;
+    ihdr[12] = 0;
+    const acTL = Buffer.alloc(8);
+    acTL.writeUInt32BE(2, 0);
+    acTL.writeUInt32BE(0, 4);
+    const frame1 = deflateSync(solidRawScanlines([255, 0, 0]));
+    const frame2 = deflateSync(solidRawScanlines([0, 255, 0]));
+    const apng = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      pngChunk('IHDR', ihdr),
+      pngChunk('acTL', acTL),
+      pngChunk('fcTL', fcTLData(0)),
+      pngChunk('IDAT', frame1),
+      pngChunk('fcTL', fcTLData(1)),
+      pngChunk('fdAT', Buffer.concat([seqNumBuf(2), frame2])),
+      pngChunk('IEND', Buffer.alloc(0)),
+    ]);
+    const before = await sharp(apng).metadata();
+    expect(before.pages).toBeUndefined(); // libvipsのPNGローダーはpagesを報告しない
+
+    const res = await upload('anim.png', apng);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    expect(saved.equals(apng)).toBe(true);
+  }, 20_000);
+
+  it('【中A】ゼロ長COMセグメントを大量に敷き詰めた敵対的なJPEGでもアップロードは成功し、原本がそのまま保存される', async () => {
+    const segment = Buffer.from([0xff, 0xfe, 0x00, 0x02]);
+    const segments = Buffer.concat(Array(2000).fill(segment));
+    const adversarial = Buffer.concat([Buffer.from([0xff, 0xd8]), segments]);
+
+    const res = await upload('adversarial.jpg', adversarial);
+    expect(res.statusCode).toBe(201);
+    const saved = await readFile(join(lib, res.json().path));
+    expect(saved.equals(adversarial)).toBe(true);
   }, 20_000);
 });

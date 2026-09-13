@@ -15,6 +15,8 @@ export interface AppConfig {
   backupRemote: string | null;
   backupPushIntervalMinutes: number;
   maxUploadMb: number;
+  // 添付画像の長辺上限(px)。超える画像のみ保存時に縮小する。0で無効(issue #247)
+  attachmentMaxEdgePx: number;
   // クライアントのビルド成果物。存在すればAPIサーバーが静的配信する(単一ポート運用)
   staticRoot: string | null;
   logLevel: string;
@@ -25,12 +27,20 @@ export interface AppConfig {
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'];
 
-function intOf(value: string | undefined, fallback: number, name: string, max?: number): number {
+// minの既定は1(正の整数)。0を「無効」として使う設定項目(ATTACHMENT_MAX_EDGE_PX等)は
+// min: 0を渡す
+function intOf(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+  max?: number,
+  min = 1,
+): number {
   if (value === undefined || value === '') return fallback;
   const n = Number(value);
-  if (!Number.isInteger(n) || n <= 0 || (max !== undefined && n > max)) {
+  if (!Number.isInteger(n) || n < min || (max !== undefined && n > max)) {
     throw new Error(
-      `設定 ${name} は正の整数${max !== undefined ? `(最大${max})` : ''}で指定してください: ${value}`,
+      `設定 ${name} は${min}以上の整数${max !== undefined ? `(最大${max})` : ''}で指定してください: ${value}`,
     );
   }
   return n;
@@ -96,6 +106,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       'BACKUP_PUSH_INTERVAL_MINUTES',
     ),
     maxUploadMb: intOf(env.MAX_UPLOAD_MB, 20, 'MAX_UPLOAD_MB', 1024),
+    attachmentMaxEdgePx: intOf(env.ATTACHMENT_MAX_EDGE_PX, 2048, 'ATTACHMENT_MAX_EDGE_PX', 20000, 0),
     staticRoot: resolveStaticRoot(env.STATIC_ROOT),
     logLevel,
     logFile: env.LOG_FILE ?? null,
