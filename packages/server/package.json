@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "create-admin": "tsx src/cli/create-admin.ts",
-    "reindex": "tsx src/cli/reindex.ts"
+    "reindex": "tsx src/cli/reindex.ts",
+    "resize-attachments": "tsx src/cli/resize-attachments.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

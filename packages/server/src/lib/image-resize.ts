@@ -118,8 +118,9 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 // PNGがAPNG(アニメーションPNG)かどうかを判定する。libvipsのPNGローダーはpage/pagesを
 // 報告しない(pages()を返すのはgif/webp/tiff/heif/pdf系のみ)ため、metadata().pagesでは
 // APNGを検出できない(issue #247レビュー: 重大B相当の指摘対応)。APNG仕様上、`acTL`
-// チャンクは最初の`IDAT`より必ず前に置かれるため、それをバイト走査で確認する
-function isAnimatedPng(buffer: Buffer): boolean {
+// チャンクは最初の`IDAT`より必ず前に置かれるため、それをバイト走査で確認する。
+// CLI(issue #248の既存添付一括縮小)が「変更されない理由」の分類表示にも使うためexportする
+export function isAnimatedPng(buffer: Buffer): boolean {
   if (buffer.length < 8 || !buffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
     return false;
   }
@@ -262,6 +263,10 @@ export async function resizeAttachmentImage(
     const output = await pipeline.toBuffer();
     return finalizeResult(data, output, logger, metadata);
   } catch (e) {
+    // 注意: このwarnはCLI(cli/resize-attachments.ts)がデコード失敗の検出に使っている
+    // (この関数はデコード失敗を戻り値で区別しないため、warnが呼ばれたこと自体を
+    // シグナルとして利用している)。warn呼び出しを増やす・減らす・条件を変える場合は
+    // 必ずresize-attachments.ts側の影響を確認すること
     logger?.warn({ err: e }, '添付画像の縮小に失敗しました。原本をそのまま保存します');
     return { data, changed: false };
   }
