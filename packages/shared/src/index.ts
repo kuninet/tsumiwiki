@@ -365,6 +365,46 @@ export const renameAttachmentResponseSchema = z.object({
 });
 export type RenameAttachmentResponse = z.infer<typeof renameAttachmentResponseSchema>;
 
+// ---- オフライン同期(設計07章7.4。issue #252) ----
+
+// マニフェスト突合方式(sinceカーソル方式は不採用。理由は設計07章7.4.1)。
+// 本文は含めず、パス・更新日時・サイズのみを返す
+export const syncManifestEntrySchema = z.object({
+  path: z.string(),
+  updatedAt: z.string(),
+  size: z.number(),
+});
+export type SyncManifestEntry = z.infer<typeof syncManifestEntrySchema>;
+
+export const syncManifestResponseSchema = z.object({
+  count: z.number(),
+  docs: z.array(syncManifestEntrySchema),
+});
+export type SyncManifestResponse = z.infer<typeof syncManifestResponseSchema>;
+
+// 1リクエストあたりの上限件数(設計07章7.4.2)。サーバー・クライアント双方でこの定数を参照する
+export const SYNC_DOCS_MAX_PATHS = 200;
+
+export const syncDocsRequestSchema = z.object({
+  paths: z.array(z.string()).min(1).max(SYNC_DOCS_MAX_PATHS),
+});
+export type SyncDocsRequest = z.infer<typeof syncDocsRequestSchema>;
+
+export const syncDocSchema = z.object({
+  path: z.string(),
+  title: z.string(),
+  folder: z.string(),
+  updatedAt: z.string(),
+  tags: z.array(z.string()),
+  body: z.string(),
+});
+export type SyncDoc = z.infer<typeof syncDocSchema>;
+
+export const syncDocsResponseSchema = z.object({
+  docs: z.array(syncDocSchema),
+});
+export type SyncDocsResponse = z.infer<typeof syncDocsResponseSchema>;
+
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({
   error: z.object({
