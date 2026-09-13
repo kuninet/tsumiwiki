@@ -18,6 +18,7 @@ beforeEach(async () => {
   await writeFile(join(staticDir, 'index.html'), '<html><body>TsumiWiki SPA</body></html>', 'utf8');
   await mkdir(join(staticDir, 'assets'), { recursive: true });
   await writeFile(join(staticDir, 'assets', 'app.js'), 'console.log(1);', 'utf8');
+  await writeFile(join(staticDir, 'sw.js'), '/* service worker */', 'utf8');
 
   const config = loadConfig({ LIBRARY_PATH: lib, STATIC_ROOT: staticDir });
   app = buildApp({ config, db: openDatabase(':memory:'), logger: false });
@@ -79,6 +80,17 @@ describe('静的配信', () => {
     const res = await app2.inject({ method: 'GET', url: '/api/health' });
     expect(res.statusCode).toBe(200);
     await app2.close();
+  });
+});
+
+describe('Service Workerの配信(設計07章7.6・#251)', () => {
+  it('/sw.js がルートスコープでHTMLでなくJavaScriptとして配信される', async () => {
+    const res = await app.inject({ method: 'GET', url: '/sw.js' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('javascript');
+    expect(res.body).not.toContain('TsumiWiki SPA');
+    // ファイル名にハッシュが付かないため、保持されると更新が届かなくなる
+    expect(res.headers['cache-control']).toBe('no-cache');
   });
 });
 
