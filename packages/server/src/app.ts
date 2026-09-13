@@ -18,6 +18,7 @@ import { librarySettingsRoutes } from './routes/library-settings.js';
 import { dailyNotesRoutes } from './routes/daily-notes.js';
 import { templatesRoutes } from './routes/templates.js';
 import { registerQueryRoutes } from './routes/query.js';
+import { registerSyncRoutes } from './routes/sync.js';
 import { registerTrashRoutes } from './routes/trash.js';
 import { registerUserRoutes } from './routes/users.js';
 import { DocService } from './services/doc-service.js';
@@ -126,6 +127,7 @@ export function buildApp(options: BuildAppOptions) {
     registerHistoryRoutes(instance);
     registerTrashRoutes(instance);
     registerQueryRoutes(instance);
+    registerSyncRoutes(instance);
     registerAttachmentRoutes(instance);
     registerLibraryRoutes(instance);
     instance.register(librarySettingsRoutes);
