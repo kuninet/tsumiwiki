@@ -14,6 +14,20 @@ describe('loadConfig', () => {
     expect(config.attachmentDirMode).toBe('same-folder');
     expect(config.backupRemote).toBeNull();
     expect(config.backupPushIntervalMinutes).toBe(10);
+    expect(config.attachmentMaxEdgePx).toBe(2048);
+  });
+
+  it('ATTACHMENT_MAX_EDGE_PXは0(無効)を指定できる', () => {
+    const config = loadConfig({ LIBRARY_PATH: '/tmp/lib', ATTACHMENT_MAX_EDGE_PX: '0' });
+    expect(config.attachmentMaxEdgePx).toBe(0);
+  });
+
+  it('ATTACHMENT_MAX_EDGE_PXに負数や非整数を指定するとエラーになる', () => {
+    for (const bad of ['-1', '1.5', 'abc']) {
+      expect(() => loadConfig({ LIBRARY_PATH: '/tmp/lib', ATTACHMENT_MAX_EDGE_PX: bad })).toThrow(
+        /ATTACHMENT_MAX_EDGE_PX/,
+      );
+    }
   });
 
   it('環境変数で上書きできる', () => {

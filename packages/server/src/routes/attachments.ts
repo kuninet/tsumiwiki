@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { renameAttachmentRequestSchema } from '@tsumiwiki/shared';
 import { MIME_BY_EXT } from '../lib/attachments.js';
+import { resizeAttachmentImage } from '../lib/image-resize.js';
 import { InvalidPathError, isProtectedPath, normalizeRelPath, resolveInLibrary } from '../lib/paths.js';
 import { sendError } from '../plugins/auth.js';
 import { DocService } from '../services/doc-service.js';
@@ -104,6 +105,10 @@ export function registerAttachmentRoutes(app: FastifyInstance): void {
       req.log?.warn({ err: e }, 'アップロードの解析に失敗しました');
       return sendError(reply, 400, 'VALIDATION_ERROR', 'アップロードの解析に失敗しました');
     }
+
+    // 長辺上限を超える画像のみ縮小してEXIFを除去する(issue #247)。失敗時は原本のまま続行
+    data = (await resizeAttachmentImage(data, ext, app.config.attachmentMaxEdgePx, req.log)).data;
+
     return handling(reply, async () => {
       const result = await app.docService.addAttachment(docPath, file.filename, data, authorOf(req));
       return reply.code(201).send(result);

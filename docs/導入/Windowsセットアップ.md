@@ -58,6 +58,7 @@ pnpm build        # クライアントをビルド(サーバーが静的配信�
 | `BACKUP_REMOTE` | `\\fileserver\share\tsumiwiki.git` | バックアップ先bareリポジトリ(4章参照。省略可) |
 | `BACKUP_PUSH_INTERVAL_MINUTES` | `10` | push間隔 |
 | `LOG_FILE` | `C:\tsumiwiki-data\app.log` | ログ出力先(省略時は標準出力) |
+| `ATTACHMENT_MAX_EDGE_PX` | `2048` | 添付画像の長辺上限(px)。超える画像のみ保存時に縮小する(省略時は`2048`。`0`で無効化) |
 
 ### 3.1 ポート選択のヒント
 
