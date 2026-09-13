@@ -128,6 +128,24 @@ describe('GET /api/sync/manifest', () => {
     const after = await api('GET', '/api/sync/manifest');
     expect(after.headers.etag).not.toBe(etagBefore);
   });
+
+  // レビュー指摘(中4): indexer-service.tsのscanAllはmtime(ms)+size一致でunchanged判定するため、
+  // 同一mtime内でサイズだけが変わるdoc_indexの状態が実際に起こりうる。ETagがsizeを見ていないと
+  // doc_indexは更新されたのにETagが同値のままになり、端末が304を受けて変更に気づけない
+  it('doc_indexのupdatedAtが同じでもsizeが変わればETagが変化する', async () => {
+    const before = await api('GET', '/api/sync/manifest');
+    const etagBefore = before.headers.etag as string;
+    const beforeEntry = before.json().docs.find((d: { path: string }) => d.path === '設計方針.md');
+
+    // scanAllのunchanged判定が見逃す状況(mtime同一・size変化)を、doc_indexの状態として直接再現する
+    app.db.prepare('UPDATE doc_index SET size = size + 1 WHERE doc_path = ?').run('設計方針.md');
+
+    const after = await api('GET', '/api/sync/manifest');
+    const afterEntry = after.json().docs.find((d: { path: string }) => d.path === '設計方針.md');
+    expect(afterEntry.updatedAt).toBe(beforeEntry.updatedAt); // mtimeは変えていない
+    expect(afterEntry.size).toBe(beforeEntry.size + 1);
+    expect(after.headers.etag).not.toBe(etagBefore);
+  });
 });
 
 describe('POST /api/sync/docs', () => {
@@ -161,6 +179,42 @@ describe('POST /api/sync/docs', () => {
   it('存在しないパスを含めても200で、存在する分だけが返る', async () => {
     const res = await api('POST', '/api/sync/docs', {
       paths: ['設計方針.md', '存在しない文書.md'],
+    });
+    expect(res.statusCode).toBe(200);
+    const { docs } = res.json();
+    expect(docs.map((d: { path: string }) => d.path)).toEqual(['設計方針.md']);
+  });
+
+  // レビュー指摘(重大1): getDocはファイルの実mtimeを返すが、manifestが返すupdatedAtは
+  // doc_index由来。インデックス反映前(watcherのデバウンス待ち等)にgetDoc由来のmtimeを
+  // 返すと、manifestとの突合で「updatedAtが異なる」と判定され続け、端末が同じ文書を
+  // 永久に取り直してしまう。updatedAtの出どころをdoc_indexに一本化したことを確認する
+  it('インデックス未反映でもmanifestと/api/sync/docsのupdatedAtが一致する', async () => {
+    const before = await api('GET', '/api/sync/manifest');
+    const beforeEntry = before.json().docs.find((d: { path: string }) => d.path === '設計方針.md');
+
+    // インデックスは更新せずファイルだけ書き換える(反映待ちの窓を再現)
+    await writeFile(
+      join(lib, '設計方針.md'),
+      '---\ntags: [設計, 重要]\n---\n\nインデックス未反映のうちに書き換えられた本文。\n',
+      'utf8',
+    );
+
+    const docsRes = await api('POST', '/api/sync/docs', { paths: ['設計方針.md'] });
+    expect(docsRes.statusCode).toBe(200);
+    const doc = docsRes.json().docs[0];
+    expect(doc.updatedAt).toBe(beforeEntry.updatedAt);
+
+    const after = await api('GET', '/api/sync/manifest');
+    const afterEntry = after.json().docs.find((d: { path: string }) => d.path === '設計方針.md');
+    expect(afterEntry.updatedAt).toBe(beforeEntry.updatedAt);
+  });
+
+  // レビュー指摘(中2): マニフェスト由来のパスしか送らない設計のため、不正パスが
+  // 混ざってもバッチ全体を落とさずスキップする(InvalidPathErrorは500にしない)
+  it('不正なパス(トラバーサル)が混ざっても200で、正常分だけが返る', async () => {
+    const res = await api('POST', '/api/sync/docs', {
+      paths: ['設計方針.md', '../../etc/passwd.md'],
     });
     expect(res.statusCode).toBe(200);
     const { docs } = res.json();
