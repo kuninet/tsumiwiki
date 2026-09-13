@@ -2,7 +2,8 @@ import { useEffect } from 'react';
 import { useToastStore, type ToastKind } from '../stores/toast';
 
 // トースト通知(デザインhandoff components.md)。右下・panel背景・アイコン+本文。
-// error(danger扱い)は自動消滅せず、×ボタンでの手動クローズのみ
+// error(danger扱い)は自動消滅せず、×ボタンでの手動クローズのみ。
+// 操作ボタン付き(action)のトーストも同様に自動消滅しない(#251の更新通知)
 
 const TOAST_DURATION_MS = 3000;
 
@@ -20,6 +21,7 @@ export function Toast() {
   useEffect(() => {
     if (!toast) return;
     if (toast.kind === 'error') return; // errorは手動クローズのみ(見逃し防止)
+    if (toast.action) return; // 操作ボタン付きは押す前に消えないようにする
     const timer = setTimeout(clear, TOAST_DURATION_MS);
     return () => clearTimeout(timer);
   }, [toast, clear]);
@@ -38,6 +40,15 @@ export function Toast() {
         {style.icon}
       </span>
       <span className="flex-1">{toast.message}</span>
+      {toast.action && (
+        <button
+          type="button"
+          onClick={toast.action.onClick}
+          className="flex-shrink-0 font-medium text-accent hover:text-accent-hover"
+        >
+          {toast.action.label}
+        </button>
+      )}
       <button
         type="button"
         onClick={clear}

@@ -41,4 +41,20 @@ describe('Toast', () => {
     fireEvent.click(screen.getByRole('button', { name: '閉じる' }));
     expect(screen.queryByText('保存に失敗しました')).toBeNull();
   });
+
+  it('操作ボタン付きは自動で消えず、押すとonClickが呼ばれる(#251の更新通知)', () => {
+    const onClick = vi.fn();
+    useToastStore
+      .getState()
+      .show('info', '新しいバージョンがあります', { label: '再読み込み', onClick });
+    render(<Toast />);
+
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(screen.getByText('新しいバージョンがあります')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '再読み込み' }));
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
 });
