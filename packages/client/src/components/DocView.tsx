@@ -49,6 +49,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { ContextMenu } from './ContextMenu';
 import { EditorToolbar } from './EditorToolbar';
 import { HistoryPanel } from './HistoryPanel';
+import { NewDocFromLinkDialog } from './NewDocFromLinkDialog';
 import { PromptDialog } from './PromptDialog';
 import { TagChipEditor } from './TagChipEditor';
 import { TemplatePickerDialog } from './TemplatePickerDialog';
@@ -197,6 +198,8 @@ export function DocView({
   // DocView は文書パスごとに key 付きマウントされる(PaneView)ので、リセットは初期値で足りる
   const [editorChromeVisible, setEditorChromeVisible] = useState(false);
   const showEditorChrome = useCallback(() => setEditorChromeVisible(true), []);
+  // #268: 未解決 wikilink クリックで開く新規文書作成ダイアログ
+  const [newDocFromLink, setNewDocFromLink] = useState<{ target: string } | null>(null);
   const [renameDialog, setRenameDialog] = useState<{
     resolved: { path: string; name: string };
   } | null>(null);
@@ -394,6 +397,7 @@ export function DocView({
     setAttachmentMenu(null);
     setTableMenu(null);
     setSourceMode(false);
+    setNewDocFromLink(null);
   }, [doc.path]);
 
   useEffect(() => {
@@ -952,7 +956,15 @@ export function DocView({
     // → モードに関わらず常に遷移として扱う。編集中の dirty は
     //   use-editing-session のアンマウント時 flush で draft 保存されるため
     //   SPA 遷移で失われない(#96 共通ヘルパを利用)
-    if (handleWikilinkClick(target, wikilinkDocsRef.current, navigate, showToast)) {
+    if (
+      handleWikilinkClick(
+        target,
+        wikilinkDocsRef.current,
+        navigate,
+        showToast,
+        (unresolvedTarget) => setNewDocFromLink({ target: unresolvedTarget }),
+      )
+    ) {
       // 遷移が navigate → DocView アンマウント → PM 破棄と進むので、ここで
       // PM の click ハンドラを止める必要はない(preventDefault は no-op)
       return;
@@ -1265,6 +1277,15 @@ export function DocView({
           confirmDisabled={deleteDialog.referenceDocs === null}
           onConfirm={() => void handleConfirmDeleteAttachment()}
           onCancel={() => setDeleteDialog(null)}
+        />
+      )}
+
+      {newDocFromLink && (
+        <NewDocFromLinkDialog
+          wikilinkTarget={newDocFromLink.target}
+          sourceDocPath={doc.path}
+          onCancel={() => setNewDocFromLink(null)}
+          onCreated={() => setNewDocFromLink(null)}
         />
       )}
     </div>

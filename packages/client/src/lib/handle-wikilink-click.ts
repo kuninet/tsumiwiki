@@ -1,4 +1,4 @@
-import type { DocSummary } from '@tsumiwiki/shared';
+import { parseWikilinkTarget, type DocSummary } from '@tsumiwiki/shared';
 import { docUrl } from './doc-path';
 import { resolveWikilink } from './resolve-wikilink';
 
@@ -25,6 +25,7 @@ export function handleWikilinkClick(
   docs: DocSummary[],
   navigate: Navigate,
   showToast: ShowToast,
+  onUnresolved?: (wikilinkTarget: string) => void,
 ): boolean {
   if (!(target instanceof Element)) return false;
   const wikilinkEl = target.closest('span[data-type="wikilink"]');
@@ -35,7 +36,13 @@ export function handleWikilinkClick(
   if (resolved) {
     navigate(docUrl(resolved));
   } else {
-    showToast('error', 'リンク先が見つかりません');
+    const meta = parseWikilinkTarget(wikilinkTarget);
+    // 自文書内リンク([[#見出し]])や target が空の場合は新規作成ダイアログを開かず従来どおりトースト表示
+    if (!meta.isInternal && meta.target && onUnresolved) {
+      onUnresolved(wikilinkTarget);
+    } else {
+      showToast('error', 'リンク先が見つかりません');
+    }
   }
   return true;
 }

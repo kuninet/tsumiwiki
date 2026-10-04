@@ -41,6 +41,32 @@ describe('Obsidian互換記法の原文保全', () => {
     );
   });
 
+  it('存在しないページのwikilinkをそのまま保全する', () => {
+    expect(roundtripMarkdown('[[存在しないページ]]').trim()).toBe('[[存在しないページ]]');
+  });
+
+  it('隣接するwikilinkをそのまま保全する', () => {
+    expect(roundtripMarkdown('[[a]][[b]]').trim()).toBe('[[a]][[b]]');
+  });
+
+  it('サイズ指定付き埋め込み記法をそのまま保全する', () => {
+    expect(roundtripMarkdown('![[a.png|300]]').trim()).toBe('![[a.png|300]]');
+  });
+
+  it('埋め込みと別名wikilinkの混在を保全する', () => {
+    expect(roundtripMarkdown('前文 ![[img.png]] と [[foo|別名]] 後文').trim()).toBe(
+      '前文 ![[img.png]] と [[foo|別名]] 後文',
+    );
+  });
+
+  it('全角［［全角］］が原文のまま保全される(パース時は変換しない)', () => {
+    expect(roundtripMarkdown('［［全角］］').trim()).toBe('［［全角］］');
+  });
+
+  it('エスケープ済み\\[\\[literal\\]\\]が原文のまま保全される', () => {
+    expect(roundtripMarkdown('\\[\\[literal\\]\\]').trim()).toBe('\\[\\[literal\\]\\]');
+  });
+
   it('本文中のインラインタグを保全する', () => {
     expect(roundtripMarkdown('この文書は #タグ と #階層/タグ を含む。').trim()).toBe(
       'この文書は #タグ と #階層/タグ を含む。',

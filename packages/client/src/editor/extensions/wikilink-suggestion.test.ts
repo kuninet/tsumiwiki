@@ -55,6 +55,21 @@ describe('WikilinkSuggestion', () => {
     editor.destroy();
   });
 
+  it('![[ 入力では埋め込み記法とみなし文書候補ポップアップを表示しない', async () => {
+    const editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false, getWikilinkDocs: () => DOCS }),
+      content: '',
+    });
+
+    editor.commands.insertContent('![[ペ');
+    await flushMicrotasks();
+
+    const popup = document.querySelector('.wikilink-suggestion-popup');
+    expect(popup).toBeNull();
+
+    editor.destroy();
+  });
+
   it('一致する文書がない場合は空である旨を表示する', async () => {
     const editor = new Editor({
       extensions: createEditorExtensions({ nodeViews: false, getWikilinkDocs: () => DOCS }),

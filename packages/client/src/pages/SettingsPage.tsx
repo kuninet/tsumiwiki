@@ -7,6 +7,7 @@ import {
   useUserSettingsStore,
   type ContentWidth,
   type NewDocPolicy,
+  type UnresolvedLinkFolder,
 } from '../stores/user-settings';
 
 // 個人設定画面(SC-06・デザインhandoff components.md)。アカウント情報表示とパスワード変更
@@ -116,6 +117,7 @@ export function SettingsPage() {
       </form>
 
       <NewDocSettings />
+      <UnresolvedLinkSettings />
       <ContentWidthSettings />
     </div>
   );
@@ -179,6 +181,49 @@ function NewDocSettings() {
           />
         </label>
       )}
+    </section>
+  );
+}
+
+// #268: 未解決リンクからの新規作成先ポリシー設定。
+// 設定はブラウザローカル(zustand/persist)。ダイアログ側でも更新可能
+function UnresolvedLinkSettings() {
+  const unresolvedLinkFolder = useUserSettingsStore((s) => s.unresolvedLinkFolder);
+  const setUnresolvedLinkFolder = useUserSettingsStore((s) => s.setUnresolvedLinkFolder);
+
+  function radio(value: UnresolvedLinkFolder, label: string, description: string) {
+    return (
+      <label className="flex cursor-pointer items-start gap-2 rounded border border-line p-3 text-sm hover:bg-hoverbg">
+        <input
+          type="radio"
+          name="unresolved-link-folder"
+          value={value}
+          checked={unresolvedLinkFolder === value}
+          onChange={() => setUnresolvedLinkFolder(value)}
+          className="mt-1"
+        />
+        <span>
+          <span className="font-medium text-ink">{label}</span>
+          <span className="mt-0.5 block text-xs text-ink-faint">{description}</span>
+        </span>
+      </label>
+    );
+  }
+
+  return (
+    <section className="mt-8 max-w-md space-y-3">
+      <h2 className="text-sm font-bold text-ink">未解決リンクからの新規作成</h2>
+      <p className="text-xs text-ink-faint">
+        リンク先の文書が存在しない場合、クリックしたときの初期作成先を設定します(ダイアログで都度変更も可能)。
+      </p>
+      <div className="space-y-2">
+        {radio(
+          'same-folder',
+          'リンク元と同じフォルダ',
+          'リンクを含む文書（リンク元）と同じフォルダに作成します(既定)',
+        )}
+        {radio('root', 'ルート', '常にライブラリのルート直下に作成します')}
+      </div>
     </section>
   );
 }
