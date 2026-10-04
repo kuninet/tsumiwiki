@@ -309,7 +309,19 @@ function createRenderer(storage: WikilinkSuggestionStorage, editor: Editor) {
       }
       if (props.event.key === 'Enter') {
         const item = currentItems[selectedIndex];
-        if (item) currentCommand?.(item);
+        if (item) {
+          currentCommand?.(item);
+        } else if (currentQuery) {
+          editor
+            .chain()
+            .focus()
+            .deleteRange(props.range)
+            .insertContent({
+              type: 'wikilink',
+              attrs: { target: currentQuery, alias: null },
+            })
+            .run();
+        }
         return true;
       }
       return false;
