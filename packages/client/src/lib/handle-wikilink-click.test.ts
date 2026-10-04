@@ -58,6 +58,34 @@ describe('handleWikilinkClick', () => {
     expect(showToast).toHaveBeenCalledWith('error', 'リンク先が見つかりません');
   });
 
+  it('onUnresolved が渡されているときはエラートーストを出さずに onUnresolved を呼ぶ', () => {
+    const navigate = vi.fn();
+    const showToast = vi.fn();
+    const onUnresolved = vi.fn();
+    const span = makeWikilinkEl('存在しない');
+
+    const handled = handleWikilinkClick(span, makeDocs(), navigate, showToast, onUnresolved);
+
+    expect(handled).toBe(true);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(showToast).not.toHaveBeenCalled();
+    expect(onUnresolved).toHaveBeenCalledWith('存在しない');
+  });
+
+  it('自文書内リンク([[#見出し]])の場合は onUnresolved を呼ばずエラートーストを出す', () => {
+    const navigate = vi.fn();
+    const showToast = vi.fn();
+    const onUnresolved = vi.fn();
+    const span = makeWikilinkEl('#見出し');
+
+    const handled = handleWikilinkClick(span, makeDocs(), navigate, showToast, onUnresolved);
+
+    expect(handled).toBe(true);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(onUnresolved).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith('error', 'リンク先が見つかりません');
+  });
+
   it('wikilink 以外の要素をクリックしたときは false を返し何もしない', () => {
     const navigate = vi.fn();
     const showToast = vi.fn();

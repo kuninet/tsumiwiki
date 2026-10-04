@@ -3,7 +3,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { DocResponse, User } from '@tsumiwiki/shared';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { docUrl } from '../lib/doc-path';
 import { useEditStore } from '../stores/edit';
+import { useTabsStore } from '../stores/tabs';
 import { useToastStore } from '../stores/toast';
 import { useUserSettingsStore } from '../stores/user-settings';
 import { DocView } from './DocView';
@@ -658,6 +660,144 @@ describe('DocView', () => {
     await waitFor(() => {
       expect(screen.getByText('新着文書2')).toBeTruthy();
     });
+  });
+
+  it('未解決リンク(.is-unresolved)をクリックすると作成ダイアログが開き、作成でPOST/api/docsとopenDoc/navigateが呼ばれる(#268)', async () => {
+    useUserSettingsStore.setState({ unresolvedLinkFolder: 'same-folder' });
+    const openDocSpy = vi.spyOn(useTabsStore.getState(), 'openDoc');
+
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/tree': {
+        folders: ['業務'],
+        docs: [{ path: '業務/メモ.md', title: 'メモ', folder: '業務', updatedAt: '2026-07-01T00:00:00+09:00' }],
+      },
+      'POST /api/docs': { path: '業務/未作成文書.md', updatedAt: '2026-10-04T00:00:00Z' },
+    });
+
+    renderDocViewWithProbe({
+      ...DOC,
+      path: '業務/メモ.md',
+      body: '[[未作成文書]] を参照',
+    });
+
+    // 編集モードに入るのを待つ
+    await screen.findByRole('button', { name: /保存/ });
+
+    // .is-unresolved な span が描画されていることを確認
+    const unresolvedSpan = document.querySelector('span[data-type="wikilink"].is-unresolved');
+    expect(unresolvedSpan).not.toBeNull();
+    expect(unresolvedSpan?.getAttribute('data-target')).toBe('未作成文書');
+
+    // 実際にクリックする
+    fireEvent.click(unresolvedSpan!);
+
+    // 作成ダイアログが開く
+    await screen.findByRole('dialog');
+    expect(screen.getByText('リンク先の文書を作成')).toBeTruthy();
+    expect(screen.getByText('業務/未作成文書.md')).toBeTruthy();
+
+    // 「作成して開く」ボタンをクリック
+    const submitBtn = screen.getByRole('button', { name: '作成して開く' });
+    fireEvent.click(submitBtn);
+
+    // POST /api/docs が { folder: '業務', title: '未作成文書' } で呼ばれる
+    await waitFor(() => {
+      expect(
+        calls.some(
+          (c) =>
+            c.method === 'POST' &&
+            c.path === '/api/docs' &&
+            JSON.stringify(c.body) === JSON.stringify({ folder: '業務', title: '未作成文書' }),
+        ),
+      ).toBe(true);
+    });
+
+    // openDoc (pinned) と navigate が呼ばれる
+    await waitFor(() => {
+      expect(openDocSpy).toHaveBeenCalledWith('業務/未作成文書.md', { pinned: true });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('location-pathname').textContent).toBe(
+        docUrl('業務/未作成文書.md'),
+      );
+    });
+
+    // ダイアログが閉じる
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+  });
+
+  it('自文書内リンク([[#見出し]])をクリックしても新規作成ダイアログは開かずエラートーストを表示する(#268)', async () => {
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/tree': {
+        folders: ['業務'],
+        docs: [{ path: '業務/メモ.md', title: 'メモ', folder: '業務', updatedAt: '2026-07-01T00:00:00+09:00' }],
+      },
+    });
+
+    renderDocViewWithProbe({
+      ...DOC,
+      path: '業務/メモ.md',
+      body: '[[#見出し]] を参照',
+    });
+
+    await screen.findByRole('button', { name: /保存/ });
+
+    const internalSpan = document.querySelector('span[data-type="wikilink"]');
+    expect(internalSpan).not.toBeNull();
+    expect(internalSpan?.getAttribute('data-target')).toBe('#見出し');
+
+    fireEvent.click(internalSpan!);
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(useToastStore.getState().toast?.kind).toBe('error');
+    expect(useToastStore.getState().toast?.message).toBe('リンク先が見つかりません');
+  });
+
+  it('閲覧モード(他者ロック中)やCmd/Ctrl+クリック時でも未解決リンクから作成ダイアログが開く(#268)', async () => {
+    useUserSettingsStore.setState({ unresolvedLinkFolder: 'same-folder' });
+    stubFetch({
+      'GET /api/tree': {
+        folders: ['業務'],
+        docs: [{ path: '業務/メモ.md', title: 'メモ', folder: '業務', updatedAt: '2026-07-01T00:00:00+09:00' }],
+      },
+    });
+
+    // 他者ロック中のため閲覧モード(isEditing === false)
+    renderDocViewWithProbe({
+      ...DOC,
+      path: '業務/メモ.md',
+      lock: { userId: 2, displayName: '次郎' },
+      body: '[[未作成文書]] を参照',
+    });
+
+    // 保存ボタンが出ない(閲覧モード)ことを確認
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /保存/ })).toBeNull();
+    });
+
+    const unresolvedSpan = document.querySelector('span[data-type="wikilink"].is-unresolved');
+    expect(unresolvedSpan).not.toBeNull();
+
+    // 1. 閲覧モードで Cmd+クリック(metaKey: true)してもダイアログが開く
+    fireEvent.click(unresolvedSpan!, { metaKey: true });
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(screen.getByText('リンク先の文書を作成')).toBeTruthy();
+
+    // キャンセルで閉じる
+    fireEvent.click(screen.getByRole('button', { name: 'キャンセル' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    // 2. Ctrl+クリック(ctrlKey: true)でもダイアログが開く
+    fireEvent.click(unresolvedSpan!, { ctrlKey: true });
+    expect(await screen.findByRole('dialog')).toBeTruthy();
   });
 });
 

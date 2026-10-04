@@ -58,6 +58,7 @@ describe('SettingsPage', () => {
       newDocPolicy: 'same-folder',
       fixedFolder: '',
       contentWidth: 'normal',
+      unresolvedLinkFolder: 'same-folder',
     });
     // #212 レビュー M2: setState は persist ミドルウェアで localStorage に書き戻される。
     // 他 test suite の初期状態を汚染しないよう永続層も掃除する
@@ -129,6 +130,20 @@ describe('SettingsPage', () => {
 
     fireEvent.click(screen.getByLabelText(/標準/));
     expect(useUserSettingsStore.getState().contentWidth).toBe('normal');
+  });
+
+  it('未解決リンクからの新規作成先のラジオを切り替えると unresolvedLinkFolder が更新される (#268)', async () => {
+    stubFetch();
+    renderPage();
+    await screen.findByText('taro');
+
+    expect(useUserSettingsStore.getState().unresolvedLinkFolder).toBe('same-folder');
+
+    fireEvent.click(screen.getByLabelText(/常にライブラリのルート直下に作成します/));
+    expect(useUserSettingsStore.getState().unresolvedLinkFolder).toBe('root');
+
+    fireEvent.click(screen.getByLabelText(/リンクを含む文書（リンク元）と同じフォルダに作成します/));
+    expect(useUserSettingsStore.getState().unresolvedLinkFolder).toBe('same-folder');
   });
 
   it('現在のパスワードが誤っている場合はAPIのエラーメッセージを表示する', async () => {

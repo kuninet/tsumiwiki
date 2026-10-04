@@ -11,6 +11,7 @@ describe('user-settings', () => {
       newDocPolicy: 'same-folder',
       fixedFolder: '',
       contentWidth: 'normal',
+      unresolvedLinkFolder: 'same-folder',
     });
     // #212 レビュー M2: setState は persist ミドルウェアで localStorage に書き戻される。
     // 他 test suite の初期状態を汚染しないよう永続層も掃除する
@@ -72,4 +73,18 @@ describe('user-settings', () => {
       expect(contentWidthMaxClass('full')).toBe('max-w-full');
     });
   });
+
+  describe('unresolvedLinkFolder (#268)', () => {
+    it('既定は same-folder', () => {
+      expect(useUserSettingsStore.getState().unresolvedLinkFolder).toBe('same-folder');
+    });
+
+    it('setUnresolvedLinkFolder で更新できる', () => {
+      useUserSettingsStore.getState().setUnresolvedLinkFolder('root');
+      expect(useUserSettingsStore.getState().unresolvedLinkFolder).toBe('root');
+      useUserSettingsStore.getState().setUnresolvedLinkFolder('same-folder');
+      expect(useUserSettingsStore.getState().unresolvedLinkFolder).toBe('same-folder');
+    });
+  });
 });
+

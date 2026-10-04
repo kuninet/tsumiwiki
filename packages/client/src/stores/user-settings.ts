@@ -19,17 +19,22 @@ export type ContentWidth = 'normal' | 'wide' | 'full';
 // #267: バックリンクの並び順
 export type BacklinksSortOrder = 'updated-desc' | 'name-desc';
 
+// #268: 未解決リンクから文書を作成する際の作成先ポリシー(ユーザー個人設定)
+export type UnresolvedLinkFolder = 'same-folder' | 'root';
+
 interface UserSettingsState {
   newDocPolicy: NewDocPolicy;
   fixedFolder: string;
   contentWidth: ContentWidth;
   backlinksCollapsed: boolean;
   backlinksSort: BacklinksSortOrder;
+  unresolvedLinkFolder: UnresolvedLinkFolder;
   setNewDocPolicy: (policy: NewDocPolicy) => void;
   setFixedFolder: (folder: string) => void;
   setContentWidth: (width: ContentWidth) => void;
   setBacklinksCollapsed: (collapsed: boolean) => void;
   setBacklinksSort: (sort: BacklinksSortOrder) => void;
+  setUnresolvedLinkFolder: (folder: UnresolvedLinkFolder) => void;
 }
 
 export const useUserSettingsStore = create<UserSettingsState>()(
@@ -40,11 +45,13 @@ export const useUserSettingsStore = create<UserSettingsState>()(
       contentWidth: 'normal',
       backlinksCollapsed: false,
       backlinksSort: 'updated-desc',
+      unresolvedLinkFolder: 'same-folder',
       setNewDocPolicy: (newDocPolicy) => set({ newDocPolicy }),
       setFixedFolder: (fixedFolder) => set({ fixedFolder }),
       setContentWidth: (contentWidth) => set({ contentWidth }),
       setBacklinksCollapsed: (backlinksCollapsed) => set({ backlinksCollapsed }),
       setBacklinksSort: (backlinksSort) => set({ backlinksSort }),
+      setUnresolvedLinkFolder: (unresolvedLinkFolder) => set({ unresolvedLinkFolder }),
     }),
     { name: 'tsumiwiki-user-settings' },
   ),
