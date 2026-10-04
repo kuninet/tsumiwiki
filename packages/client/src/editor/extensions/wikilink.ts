@@ -1,4 +1,4 @@
-import { Node, mergeAttributes } from '@tiptap/core';
+import { Node, mergeAttributes, nodeInputRule } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import {
   escapeHtml,
@@ -52,6 +52,21 @@ export const Wikilink = Node.create({
       target: { default: '' },
       alias: { default: null },
     };
+  },
+
+  addInputRules() {
+    return [
+      nodeInputRule({
+        find: /\[\[([^\[\]\n|]+)(?:\|([^\[\]\n]+))?\]\]$/,
+        type: this.type,
+        getAttributes: (match) => {
+          return {
+            target: match[1],
+            alias: match[2] || null,
+          };
+        },
+      }),
+    ];
   },
 
   parseHTML() {
