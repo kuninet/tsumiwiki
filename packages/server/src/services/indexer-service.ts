@@ -1,6 +1,14 @@
 import type { Dirent } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
+import {
+  BACKLINKS_MAX_SOURCES,
+  buildWikilinkResolver,
+  type BacklinkEntry,
+  type BacklinkItem,
+  type BacklinksResponse,
+  type DocSummary,
+} from '@tsumiwiki/shared';
 import type { AppDatabase } from '../db/index.js';
 import { isIndexedFileName } from '../lib/attachments.js';
 import { isProtectedPath, normalizeRelPath } from '../lib/paths.js';
@@ -18,6 +26,45 @@ export interface DocLinkRow {
   line: number;
   context: string;
 }
+
+/**
+ * 対象文書(docPath, title)を参照しうるwikilinkのtargetKey候補一覧を生成する純関数(#267)。
+ * - タイトルの小文字
+ * - パス(拡張子.mdを除く)の小文字
+ * - パスの末尾側の各部分パスの小文字
+ * 小文字化はJSのtoLowerCase()で行い、NFC正規化する。
+ */
+export function backlinkTargetKeys(docPath: string, title?: string): string[] {
+  const normalizedPath = docPath
+    .normalize('NFC')
+    .replace(/\\/g, '/')
+    .replace(/^(\.\/|\/)+/, '');
+  const pathWithoutExt = normalizedPath.endsWith('.md')
+    ? normalizedPath.slice(0, -3)
+    : normalizedPath;
+
+  const segments = pathWithoutExt.split('/').filter(Boolean);
+  const resolvedTitle = (
+    title ?? (segments.length > 0 ? segments[segments.length - 1] : '')
+  ).normalize('NFC');
+
+  const keys = new Set<string>();
+  if (resolvedTitle) {
+    keys.add(resolvedTitle.toLowerCase());
+  }
+  if (pathWithoutExt) {
+    keys.add(pathWithoutExt.toLowerCase());
+  }
+
+  // 末尾側の部分パス: 例: a/b/c/T -> b/c/T, c/T
+  for (let i = 1; i < segments.length; i++) {
+    const subPath = segments.slice(i).join('/');
+    keys.add(subPath.toLowerCase());
+  }
+
+  return Array.from(keys);
+}
+
 
 // ライブラリインデックスサービス(設計02章2.3)
 // doc_index / doc_tags / doc_fts / attachment_index / doc_links はライブラリから再構築可能な
@@ -341,6 +388,124 @@ export class IndexerService {
          ORDER BY source_path, seq`,
       )
       .all(...keys) as DocLinkRow[];
+  }
+
+  /**
+   * 対象文書へのバックリンク一覧を取得する(#267)。
+   * 全文書からbuildWikilinkResolverを構築して候補行を再判定し、
+   * 対象文書に正しく解決されたリンクのみをsource_path単位で集約して返す。
+   */
+  findBacklinks(
+    docPath: string,
+    options?: { limit?: number },
+  ): BacklinksResponse {
+    const normalized = normalizeRelPath(docPath);
+    const limit = options?.limit ?? BACKLINKS_MAX_SOURCES;
+
+    // 1. 全文書一覧を取得してDocSummary配列とマップを準備
+    const rows = this.db
+      .prepare('SELECT doc_path, title, folder, updated_at FROM doc_index ORDER BY doc_path')
+      .all() as { doc_path: string; title: string; folder: string; updated_at: string }[];
+
+    const docMap = new Map<string, { title: string; folder: string; updated_at: string }>();
+    const docSummaries: DocSummary[] = [];
+    let targetTitle: string | null = null;
+
+    for (const r of rows) {
+      docMap.set(r.doc_path, { title: r.title, folder: r.folder, updated_at: r.updated_at });
+      docSummaries.push({
+        path: r.doc_path,
+        title: r.title,
+        folder: r.folder,
+        updatedAt: r.updated_at,
+      });
+      if (r.doc_path === normalized) {
+        targetTitle = r.title;
+      }
+    }
+
+    // 対象文書のタイトルがdoc_indexに見当たらない場合はbasenameから補完
+    const title = targetTitle ?? path.posix.basename(normalized, '.md');
+
+    // 2. 候補キーを生成し、候補行を取得
+    const keys = backlinkTargetKeys(normalized, title);
+    const candidateLinks = this.findLinksByTargetKeys(keys);
+
+    if (candidateLinks.length === 0) {
+      return { backlinks: [], truncated: false };
+    }
+
+    // 3. 全文書からリゾルバを構築
+    const resolver = buildWikilinkResolver(docSummaries);
+    const resolvedCache = new Map<string, string | null>();
+
+    // 4. 候補行を再判定し、自己リンクを除外して source_path ごとに集約
+    const grouped = new Map<string, BacklinkItem[]>();
+
+    for (const link of candidateLinks) {
+      // 自己リンクを除外
+      if (link.source_path === normalized) {
+        continue;
+      }
+
+      // キャッシュ付きで解決先を判定
+      let resolvedPath: string | null;
+      if (resolvedCache.has(link.target_raw)) {
+        resolvedPath = resolvedCache.get(link.target_raw)!;
+      } else {
+        resolvedPath = resolver(link.target_raw);
+        resolvedCache.set(link.target_raw, resolvedPath);
+      }
+
+      // 解決先が対象文書と一致しなければ除外(同名文書で他方に解決される場合など)
+      if (resolvedPath !== normalized) {
+        continue;
+      }
+
+      const item: BacklinkItem = {
+        line: link.line,
+        context: link.context,
+        anchor: link.anchor,
+        alias: link.alias,
+      };
+
+      const existing = grouped.get(link.source_path);
+      if (existing) {
+        existing.push(item);
+      } else {
+        grouped.set(link.source_path, [item]);
+      }
+    }
+
+    // 5. BacklinkEntry 配列を作成
+    const entries: BacklinkEntry[] = [];
+    for (const [sourcePath, links] of grouped.entries()) {
+      const sourceMeta = docMap.get(sourcePath);
+      entries.push({
+        sourcePath,
+        sourceTitle: sourceMeta?.title ?? path.posix.basename(sourcePath, '.md'),
+        sourceFolder: sourceMeta?.folder ?? '',
+        sourceUpdatedAt: sourceMeta?.updated_at ?? '',
+        links,
+      });
+    }
+
+    // 6. ソート: sourceUpdatedAt の降順、同時刻は sourcePath 昇順
+    entries.sort((a, b) => {
+      if (a.sourceUpdatedAt !== b.sourceUpdatedAt) {
+        return a.sourceUpdatedAt < b.sourceUpdatedAt ? 1 : -1;
+      }
+      return a.sourcePath < b.sourcePath ? -1 : a.sourcePath > b.sourcePath ? 1 : 0;
+    });
+
+    // 7. 上限による切り捨て判定
+    const truncated = entries.length > limit;
+    const finalEntries = truncated ? entries.slice(0, limit) : entries;
+
+    return {
+      backlinks: finalEntries,
+      truncated,
+    };
   }
 
   // 指定文書から出ているリンク一覧を取得

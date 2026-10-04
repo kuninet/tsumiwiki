@@ -704,4 +704,57 @@ describe('文書側索引反映のbest-effort化 (issue #203)', () => {
     const draft = await api('GET', `/api/drafts?path=${encodeURIComponent(newPath)}`);
     expect(draft.json().draft?.content).toBe('下書き本文');
   }, 20_000);
+
+  describe('GET /api/docs/backlinks', () => {
+    it('未認証アクセスは401を返す', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/docs/backlinks?path=test.md',
+        headers: CSRF,
+      });
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('path未指定時は400を返す', async () => {
+      const res = await api('GET', '/api/docs/backlinks');
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('存在しない文書を指定した場合は404を返す', async () => {
+      const res = await api('GET', '/api/docs/backlinks?path=nonexistent.md');
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('NOT_FOUND');
+    });
+
+    it('正常系: 文書へのバックリンク一覧を返す', async () => {
+      const target = await api('POST', '/api/docs', { folder: '', title: 'リンク先' });
+      expect(target.statusCode).toBe(201);
+      const targetPath = target.json().path;
+
+      const source = await api('POST', '/api/docs', { folder: 'ノート', title: 'リンク元' });
+      expect(source.statusCode).toBe(201);
+      const sourcePath = source.json().path;
+
+      const gotSource = await api('GET', `/api/docs?path=${encodeURIComponent(sourcePath)}`);
+      await saveDoc({
+        path: sourcePath,
+        body: '[[リンク先]] を参照しています。\n',
+        tags: [],
+        baseUpdatedAt: gotSource.json().updatedAt,
+      });
+
+      const res = await api('GET', `/api/docs/backlinks?path=${encodeURIComponent(targetPath)}`);
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.truncated).toBe(false);
+      expect(body.backlinks).toHaveLength(1);
+      expect(body.backlinks[0].sourcePath).toBe(sourcePath);
+      expect(body.backlinks[0].sourceTitle).toBe('リンク元');
+      expect(body.backlinks[0].sourceFolder).toBe('ノート');
+      expect(body.backlinks[0].links).toHaveLength(1);
+      expect(body.backlinks[0].links[0].context).toContain('リンク先');
+    }, 20_000);
+  });
 });
+
