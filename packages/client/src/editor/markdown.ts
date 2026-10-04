@@ -17,6 +17,8 @@ import { ImageWithResolvedSrc } from './extensions/image-view';
 import { InlineTagHighlight } from './extensions/inline-tag-highlight';
 import { LinkWithTitle, MarkdownLinkSchemes } from './extensions/link-markdown';
 import { ListKeymap } from './extensions/list-keymap';
+import { MathBlock, MathInline } from './extensions/math';
+import { MathBlockWithPreview, MathInlineWithPreview } from './extensions/math-view';
 import { RawBlock } from './extensions/raw-block';
 import { TableMarkdown } from './extensions/table-markdown';
 import { Wikilink } from './extensions/wikilink';
@@ -40,6 +42,7 @@ export function createEditorExtensions(options: EditorExtensionOptions = {}): Ex
     // 表セル内・見出し内のhardBreakを安全にシリアライズする置き換え(#229)
     HardBreakMarkdown,
     nodeViews ? CodeBlockWithPreview : CodeBlock,
+    nodeViews ? MathBlockWithPreview : MathBlock,
     // 相対パス・title・file: を往復で落とさないリンク(issue #207。link-markdown.ts 参照)
     LinkWithTitle,
     MarkdownLinkSchemes,
@@ -63,6 +66,7 @@ export function createEditorExtensions(options: EditorExtensionOptions = {}): Ex
     }),
     TaskItem.configure({ nested: true }),
     Wikilink,
+    nodeViews ? MathInlineWithPreview : MathInline,
     nodeViews ? ObsidianEmbedWithPreview : ObsidianEmbed,
     RawBlock,
     ListKeymap,

@@ -13,6 +13,8 @@ import { useEffect, useState } from 'react';
 // - 構文エラー: エラーメッセージ+ソース表示にフォールバック
 // dataview等それ以外の言語は通常のコードブロックのまま(FR-OBS-08)。
 
+import { useCursorInside } from './use-cursor-inside';
+
 let mermaidSeq = 0;
 
 function MermaidPreview({ code }: { code: string }) {
@@ -54,25 +56,7 @@ function MermaidPreview({ code }: { code: string }) {
 
 function CodeBlockView({ node, editor, getPos }: NodeViewProps) {
   const isMermaid = (node.attrs.language as string | null) === 'mermaid';
-  const [cursorInside, setCursorInside] = useState(false);
-
-  useEffect(() => {
-    if (!isMermaid) return;
-    const update = () => {
-      const pos = getPos();
-      if (typeof pos !== 'number') return;
-      const { from, to } = editor.state.selection;
-      setCursorInside(editor.isEditable && from >= pos && to <= pos + node.nodeSize);
-    };
-    update();
-    editor.on('selectionUpdate', update);
-    editor.on('focus', update);
-    return () => {
-      editor.off('selectionUpdate', update);
-      editor.off('focus', update);
-    };
-  }, [editor, getPos, isMermaid, node.nodeSize]);
-
+  const cursorInside = useCursorInside(editor, getPos, node.nodeSize, isMermaid);
   const showPreview = isMermaid && !cursorInside;
 
   const focusSource = () => {
