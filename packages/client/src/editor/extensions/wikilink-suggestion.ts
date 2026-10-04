@@ -381,7 +381,11 @@ export const WikilinkSuggestion = Extension.create<
           const $pos = state.doc.resolve(range.from);
           // コードブロック/インラインコード内では発火させない(#195)
           if (isInsideCode($pos)) return false;
-          
+
+          // ![[ は埋め込み記法。文書候補を出すと Enter で ! + wikilink になってしまう
+          const prev = range.from > 0 ? state.doc.textBetween(range.from - 1, range.from, '\0', '\0') : '';
+          if (prev === '!' || prev === '！') return false;
+
           const text = state.doc.textBetween(range.from, range.to);
           // 既に閉じカッコが入力されている場合はサジェストを終了する
           if (text.includes(']]') || text.includes('］］')) return false;

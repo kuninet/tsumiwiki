@@ -1,4 +1,4 @@
-import { Node, mergeAttributes } from '@tiptap/core';
+import { InputRule, Node, PasteRule, mergeAttributes } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import {
   escapeHtml,
@@ -6,10 +6,15 @@ import {
   type MarkdownItLike,
   type TokenLike,
 } from '../markdown-it-types';
+import { rangeHasCodeMark } from './wikilink';
 
 // Obsidian互換の埋め込み: ![[ファイル名]](FR-OBS-03)
 // プロトタイプでは記法の保全(往復変換)のみを対象とし、
 // 画像としての表示解決(/api/files経由)は本実装で行う。
+
+// 手入力は全角 ！［［］］ も半角の埋め込みとして確定する。target は |幅 等を含むため | を許す(embedRule と同じ)
+const EMBED_INPUT_RE = /[!！][[［]{2}([^[\]［］\n]+)[\]］]{2}$/;
+const EMBED_PASTE_RE = /!\[\[([^[\]\n]+)\]\]/g;
 
 interface SerializerStateLike {
   write(content: string): void;
@@ -46,6 +51,33 @@ export const ObsidianEmbed = Node.create({
     return {
       target: { default: '' },
     };
+  },
+
+  addInputRules() {
+    return [
+      new InputRule({
+        find: EMBED_INPUT_RE,
+        handler: ({ state, range, match }) => {
+          state.tr.replaceWith(range.from, range.to, this.type.create({ target: match[1] }));
+        },
+      }),
+    ];
+  },
+
+  addPasteRules() {
+    return [
+      new PasteRule({
+        find: EMBED_PASTE_RE,
+        handler: ({ state, range, match }) => {
+          if (rangeHasCodeMark(state, range.from, range.to)) return;
+          state.tr.replaceWith(range.from, range.to, this.type.create({ target: match[1] }));
+        },
+      }),
+    ];
+  },
+
+  renderText({ node }) {
+    return `![[${node.attrs.target as string}]]`;
   },
 
   parseHTML() {
