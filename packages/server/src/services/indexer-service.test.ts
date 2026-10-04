@@ -477,4 +477,82 @@ describe('IndexerService: resolveAttachment(issue #198 解決規則)', () => {
     // 同フォルダのsub/img2.pngが優先される
     expect(svc.resolveAttachment('img2.png', 'sub/doc.md')).toBe('sub/img2.png');
   });
+
+  describe('doc_links (文書間リンク索引)', () => {
+    it('scanAllで文書内の[[target]]がdoc_linksに索引化される', async () => {
+      await writeFile(
+        join(lib, 'リンク元.md'),
+        '# タイトル\n[[リンク先A]] と [[フォルダ/リンク先B#見出し|別名]]\n```\n[[コード内]]\n```\n`[[インライン]]`\n![[画像.png]]\n',
+        'utf8',
+      );
+      await svc.scanAll();
+
+      const links = svc.listLinksFrom('リンク元.md');
+      expect(links).toHaveLength(2);
+      expect(links[0]).toMatchObject({
+        source_path: 'リンク元.md',
+        seq: 0,
+        target_raw: 'リンク先A',
+        target_norm: 'リンク先A',
+        target_key: 'リンク先a',
+        anchor: null,
+        alias: null,
+        line: 2,
+      });
+      expect(links[1]).toMatchObject({
+        source_path: 'リンク元.md',
+        seq: 1,
+        target_raw: 'フォルダ/リンク先B#見出し',
+        target_norm: 'フォルダ/リンク先B',
+        target_key: 'フォルダ/リンク先b',
+        anchor: '見出し',
+        alias: '別名',
+        line: 2,
+      });
+
+      // findLinksByTargetKeys
+      const found = svc.findLinksByTargetKeys(['リンク先a']);
+      expect(found).toHaveLength(1);
+      expect(found[0].source_path).toBe('リンク元.md');
+    });
+
+    it('removeFileでdoc_linksの行が削除される', async () => {
+      await writeFile(join(lib, '削除対象.md'), '[[リンク先]]\n', 'utf8');
+      await svc.scanAll();
+      expect(svc.listLinksFrom('削除対象.md')).toHaveLength(1);
+
+      svc.removeFile('削除対象.md');
+      expect(svc.listLinksFrom('削除対象.md')).toHaveLength(0);
+    });
+
+    it('moveFileでsource_pathが新しいパスに更新される', async () => {
+      await writeFile(join(lib, '旧パス.md'), '[[移動先リンク]]\n', 'utf8');
+      await svc.scanAll();
+      expect(svc.listLinksFrom('旧パス.md')).toHaveLength(1);
+
+      await rename(join(lib, '旧パス.md'), join(lib, '新パス.md'));
+      await svc.moveFile('旧パス.md', '新パス.md');
+
+      expect(svc.listLinksFrom('旧パス.md')).toHaveLength(0);
+      const newLinks = svc.listLinksFrom('新パス.md');
+      expect(newLinks).toHaveLength(1);
+      expect(newLinks[0].target_norm).toBe('移動先リンク');
+    });
+
+    it('v3からv4マイグレーション時、size = -1により既存文書のdoc_linksが埋め戻される', async () => {
+      await writeFile(join(lib, '既存文書.md'), '[[既存リンク]]\n', 'utf8');
+      await svc.scanAll();
+      expect(svc.listLinksFrom('既存文書.md')).toHaveLength(1);
+
+      // マイグレーション直後を再現: doc_linksを空にして、doc_index.sizeを-1にする
+      db.prepare('DELETE FROM doc_links').run();
+      db.prepare('UPDATE doc_index SET size = -1').run();
+      expect(svc.listLinksFrom('既存文書.md')).toHaveLength(0);
+
+      // scanAllを実行するとsize不一致で再パースされ、doc_linksが埋め戻される
+      const res = await svc.scanAll();
+      expect(res.indexed).toBe(1);
+      expect(svc.listLinksFrom('既存文書.md')).toHaveLength(1);
+    });
+  });
 });

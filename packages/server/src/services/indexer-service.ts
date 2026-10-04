@@ -4,10 +4,23 @@ import path from 'node:path';
 import type { AppDatabase } from '../db/index.js';
 import { isIndexedFileName } from '../lib/attachments.js';
 import { isProtectedPath, normalizeRelPath } from '../lib/paths.js';
-import { parseDocMeta } from './markdown-meta.js';
+import { parseDocMeta, type ExtractedLink } from './markdown-meta.js';
+
+// 文書間リンク索引の1行
+export interface DocLinkRow {
+  source_path: string;
+  seq: number;
+  target_raw: string;
+  target_norm: string;
+  target_key: string;
+  anchor: string | null;
+  alias: string | null;
+  line: number;
+  context: string;
+}
 
 // ライブラリインデックスサービス(設計02章2.3)
-// doc_index / doc_tags / doc_fts / attachment_index はライブラリから再構築可能な
+// doc_index / doc_tags / doc_fts / attachment_index / doc_links はライブラリから再構築可能な
 // 派生データとして管理する。
 // - 起動時: 全走査し、mtime/sizeが変わったファイルだけ再パース(差分リインデックス)
 // - 保存・外部変更時: 該当ファイルのみ更新
@@ -51,6 +64,7 @@ interface ParsedRow {
   size: number;
   frontmatterTags: string[];
   inlineTags: string[];
+  links: ExtractedLink[];
   body: string;
 }
 
@@ -183,6 +197,7 @@ export class IndexerService {
       this.db.prepare('DELETE FROM doc_index WHERE doc_path = ?').run(normalized);
       this.db.prepare('DELETE FROM doc_tags WHERE doc_path = ?').run(normalized);
       this.db.prepare('DELETE FROM doc_fts WHERE doc_path = ?').run(normalized);
+      this.db.prepare('DELETE FROM doc_links WHERE source_path = ?').run(normalized);
     });
     remove();
   }
@@ -314,6 +329,33 @@ export class IndexerService {
     return sorted[0].rel_path;
   }
 
+  // targetKey群に合致するリンク一覧を取得(#267 バックリンク検索用)
+  findLinksByTargetKeys(keys: string[]): DocLinkRow[] {
+    if (keys.length === 0) return [];
+    const placeholders = keys.map(() => '?').join(', ');
+    return this.db
+      .prepare(
+        `SELECT source_path, seq, target_raw, target_norm, target_key, anchor, alias, line, context
+         FROM doc_links
+         WHERE target_key IN (${placeholders})
+         ORDER BY source_path, seq`,
+      )
+      .all(...keys) as DocLinkRow[];
+  }
+
+  // 指定文書から出ているリンク一覧を取得
+  listLinksFrom(sourcePath: string): DocLinkRow[] {
+    const normalized = normalizeRelPath(sourcePath);
+    return this.db
+      .prepare(
+        `SELECT source_path, seq, target_raw, target_norm, target_key, anchor, alias, line, context
+         FROM doc_links
+         WHERE source_path = ?
+         ORDER BY seq`,
+      )
+      .all(normalized) as DocLinkRow[];
+  }
+
   private buildAttachmentRow(relPath: string, meta: WalkedFile): AttachmentRow {
     const normalized = normalizeRelPath(relPath);
     const name = path.posix.basename(normalized);
@@ -368,6 +410,7 @@ export class IndexerService {
       size,
       frontmatterTags: meta.frontmatterTags,
       inlineTags: meta.inlineTags,
+      links: meta.links,
       body: meta.body,
     };
   }
@@ -395,6 +438,25 @@ export class IndexerService {
     this.db
       .prepare('INSERT INTO doc_fts (doc_path, title, body) VALUES (?, ?, ?)')
       .run(row.docPath, row.title, row.body);
+
+    this.db.prepare('DELETE FROM doc_links WHERE source_path = ?').run(row.docPath);
+    const insertLink = this.db.prepare(
+      `INSERT INTO doc_links (source_path, seq, target_raw, target_norm, target_key, anchor, alias, line, context)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const link of row.links) {
+      insertLink.run(
+        row.docPath,
+        link.seq,
+        link.targetRaw,
+        link.targetNorm,
+        link.targetKey,
+        link.anchor,
+        link.alias,
+        link.line,
+        link.context,
+      );
+    }
   }
 
   private async walk(

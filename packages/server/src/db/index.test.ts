@@ -12,10 +12,11 @@ describe('openDatabase', () => {
       .all()
       .map((r) => (r as { name: string }).name);
 
-    for (const t of ['users', 'sessions', 'locks', 'drafts', 'doc_index', 'doc_tags', 'doc_fts']) {
+    for (const t of ['users', 'sessions', 'locks', 'drafts', 'doc_index', 'doc_tags', 'doc_fts', 'attachment_index', 'doc_links']) {
       expect(tables).toContain(t);
     }
-    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION);
+    expect(SCHEMA_VERSION).toBe(4);
+    expect(db.pragma('user_version', { simple: true })).toBe(4);
   });
 
   it('FTS5(trigram)で日本語全文検索ができる', () => {

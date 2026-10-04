@@ -97,6 +97,25 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_attachment_index_name ON attachment_index(name_key);
   `,
+  // v4: 文書間リンク索引(issue #266)。
+  // [[target]] の出現箇所を索引化し、バックリンクや未解決リンク、リネーム時の書き換えに使う。
+  // 既存DBの全文書を次のscanAllで再スキャンさせるためsize = -1に更新する
+  `
+  CREATE TABLE doc_links (
+    source_path TEXT NOT NULL,    -- リンクを含む文書(doc_index.doc_path と同じ NFC・/区切り)
+    seq         INTEGER NOT NULL, -- 文書内での出現順(0始まり)。同じリンクが複数回あっても別行にする
+    target_raw  TEXT NOT NULL,    -- [[ ]] 内の | より前をそのまま(書き換え・表示用)
+    target_norm TEXT NOT NULL,    -- normalizeWikilinkTarget 後(#以降を除いた名前/パス)
+    target_key  TEXT NOT NULL,    -- target_norm を小文字化したもの(検索キー)
+    anchor      TEXT,             -- #以降(なければ NULL)
+    alias       TEXT,             -- | 以降(なければ NULL)
+    line        INTEGER NOT NULL, -- 本文(フロントマター除く)での行番号(1始まり)
+    context     TEXT NOT NULL,    -- リンクを含む行の前後を含む抜粋(#267 の表示用。最大200文字程度)
+    PRIMARY KEY (source_path, seq)
+  );
+  CREATE INDEX idx_doc_links_target_key ON doc_links(target_key);
+  UPDATE doc_index SET size = -1;
+  `,
 ];
 
 // 現在のスキーマバージョン(テスト・診断用)

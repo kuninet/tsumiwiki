@@ -21,6 +21,7 @@ import { RawBlock } from './extensions/raw-block';
 import { TableMarkdown } from './extensions/table-markdown';
 import { Wikilink } from './extensions/wikilink';
 import { WikilinkSuggestion } from './extensions/wikilink-suggestion';
+import { WikilinkUnresolved } from './extensions/wikilink-unresolved';
 
 export interface EditorExtensionOptions {
   // ReactのNodeView(mermaidプレビュー・画像表示解決等)を使うか。
@@ -67,6 +68,7 @@ export function createEditorExtensions(options: EditorExtensionOptions = {}): Ex
     ListKeymap,
     InlineTagHighlight,
     WikilinkSuggestion.configure({ getDocs: getWikilinkDocs ?? (() => []) }),
+    WikilinkUnresolved.configure({ getDocs: getWikilinkDocs ?? (() => []) }),
     Markdown.configure({
       html: true, // HTMLブロックをrawBlockとして保全するため有効化(raw-block.ts参照)
       tightLists: true,

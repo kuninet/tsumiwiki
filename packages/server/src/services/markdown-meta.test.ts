@@ -49,3 +49,88 @@ describe('parseDocMeta: フロントマターの寛容パース', () => {
     expect(meta.inlineTags).toEqual(['ブログ'.normalize('NFC')]);
   });
 });
+
+describe('extractDocLinks / parseDocMeta: リンク抽出', () => {
+  it('基本リンクを抽出する', () => {
+    const md = 'これは [[Wikiページ]] へのリンクです。';
+    const meta = parseDocMeta(md);
+    expect(meta.links).toHaveLength(1);
+    expect(meta.links[0]).toMatchObject({
+      seq: 0,
+      targetRaw: 'Wikiページ',
+      targetNorm: 'Wikiページ',
+      targetKey: 'wikiページ',
+      anchor: null,
+      alias: null,
+      line: 1,
+    });
+    expect(meta.links[0].context).toContain('これは [[Wikiページ]] へのリンクです。');
+  });
+
+  it('aliasとanchorを正しく分離する', () => {
+    const md = '参照: [[設計書#概要|サマリ]]';
+    const meta = parseDocMeta(md);
+    expect(meta.links).toHaveLength(1);
+    expect(meta.links[0]).toMatchObject({
+      seq: 0,
+      targetRaw: '設計書#概要',
+      targetNorm: '設計書',
+      targetKey: '設計書',
+      anchor: '概要',
+      alias: 'サマリ',
+      line: 1,
+    });
+  });
+
+  it('ブロックID付きリンクを抽出する', () => {
+    const md = 'ブロック参照 [[仕様#^block-1]]';
+    const meta = parseDocMeta(md);
+    expect(meta.links[0]).toMatchObject({
+      targetNorm: '仕様',
+      anchor: '^block-1',
+    });
+  });
+
+  it('自文書内見出しリンク([[#見出し]])は索引から除外する', () => {
+    const md = '目次: [[#第1章]] と [[#^b1]]、そして [[別文書#第1章]]';
+    const meta = parseDocMeta(md);
+    expect(meta.links).toHaveLength(1);
+    expect(meta.links[0].targetNorm).toBe('別文書');
+  });
+
+  it('画像埋め込み(![[...]])はリンク索引から除外する', () => {
+    const md = '画像: ![[diagram.png]] と リンク: [[ドキュメント]]';
+    const meta = parseDocMeta(md);
+    expect(meta.links).toHaveLength(1);
+    expect(meta.links[0].targetNorm).toBe('ドキュメント');
+  });
+
+  it('コードブロックおよびインラインコード内の[[...]]を除外する', () => {
+    const md = [
+      '# タイトル',
+      '```markdown',
+      '[[コード内リンク1]]',
+      '```',
+      '本文 `[[インラインコードリンク]]` と [[本物リンク]]',
+      '~~~',
+      '[[チルダコード内]]',
+      '~~~',
+    ].join('\n');
+    const meta = parseDocMeta(md);
+    expect(meta.links).toHaveLength(1);
+    expect(meta.links[0].targetNorm).toBe('本物リンク');
+  });
+
+  it('複数リンクのseqと行番号(line)を正しく保持する', () => {
+    const md = [
+      '1行目 [[リンク1]]',
+      '2行目 テキスト',
+      '3行目 [[リンク2]] と [[リンク3]]',
+    ].join('\n');
+    const meta = parseDocMeta(md);
+    expect(meta.links).toHaveLength(3);
+    expect(meta.links[0]).toMatchObject({ seq: 0, targetNorm: 'リンク1', line: 1 });
+    expect(meta.links[1]).toMatchObject({ seq: 1, targetNorm: 'リンク2', line: 3 });
+    expect(meta.links[2]).toMatchObject({ seq: 2, targetNorm: 'リンク3', line: 3 });
+  });
+});
