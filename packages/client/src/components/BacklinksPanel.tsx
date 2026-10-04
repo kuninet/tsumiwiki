@@ -196,9 +196,14 @@ export function BacklinksPanel({ path, enabled = true }: BacklinksPanelProps) {
                       {entry.links.length > 0 && (
                         <div className="mt-1 space-y-1 pl-2 border-l-2 border-line/60">
                           {entry.links.map((link, idx) => (
-                            <div key={idx} className="text-xs text-ink-soft leading-relaxed">
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => navigate(docUrl(entry.sourcePath))}
+                              className="block w-full text-left text-xs text-ink-soft leading-relaxed hover:bg-hoverbg cursor-pointer p-1 -ml-1 rounded transition-colors"
+                            >
                               <BacklinkContextView context={link.context} />
-                            </div>
+                            </button>
                           ))}
                         </div>
                       )}
