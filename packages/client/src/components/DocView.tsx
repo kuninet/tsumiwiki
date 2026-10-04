@@ -25,6 +25,7 @@ import { docQueryKey, useTree } from '../api/docs';
 import { useExpandTemplate } from '../api/templates';
 import type { AttachmentLightboxRequest, AttachmentMenuRequest } from '../editor/doc-storage';
 import { createEditorExtensions } from '../editor/markdown';
+import { WIKILINK_DOCS_CHANGED_META } from '../editor/extensions/wikilink-unresolved';
 import { parseMarkdownFragment } from '../editor/parse-fragment';
 import { getTableMenuItems } from '../editor/table-menu';
 import { findTableAt } from '../editor/table-utils';
@@ -373,6 +374,13 @@ export function DocView({
       openAttachmentLightbox,
     };
   }, [editor, doc.path, openAttachmentMenu, openAttachmentLightbox]);
+
+  // tree(文書一覧)更新時に未解決リンクのデコレーションを再計算させる(issue #266)
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const tr = editor.state.tr.setMeta(WIKILINK_DOCS_CHANGED_META, true);
+    editor.view.dispatch(tr);
+  }, [tree, editor]);
 
   // #211: タブ切替等でdoc.pathが変わったら、前の文書で開いたままのライトボックス/
   // 添付メニューは意味を失うので明示的に閉じる(レビュー中#9)

@@ -176,6 +176,12 @@
   cursor: pointer;
 }
 
+/* 未解決リンク(issue #266): リンク先が存在しない場合はグレー文字+点線下線 */
+.ProseMirror .wikilink.is-unresolved {
+  color: var(--color-ink-soft);
+  border-bottom: 1px dashed var(--color-ink-faint);
+}
+
 .ProseMirror .obsidian-embed {
   background: var(--color-panel-2);
   border-radius: 3px;

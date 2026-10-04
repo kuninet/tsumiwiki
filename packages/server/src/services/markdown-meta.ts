@@ -1,13 +1,28 @@
 import matter from 'gray-matter';
+import { parseWikilinkTarget } from '@tsumiwiki/shared';
+import { computeCodeRanges, isWithinCode } from '../lib/code-ranges.js';
 
 // 文書メタデータの抽出(設計02章2.3 / FR-OBS-06)
 // - フロントマター: gray-matterで寛容にパース(壊れたYAMLでも文書自体は索引する)
 // - インラインタグ: Obsidian規則に準拠(行頭または空白直後の #タグ。
 //   コードブロック・インラインコード内は除外。数字のみのタグは無効)
+// - 文書間リンク: [[文書名]] (コードブロック・インラインコード内は除外、![[...]]埋め込みは除く)
+
+export interface ExtractedLink {
+  seq: number;
+  targetRaw: string;
+  targetNorm: string;
+  targetKey: string;
+  anchor: string | null;
+  alias: string | null;
+  line: number;
+  context: string;
+}
 
 export interface DocMeta {
   frontmatterTags: string[];
   inlineTags: string[];
+  links: ExtractedLink[];
   body: string; // フロントマターを除いた本文(FTS用)
 }
 
@@ -80,6 +95,96 @@ function extractInlineTags(body: string): string[] {
   return [...tags];
 }
 
+function extractContext(
+  lines: string[],
+  lineIndex: number,
+  colIndex: number,
+  linkLength: number,
+): string {
+  const line = lines[lineIndex] ?? '';
+  if (line.length <= 200) {
+    let ctx = line;
+    if (lineIndex > 0) {
+      const prev = lines[lineIndex - 1];
+      if (prev.length + 1 + ctx.length <= 200) {
+        ctx = prev + '\n' + ctx;
+      }
+    }
+    if (lineIndex < lines.length - 1) {
+      const next = lines[lineIndex + 1];
+      if (ctx.length + 1 + next.length <= 200) {
+        ctx = ctx + '\n' + next;
+      }
+    }
+    return ctx.trim();
+  }
+  const start = Math.max(0, colIndex - 60);
+  const end = Math.min(line.length, colIndex + linkLength + 60);
+  let snippet = line.slice(start, end).trim();
+  if (start > 0) snippet = '...' + snippet;
+  if (end < line.length) snippet = snippet + '...';
+  return snippet.slice(0, 200);
+}
+
+const WIKILINK_EXTRACT_RE = /(?<!\!)\[\[([^\[\]\r\n]+)\]\]/g;
+
+export function extractDocLinks(body: string): ExtractedLink[] {
+  const codeRanges = computeCodeRanges(body);
+  const links: ExtractedLink[] = [];
+
+  const lineOffsets: number[] = [0];
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === '\n') {
+      lineOffsets.push(i + 1);
+    }
+  }
+  const lines = body.split('\n');
+
+  let seq = 0;
+  for (const m of body.matchAll(WIKILINK_EXTRACT_RE)) {
+    const offset = m.index ?? 0;
+    if (isWithinCode(codeRanges, offset)) continue;
+
+    const inner = m[1];
+    const pipeIdx = inner.indexOf('|');
+    const rawBeforePipe = pipeIdx >= 0 ? inner.slice(0, pipeIdx) : inner;
+    const alias = pipeIdx >= 0 ? inner.slice(pipeIdx + 1).trim() || null : null;
+    const targetRaw = rawBeforePipe.trim();
+
+    const meta = parseWikilinkTarget(targetRaw);
+    if (meta.isInternal || !meta.target) continue;
+
+    let l = 0;
+    let r = lineOffsets.length - 1;
+    while (l <= r) {
+      const mid = (l + r) >> 1;
+      if (lineOffsets[mid] <= offset) {
+        l = mid + 1;
+      } else {
+        r = mid - 1;
+      }
+    }
+    const lineIndex = r;
+    const lineNum = lineIndex + 1;
+    const colIndex = offset - lineOffsets[lineIndex];
+
+    const context = extractContext(lines, lineIndex, colIndex, m[0].length);
+
+    links.push({
+      seq: seq++,
+      targetRaw,
+      targetNorm: meta.target,
+      targetKey: meta.targetKey,
+      anchor: meta.anchor || null,
+      alias,
+      line: lineNum,
+      context,
+    });
+  }
+
+  return links;
+}
+
 export function parseDocMeta(content: string): DocMeta {
   let body = content;
   let frontmatterTags: string[] = [];
@@ -96,6 +201,7 @@ export function parseDocMeta(content: string): DocMeta {
   return {
     frontmatterTags,
     inlineTags: extractInlineTags(body),
+    links: extractDocLinks(body),
     body,
   };
 }

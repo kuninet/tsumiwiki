@@ -10,6 +10,7 @@ import type { DocResponse, DocSummary, RenameAttachmentResponse, TreeResponse } 
 import type { AppConfig } from '../config.js';
 import type { AppDatabase } from '../db/index.js';
 import { ATTACHMENT_EXTENSIONS, isIndexedFileName } from '../lib/attachments.js';
+import { computeCodeRanges, isWithinCode } from '../lib/code-ranges.js';
 import { InvalidPathError, isProtectedPath, normalizeRelPath, resolveInLibrary } from '../lib/paths.js';
 import type { DraftService } from './draft-service.js';
 import type { GitAuthor, GitService } from './git-service.js';
@@ -161,49 +162,6 @@ const WIKILINK_REWRITE_RE = /(!?\[\[)([^\]|#\n]+?)((?:[#|][^\]\n]*)?\]\])/g;
 const MD_LINK_REWRITE_RE = /(!?\[[^\]\n]*\]\()([^)\s\n]+)((?:\s+["'][^)\n]*)?\))/g;
 const EXCLUDED_SCHEME_RE = /^(https?|data|mailto|file):/i;
 
-// フェンス行(3文字以上の```/~~~連。インデントのみのコードブロックは対象外)の検出。
-// markdown-meta.tsのstripCode(タグ抽出用)と同じ簡易な行単位の状態機械を、
-// 位置(文字インデックス)を保った形で使うためにここでも定義する
-const CODE_FENCE_LINE_RE = /^ {0,3}(`{3,}|~{3,})/;
-// インラインコード(`...`・``...``等)。バッククォート連長が一致するスパンを1行内で検出
-const INLINE_CODE_SPAN_RE = /(`+).*?\1/g;
-
-// body中の「コードブロック・インラインコードの内側」の文字範囲([start, end))を返す(中2)。
-// extractLinkTargets/rewriteAttachmentReferencesはこの範囲内のtargetを対象外にする
-function computeCodeRanges(body: string): { start: number; end: number }[] {
-  const ranges: { start: number; end: number }[] = [];
-  let offset = 0;
-  let fence: { char: string; len: number } | null = null;
-  for (const line of body.match(/[^\n]*\n|[^\n]+/g) ?? []) {
-    const eolLen = line.endsWith('\r\n') ? 2 : line.endsWith('\n') ? 1 : 0;
-    const bare = eolLen ? line.slice(0, -eolLen) : line;
-    const fenceMatch = CODE_FENCE_LINE_RE.exec(bare);
-    if (fence) {
-      ranges.push({ start: offset, end: offset + line.length });
-      if (
-        fenceMatch &&
-        fenceMatch[1][0] === fence.char &&
-        fenceMatch[1].length >= fence.len &&
-        /^\s*$/.test(bare.slice(fenceMatch[0].length))
-      ) {
-        fence = null;
-      }
-    } else if (fenceMatch) {
-      fence = { char: fenceMatch[1][0], len: fenceMatch[1].length };
-      ranges.push({ start: offset, end: offset + line.length });
-    } else {
-      for (const m of bare.matchAll(INLINE_CODE_SPAN_RE)) {
-        ranges.push({ start: offset + (m.index ?? 0), end: offset + (m.index ?? 0) + m[0].length });
-      }
-    }
-    offset += line.length;
-  }
-  return ranges;
-}
-
-function isWithinCode(ranges: { start: number; end: number }[], index: number): boolean {
-  return ranges.some((r) => index >= r.start && index < r.end);
-}
 
 // targetの`?`/`#`以降(クエリ・アンカー)を切り離す。前後空白はtrimする(軽微8。
 // `![[ old.png ]]`のような余白付きtargetも一致判定できるように抽出側・書き換え側で揃える)
