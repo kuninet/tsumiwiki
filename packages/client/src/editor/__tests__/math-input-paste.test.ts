@@ -137,5 +137,97 @@ describe('数式の手入力・貼り付け (InputRule / PasteRule)', () => {
       expect(markdownOf(editor)).toBe('$5 と $10');
       expect(inlineTypes(editor)).toEqual(['text']);
     });
+
+    it('P5: 複数行の $$...$$ を貼り付けると mathBlock に変換される', () => {
+      const editor = createEditor();
+      editor.view.pasteText('$$\nx = 1\n$$');
+      const json = editor.getJSON();
+      expect(json.content?.[0]?.type).toBe('mathBlock');
+      expect(json.content?.[0]?.content?.[0]?.text).toBe('x = 1');
+      expect(markdownOf(editor)).toBe('$$\nx = 1\n$$');
+    });
+
+    it('P6: 複数行の複雑な LaTeX を貼り付けると改行が保持されて mathBlock になる', () => {
+      const editor = createEditor();
+      editor.view.pasteText('$$\n\\begin{aligned}\na &= b \\\\\nc &= d\n\\end{aligned}\n$$');
+      const json = editor.getJSON();
+      expect(json.content?.[0]?.type).toBe('mathBlock');
+      expect(json.content?.[0]?.content?.[0]?.text).toBe(
+        '\\begin{aligned}\na &= b \\\\\nc &= d\n\\end{aligned}',
+      );
+    });
+
+    it('P7: 1行形式の $$x = 1$$ を貼り付けると mathBlock に変換される', () => {
+      const editor = createEditor();
+      editor.view.pasteText('$$x = 1$$');
+      const json = editor.getJSON();
+      expect(json.content?.[0]?.type).toBe('mathBlock');
+      expect(json.content?.[0]?.content?.[0]?.text).toBe('x = 1');
+    });
+
+    it('P8: 文章と数式ブロックが混在したテキストを貼り付けると分解されて挿入される', () => {
+      const editor = createEditor();
+      editor.view.pasteText('説明文\n\n$$\nx = 1\n$$\n\nまとめ');
+      const json = editor.getJSON();
+      expect(json.content?.map((n) => n.type)).toEqual(['paragraph', 'mathBlock', 'paragraph']);
+      expect(json.content?.[1]?.content?.[0]?.text).toBe('x = 1');
+    });
+
+    it('P9: コードブロック内やインラインコード内へ $$...$$ を貼り付けても mathBlock に変換されない', () => {
+      const editor1 = createEditor('```\n\n```');
+      editor1.commands.setTextSelection(2);
+      editor1.view.pasteText('$$\nx = 1\n$$');
+      expect(editor1.getJSON().content?.[0]?.type).toBe('codeBlock');
+      expect(editor1.getJSON().content?.[0]?.content?.[0]?.text).toContain('$$');
+
+      const editor2 = createEditor('`code`');
+      editor2.commands.setTextSelection(2);
+      editor2.view.pasteText('$$\nx = 1\n$$');
+      expect(editor2.getJSON().content?.[0]?.type).toBe('paragraph');
+      expect(editor2.getJSON().content?.[0]?.content?.[0]?.marks?.[0]?.type).toBe('code');
+    });
+
+    it('P10: $x$ 単体を貼り付けると mathInline に変換される', () => {
+      const editor = createEditor();
+      editor.view.pasteText('$x$');
+      expect(inlineTypes(editor)).toEqual(['mathInline']);
+      expect(editor.getJSON().content?.[0]?.content?.[0]?.attrs).toEqual({ latex: 'x' });
+    });
+
+    it('P11: $x \\$ y$ (エスケープされたドル記号を含む) を貼り付けると mathInline に変換される', () => {
+      const editor = createEditor();
+      editor.view.pasteText('$x \\$ y$');
+      expect(inlineTypes(editor)).toEqual(['mathInline']);
+      expect(editor.getJSON().content?.[0]?.content?.[0]?.attrs).toEqual({ latex: 'x \\$ y' });
+    });
+
+    it('P12: 末尾が \\$ の不正な $a\\$ を貼り付けても mathInline に変換されない', () => {
+      const editor = createEditor();
+      editor.view.pasteText('$a\\$');
+      expect(inlineTypes(editor)).toEqual(['text']);
+    });
+
+    it('P13: 複数ブロック一括貼り付け ($$\\nx\\n$$\\n\\n$$\\ny\\n$$) が2つの mathBlock になる', () => {
+      const editor = createEditor();
+      editor.view.pasteText('$$\nx\n$$\n\n$$\ny\n$$');
+      const json = editor.getJSON();
+      const mathBlocks = (json.content ?? []).filter((n) => n.type === 'mathBlock');
+      expect(mathBlocks).toHaveLength(2);
+      expect(mathBlocks[0]?.content?.[0]?.text).toBe('x');
+      expect(mathBlocks[1]?.content?.[0]?.text).toBe('y');
+    });
+
+    it('P14: 行内複数ペア ($$a$$ と $$b$$) を貼り付けても単一の巨大ブロックに誤結合されない', () => {
+      const editor = createEditor();
+      editor.view.pasteText('$$a$$ と $$b$$');
+      const json = editor.getJSON();
+      // 単一の巨大 mathBlock (a$$ と $$b) に結合されず、段落または分割ノードになること
+      const firstNode = json.content?.[0];
+      if (firstNode?.type === 'mathBlock') {
+        expect(firstNode.content?.[0]?.text).not.toContain('$$');
+      } else {
+        expect(firstNode?.type).toBe('paragraph');
+      }
+    });
   });
 });
