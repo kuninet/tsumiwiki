@@ -369,10 +369,15 @@ export const WikilinkSuggestion = Extension.create<
           const $pos = state.doc.resolve(range.from);
           // コードブロック/インラインコード内では発火させない(#195)
           if (isInsideCode($pos)) return false;
+          
+          const text = state.doc.textBetween(range.from, range.to);
+          // 既に閉じカッコが入力されている場合はサジェストを終了する
+          if (text.includes(']]') || text.includes('］］')) return false;
+
           if (
             storage.dismissed &&
             storage.dismissed.from === range.from &&
-            state.doc.textBetween(range.from, range.to) === storage.dismissed.text
+            text === storage.dismissed.text
           ) {
             return false;
           }

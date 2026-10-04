@@ -40,6 +40,7 @@
 | PUT | `/api/docs` | 保存 `{path, body, frontmatter, baseUpdatedAt}`。ロック保持者のみ。保存+コミット(06章)。`baseUpdatedAt` 不一致は `CONFLICT`(外部変更との衝突検知) |
 | DELETE | `/api/docs?path=` | ごみ箱(`.trash/`)へ移動+コミット(FR-DOC-07) |
 | POST | `/api/docs/move` | `{path, newFolder, newTitle}` リネーム/移動+コミット。ロック中は不可 |
+| GET | `/api/docs/backlinks?path=` | 指定文書へのバックリンク一覧取得(#267)。`{backlinks:[{sourcePath, sourceTitle, sourceFolder, sourceUpdatedAt, links:[{line, context, anchor, alias}]}], truncated}`。自己リンク除外、更新日時降順・パス昇順。上限200件 |
 
 ### フォルダ(FR-DOC-04)
 

@@ -13,9 +13,10 @@ import { DocView } from './DocView';
 interface DocTabProps {
   path: string;
   active: boolean;
+  isVisible?: boolean;
 }
 
-export function DocTab({ path, active }: DocTabProps) {
+export function DocTab({ path, active, isVisible }: DocTabProps) {
   const markDirty = useTabsStore((s) => s.markDirty);
   // このタブの編集モードを自前で持つ(グローバル useEditStore.mode はアクティブタブ
   // のモードなので、他タブがアクティブになった瞬間に背景 edit タブの refetch が
@@ -58,6 +59,7 @@ export function DocTab({ path, active }: DocTabProps) {
       doc={doc}
       currentUser={currentUser}
       active={active}
+      isVisible={isVisible ?? true}
       onDirtyChange={handleDirtyChange}
       onModeChange={setTabMode}
     />

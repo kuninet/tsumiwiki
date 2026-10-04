@@ -42,7 +42,7 @@ export function PaneView({ pane }: Props) {
               className={visible ? 'absolute inset-0 flex flex-col' : 'hidden'}
               data-testid={`pane-${pane.id}-doctab-${tab.path}`}
             >
-              <DocTab path={tab.path} active={publishToStore} />
+              <DocTab path={tab.path} active={publishToStore} isVisible={visible} />
             </div>
           );
         })}

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { DocResponse, User } from '@tsumiwiki/shared';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -41,7 +41,9 @@ function stubFetch(overrides: Record<string, unknown> = {}) {
 
     const key = `${method} ${path}`;
     if (key in overrides) {
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(overrides[key]) });
+      const resp = overrides[key];
+      const val = typeof resp === 'function' ? resp(url, init) : resp;
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(val) });
     }
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, draft: null }) });
   });
@@ -49,8 +51,11 @@ function stubFetch(overrides: Record<string, unknown> = {}) {
   return calls;
 }
 
-function renderDocView(doc: DocResponse = DOC, currentUser: User = CURRENT_USER) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderDocView(
+  doc: DocResponse = DOC,
+  currentUser: User = CURRENT_USER,
+  queryClient: QueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
@@ -538,6 +543,120 @@ describe('DocView', () => {
     });
     await waitFor(() => {
       expect(calls.some((c) => c.method === 'PUT' && c.path === '/api/drafts')).toBe(true);
+    });
+  });
+
+  it('本文ラッパ内にBacklinksPanelが組み込まれ、編集モード中も共存する(#267)', async () => {
+    stubFetch({
+      'GET /api/docs/backlinks': {
+        backlinks: [
+          {
+            sourcePath: '参照元.md',
+            sourceTitle: '参照元',
+            sourceFolder: '',
+            sourceUpdatedAt: '2026-07-02T00:00:00Z',
+            links: [{ line: 1, context: '[[メモ]]', anchor: null, alias: null }],
+          },
+        ],
+        truncated: false,
+      },
+    });
+
+    renderDocView();
+
+    // 本文ラッパ内にBacklinksPanelが存在すること
+    const contentWrap = screen.getByTestId('doc-content-wrap');
+    const backlinksPanel = screen.getByTestId('backlinks-panel');
+    expect(contentWrap.contains(backlinksPanel)).toBe(true);
+
+    // 編集モードに入ってもバックリンク一覧が表示されていること
+    await screen.findByRole('button', { name: /保存/ });
+    expect(screen.getByTestId('backlinks-panel')).toBeTruthy();
+    expect(screen.getByText('参照元')).toBeTruthy();
+  });
+
+  it('DocView内のBacklinksPanelで参照元リンクをクリックすると該当文書へ画面遷移する(#267 レビューM1)', async () => {
+    stubFetch({
+      'GET /api/docs/backlinks': {
+        backlinks: [
+          {
+            sourcePath: '参照元.md',
+            sourceTitle: '参照元ノート',
+            sourceFolder: '',
+            sourceUpdatedAt: '2026-07-02T00:00:00Z',
+            links: [{ line: 1, context: '[[メモ]]', anchor: null, alias: null }],
+          },
+        ],
+        truncated: false,
+      },
+    });
+
+    renderDocViewWithProbe(DOC);
+
+    const linkBtn = await screen.findByTestId('backlink-item-参照元.md');
+    fireEvent.click(linkBtn);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-pathname').textContent).toBe(
+        encodeURI('/doc/参照元.md'),
+      );
+    });
+  });
+
+  it('ツリー更新または別文書保存時にバックリンクのキャッシュが無効化されて自動リロードされる(#267 レビューM2)', async () => {
+    let backlinksData: { backlinks: unknown[]; truncated: boolean } = { backlinks: [], truncated: false };
+    stubFetch({
+      'GET /api/tree': { docs: [], folders: [] },
+      'GET /api/docs/backlinks': () => backlinksData,
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderDocView(DOC, CURRENT_USER, queryClient);
+
+    // 最初はバックリンク0件で空状態
+    await screen.findByTestId('backlinks-empty');
+    expect(screen.getByTestId('backlinks-empty').textContent).toBe('この文書へのリンクはありません');
+
+    // 1) ツリー更新 (TREE_QUERY_KEY) によるキャッシュ無効化でバックリンクが自動リロードされる
+    backlinksData = {
+      backlinks: [
+        {
+          sourcePath: '新着1.md',
+          sourceTitle: '新着文書1',
+          sourceFolder: '',
+          sourceUpdatedAt: '2026-07-03T00:00:00Z',
+          links: [{ line: 1, context: '[[メモ]]', anchor: null, alias: null }],
+        },
+      ],
+      truncated: false,
+    };
+    act(() => {
+      queryClient.invalidateQueries({ queryKey: ['tree'] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('新着文書1')).toBeTruthy();
+    });
+
+    // 2) 別文書保存時 (BACKLINKS_QUERY_KEY) のキャッシュ無効化でも自動リロードされる
+    backlinksData = {
+      backlinks: [
+        {
+          sourcePath: '新着2.md',
+          sourceTitle: '新着文書2',
+          sourceFolder: '',
+          sourceUpdatedAt: '2026-07-04T00:00:00Z',
+          links: [{ line: 1, context: '[[メモ]]', anchor: null, alias: null }],
+        },
+      ],
+      truncated: false,
+    };
+    act(() => {
+      queryClient.invalidateQueries({ queryKey: ['backlinks'] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('新着文書2')).toBeTruthy();
     });
   });
 });

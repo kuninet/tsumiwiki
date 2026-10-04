@@ -5,8 +5,14 @@ import matter from 'gray-matter';
 import type { Logger } from 'pino';
 import { parseDocument as parseYamlDocument, stringify as yamlStringify } from 'yaml';
 import { REV_PATTERN } from '@tsumiwiki/shared';
-import type { TrashEntry } from '@tsumiwiki/shared';
-import type { DocResponse, DocSummary, RenameAttachmentResponse, TreeResponse } from '@tsumiwiki/shared';
+import type {
+  BacklinksResponse,
+  DocResponse,
+  DocSummary,
+  RenameAttachmentResponse,
+  TrashEntry,
+  TreeResponse,
+} from '@tsumiwiki/shared';
 import type { AppConfig } from '../config.js';
 import type { AppDatabase } from '../db/index.js';
 import { ATTACHMENT_EXTENSIONS, isIndexedFileName } from '../lib/attachments.js';
@@ -407,6 +413,19 @@ export class DocService {
       lock: lock ? { userId: lock.userId, displayName: lock.displayName } : null,
     };
   }
+
+  // 指定文書へのバックリンク一覧を取得する(#267)
+  async getBacklinks(relPath: string, options?: { limit?: number }): Promise<BacklinksResponse> {
+    const normalized = this.validateDocPath(relPath);
+    const abs = resolveInLibrary(this.libraryPath, normalized);
+    try {
+      await stat(abs);
+    } catch {
+      throw new DocNotFoundError(normalized);
+    }
+    return this.indexer.findBacklinks(normalized, options);
+  }
+
 
   async createDoc(folder: string, title: string, author: GitAuthor): Promise<{ path: string; updatedAt: string }> {
     const folderNorm = folder ? this.validateFolderPath(folder) : '';

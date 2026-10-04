@@ -406,6 +406,34 @@ export const syncDocsResponseSchema = z.object({
 });
 export type SyncDocsResponse = z.infer<typeof syncDocsResponseSchema>;
 
+// ---- バックリンク(FR-OBS / issue #267) ----
+
+export const BACKLINKS_MAX_SOURCES = 200;
+
+export const backlinkItemSchema = z.object({
+  line: z.number(),
+  context: z.string(),
+  anchor: z.string().nullable(),
+  alias: z.string().nullable(),
+});
+export type BacklinkItem = z.infer<typeof backlinkItemSchema>;
+
+export const backlinkEntrySchema = z.object({
+  sourcePath: z.string(),
+  sourceTitle: z.string(),
+  sourceFolder: z.string(),
+  sourceUpdatedAt: z.string(),
+  links: z.array(backlinkItemSchema),
+});
+export type BacklinkEntry = z.infer<typeof backlinkEntrySchema>;
+
+export const backlinksResponseSchema = z.object({
+  backlinks: z.array(backlinkEntrySchema),
+  truncated: z.boolean(),
+});
+export type BacklinksResponse = z.infer<typeof backlinksResponseSchema>;
+
+
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({
   error: z.object({

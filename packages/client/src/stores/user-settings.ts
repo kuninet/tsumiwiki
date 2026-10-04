@@ -16,13 +16,20 @@ export type NewDocPolicy = 'same-folder' | 'fixed-folder' | 'root';
 // ラッパの max-width のみを制御し、モバイル分岐は CSS の viewport 相対値で吸収)
 export type ContentWidth = 'normal' | 'wide' | 'full';
 
+// #267: バックリンクの並び順
+export type BacklinksSortOrder = 'updated-desc' | 'name-desc';
+
 interface UserSettingsState {
   newDocPolicy: NewDocPolicy;
   fixedFolder: string;
   contentWidth: ContentWidth;
+  backlinksCollapsed: boolean;
+  backlinksSort: BacklinksSortOrder;
   setNewDocPolicy: (policy: NewDocPolicy) => void;
   setFixedFolder: (folder: string) => void;
   setContentWidth: (width: ContentWidth) => void;
+  setBacklinksCollapsed: (collapsed: boolean) => void;
+  setBacklinksSort: (sort: BacklinksSortOrder) => void;
 }
 
 export const useUserSettingsStore = create<UserSettingsState>()(
@@ -31,9 +38,13 @@ export const useUserSettingsStore = create<UserSettingsState>()(
       newDocPolicy: 'same-folder',
       fixedFolder: '',
       contentWidth: 'normal',
+      backlinksCollapsed: false,
+      backlinksSort: 'updated-desc',
       setNewDocPolicy: (newDocPolicy) => set({ newDocPolicy }),
       setFixedFolder: (fixedFolder) => set({ fixedFolder }),
       setContentWidth: (contentWidth) => set({ contentWidth }),
+      setBacklinksCollapsed: (backlinksCollapsed) => set({ backlinksCollapsed }),
+      setBacklinksSort: (backlinksSort) => set({ backlinksSort }),
     }),
     { name: 'tsumiwiki-user-settings' },
   ),

@@ -62,6 +62,15 @@ export function registerDocRoutes(app: FastifyInstance): void {
     return handling(reply, () => app.docService.getDoc(docPath));
   });
 
+  app.get('/api/docs/backlinks', async (req, reply) => {
+    const { path: docPath } = req.query as { path?: string };
+    if (!docPath) {
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'pathを指定してください');
+    }
+    return handling(reply, () => app.docService.getBacklinks(docPath));
+  });
+
+
   app.post('/api/docs', async (req, reply) => {
     const parsed = createDocRequestSchema.safeParse(req.body);
     if (!parsed.success) {

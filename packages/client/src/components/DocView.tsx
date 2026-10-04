@@ -44,6 +44,7 @@ import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
 import { contentWidthMaxClass, useUserSettingsStore } from '../stores/user-settings';
 import { AttachmentLightbox } from './AttachmentLightbox';
+import { BacklinksPanel } from './BacklinksPanel';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ContextMenu } from './ContextMenu';
 import { EditorToolbar } from './EditorToolbar';
@@ -62,6 +63,8 @@ interface DocViewProps {
   // ロック取得の自動起動を抑止する。dirty 状態はタブバー側に反映するためコールバックで通知する。
   // 省略時は active=true 互換(直接 DocView を使うテストや demo で従来通り動く)
   active?: boolean;
+  // #267 バックリンク一覧: 現在表示中のタブかどうか(非表示タブでのフェッチを抑止する)
+  isVisible?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
   // このタブの mode を親(DocTab)に返す。useDoc の refetchInterval を「自分のタブ mode」に
   // 基づかせるために使う(グローバル useEditStore.mode は active タブのモードなので
@@ -161,6 +164,7 @@ export function DocView({
   doc,
   currentUser,
   active = true,
+  isVisible = true,
   onDirtyChange,
   onModeChange,
 }: DocViewProps) {
@@ -1121,6 +1125,7 @@ export function DocView({
               onChange={handleSourceTextChange}
             />
           )}
+          <BacklinksPanel path={doc.path} enabled={isVisible} />
         </div>
       </div>
 

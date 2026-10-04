@@ -14,6 +14,7 @@ import { ALL_HISTORY_QUERY_KEY } from './history';
 
 export const TREE_QUERY_KEY = ['tree'] as const;
 export const TAGS_QUERY_KEY = ['tags'] as const;
+export const BACKLINKS_QUERY_KEY = ['backlinks'] as const;
 
 export function useTree() {
   return useQuery({
@@ -64,6 +65,7 @@ function useLibraryMutation<TVariables, TData = unknown>(
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: BACKLINKS_QUERY_KEY });
       showToast('success', successMessage);
     },
     onError: (err) => {

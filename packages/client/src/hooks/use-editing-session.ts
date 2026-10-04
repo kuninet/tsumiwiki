@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DocResponse } from '@tsumiwiki/shared';
-import { docQueryKey, fetchDoc, saveDoc, TAGS_QUERY_KEY, TREE_QUERY_KEY } from '../api/docs';
+import { BACKLINKS_QUERY_KEY, docQueryKey, fetchDoc, saveDoc, TAGS_QUERY_KEY, TREE_QUERY_KEY } from '../api/docs';
 import { ApiRequestError } from '../api/client';
 import { deleteDraft, getDraft, saveDraft } from '../api/drafts';
 import { ALL_HISTORY_QUERY_KEY } from '../api/history';
@@ -250,6 +250,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: BACKLINKS_QUERY_KEY });
       showToast('success', '保存しました');
       optionsRef.current.onSaved?.(updatedAt);
       return true;
@@ -302,6 +303,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: BACKLINKS_QUERY_KEY });
       showToast('success', '保存しました');
       optionsRef.current.onSaved?.(updatedAt);
     } catch (err) {
