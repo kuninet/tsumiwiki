@@ -343,4 +343,86 @@ describe('数式 NodeView (V系)', () => {
     const markdown = (activeEditor!.storage.markdown.getMarkdown() as string).trim();
     expect(markdown).toBe('式 $x^2$ です。');
   });
+
+  it('V14 (Issue #276): editable: false から setEditable(true, false) 切り替え後に数式ブロックをクリックするとソース編集が表示される', async () => {
+    let activeEditor: Editor | null = null;
+    render(
+      <TestEditor
+        content={'前文。\n\n$$\nx^2\n$$'}
+        editable={false}
+        onEditorReady={(e) => {
+          activeEditor = e;
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('.math-block-container')).toBeTruthy();
+    });
+
+    const blockContainer = document.querySelector('.math-block-container') as HTMLElement;
+    const pre = document.querySelector('.math-block-view pre') as HTMLElement;
+    expect(pre.style.display).toBe('none');
+
+    // 閲覧モードではクリックしても編集モードに切り替わらない
+    fireEvent.click(blockContainer);
+    expect(pre.style.display).toBe('none');
+
+    // 本番(DocView)と同様に emitUpdate=false で編集モードに切り替え、空トランザクションで同期
+    activeEditor!.setEditable(true, false);
+    activeEditor!.view.dispatch(activeEditor!.state.tr);
+
+    // 編集モードで数式ブロックをクリック
+    fireEvent.click(blockContainer);
+
+    await waitFor(() => {
+      expect(pre.style.display).not.toBe('none');
+    });
+
+    if (activeEditor) {
+      const { from } = (activeEditor as Editor).state.selection;
+      expect(from).toBeGreaterThan(4);
+    }
+  });
+
+  it('V15 (Issue #276): 数式編集中に setEditable(false, false) で閲覧モードに戻すとプレビュー表示に復帰する', async () => {
+    let activeEditor: Editor | null = null;
+    render(
+      <TestEditor
+        content={'前文。\n\n$$\nx^2\n$$'}
+        editable={true}
+        onEditorReady={(e) => {
+          activeEditor = e;
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('.math-block-container')).toBeTruthy();
+    });
+
+    const blockContainer = document.querySelector('.math-block-container') as HTMLElement;
+    const pre = document.querySelector('.math-block-view pre') as HTMLElement;
+
+    // クリックして編集モードに入る
+    fireEvent.click(blockContainer);
+
+    await waitFor(() => {
+      expect(pre.style.display).not.toBe('none');
+    });
+
+    // 本番(DocView)と同様に emitUpdate=false で閲覧モードに戻し、空トランザクションで同期
+    activeEditor!.setEditable(false, false);
+    activeEditor!.view.dispatch(activeEditor!.state.tr);
+
+    await waitFor(() => {
+      expect(pre.style.display).toBe('none');
+    });
+
+    // 閲覧モードなので再度クリックしてもソース編集は開かない
+    const containerAfter = document.querySelector('.math-block-container') as HTMLElement;
+    expect(containerAfter).toBeTruthy();
+    fireEvent.click(containerAfter);
+    expect(pre.style.display).toBe('none');
+  });
 });

@@ -63,7 +63,7 @@ function MathBlockPreview({ latex }: { latex: string }) {
 }
 
 function MathBlockView({ node, editor, getPos }: NodeViewProps) {
-  const cursorInside = useCursorInside(editor, getPos, node.nodeSize, editor.isEditable);
+  const cursorInside = useCursorInside(editor, getPos, node.nodeSize);
   const showPreview = !editor.isEditable || !cursorInside;
   const isEmpty = node.textContent.trim().length === 0;
 
