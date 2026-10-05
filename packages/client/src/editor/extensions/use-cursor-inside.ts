@@ -23,11 +23,17 @@ export function useCursorInside(
       setCursorInside(editor.isEditable && from >= pos && to <= pos + nodeSize);
     };
     update();
+    editor.on('transaction', update);
+    editor.on('update', update);
     editor.on('selectionUpdate', update);
     editor.on('focus', update);
+    editor.on('blur', update);
     return () => {
+      editor.off('transaction', update);
+      editor.off('update', update);
       editor.off('selectionUpdate', update);
       editor.off('focus', update);
+      editor.off('blur', update);
     };
   }, [editor, getPos, nodeSize, enabled]);
 

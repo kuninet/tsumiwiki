@@ -405,6 +405,11 @@ export function DocView({
     // 第2引数 emitUpdate=false: setEditable の既定は true で、モード切替のたびに
     // onUpdate → updateBody → dirty=true が誤発火する(初回マウントすら未保存扱いになる)
     editor.setEditable(session.mode === 'edit', false);
+    // #276: setEditable(..., false) は update イベントを発火しないため、
+    // 空トランザクションを発行して NodeView (useCursorInside 等) に状態変化を確実に同期する
+    if (!editor.isDestroyed && editor.view) {
+      editor.view.dispatch(editor.state.tr);
+    }
     // 編集モードに入ったら本文先頭にカーソルを出す(#51: 開いた瞬間から入力可能に)
     if (session.mode === 'edit') {
       editor.commands.focus('start');
