@@ -7,14 +7,17 @@ import {
 
 describe('user-settings', () => {
   beforeEach(() => {
+    localStorage.clear();
     useUserSettingsStore.setState({
       newDocPolicy: 'same-folder',
       fixedFolder: '',
       contentWidth: 'normal',
       unresolvedLinkFolder: 'same-folder',
+      rightPanelOpen: false,
+      rightPanelWidth: 320,
+      rightPanelTab: 'backlinks',
+      backlinksSort: 'updated-desc',
     });
-    // #212 レビュー M2: setState は persist ミドルウェアで localStorage に書き戻される。
-    // 他 test suite の初期状態を汚染しないよう永続層も掃除する
     useUserSettingsStore.persist.clearStorage();
   });
 
@@ -86,5 +89,90 @@ describe('user-settings', () => {
       expect(useUserSettingsStore.getState().unresolvedLinkFolder).toBe('same-folder');
     });
   });
-});
 
+  describe('rightPanel 設定と永続化 (C-3-1 〜 C-3-6)', () => {
+    it('C-3-1: localStorage 空で状態を読むと open=false, width=320, tab="backlinks"', () => {
+      const state = useUserSettingsStore.getState();
+      expect(state.rightPanelOpen).toBe(false);
+      expect(state.rightPanelWidth).toBe(320);
+      expect(state.rightPanelTab).toBe('backlinks');
+    });
+
+    it('C-3-2: setRightPanelWidth で 240〜560 にクランプされる', () => {
+      const { setRightPanelWidth } = useUserSettingsStore.getState();
+      setRightPanelWidth(100);
+      expect(useUserSettingsStore.getState().rightPanelWidth).toBe(240);
+      setRightPanelWidth(9999);
+      expect(useUserSettingsStore.getState().rightPanelWidth).toBe(560);
+      setRightPanelWidth(350);
+      expect(useUserSettingsStore.getState().rightPanelWidth).toBe(350);
+    });
+
+    it('C-3-3: seed された設定を rehydrate すると正しく復元され、backlinksCollapsed が残っていても例外にならない', async () => {
+      localStorage.setItem(
+        'tsumiwiki-user-settings',
+        JSON.stringify({
+          state: {
+            rightPanelOpen: true,
+            rightPanelWidth: 400,
+            rightPanelTab: 'history',
+            backlinksCollapsed: true,
+            backlinksSort: 'name-desc',
+          },
+          version: 0,
+        }),
+      );
+
+      await useUserSettingsStore.persist.rehydrate();
+      const state = useUserSettingsStore.getState();
+      expect(state.rightPanelOpen).toBe(true);
+      expect(state.rightPanelWidth).toBe(400);
+      expect(state.rightPanelTab).toBe('history');
+      expect(state.backlinksSort).toBe('name-desc');
+      // backlinksCollapsed は型に存在しないことを確認
+      expect('backlinksCollapsed' in state).toBe(false);
+    });
+
+    it('C-3-4: 不正な tab や非数値の width を seed しても既定値に復旧する', async () => {
+      localStorage.setItem(
+        'tsumiwiki-user-settings',
+        JSON.stringify({
+          state: {
+            rightPanelTab: 'outline',
+            rightPanelWidth: 'abc',
+          },
+          version: 0,
+        }),
+      );
+
+      await useUserSettingsStore.persist.rehydrate();
+      const state = useUserSettingsStore.getState();
+      expect(state.rightPanelTab).toBe('backlinks');
+      expect(state.rightPanelWidth).toBe(320);
+    });
+
+    it('C-3-5: seed された width=9999 は 560 にクランプされる', async () => {
+      localStorage.setItem(
+        'tsumiwiki-user-settings',
+        JSON.stringify({
+          state: {
+            rightPanelWidth: 9999,
+          },
+          version: 0,
+        }),
+      );
+
+      await useUserSettingsStore.persist.rehydrate();
+      const state = useUserSettingsStore.getState();
+      expect(state.rightPanelWidth).toBe(560);
+    });
+
+    it('C-3-6: setRightPanelOpen(true) 後、localStorage の JSON に rightPanelOpen:true が保存される', () => {
+      useUserSettingsStore.getState().setRightPanelOpen(true);
+      const raw = localStorage.getItem('tsumiwiki-user-settings');
+      expect(raw).not.toBeNull();
+      const parsed = JSON.parse(raw!);
+      expect(parsed.state.rightPanelOpen).toBe(true);
+    });
+  });
+});

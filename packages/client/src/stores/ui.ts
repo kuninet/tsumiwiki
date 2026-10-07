@@ -20,9 +20,15 @@ interface UIState {
   // nonce は毎回インクリメントし、folder に初期フォルダを載せる
   // (nonce だけでは連続要求で同じ folder を再指定できないため)
   createDocRequest: { nonce: number; folder: string };
+  // #271: モバイル用右ドロワー開閉状態
+  rightDrawerOpen: boolean;
+  // #271: 右パネルの描画スロット DOM 要素(DocView 等からのポータル先)
+  rightPanelSlot: HTMLElement | null;
   setSidebarWidth: (width: number) => void;
   toggleSidebarCollapsed: () => void;
   setSidebarTab: (tab: SidebarTab) => void;
+  setRightDrawerOpen: (open: boolean) => void;
+  setRightPanelSlot: (el: HTMLElement | null) => void;
   toggleFolderExpanded: (path: string) => void;
   // フォルダ移動・リネーム時の展開状態の付け替え。oldPath/配下の展開もまとめて newPath/配下に付け替える
   repathExpandedFolder: (oldPath: string, newPath: string) => void;
@@ -49,9 +55,26 @@ export const useUIStore = create<UIState>((set) => ({
   expandedFolders: new Set(),
   selectedTags: [],
   createDocRequest: { nonce: 0, folder: '' },
+  rightDrawerOpen: false,
+  rightPanelSlot: null,
   setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
-  toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+  // #271: 開く方向(collapsed -> false)なら右ドロワーを閉じる(左右排他)
+  toggleSidebarCollapsed: () =>
+    set((s) => {
+      const willOpen = s.sidebarCollapsed;
+      return {
+        sidebarCollapsed: !s.sidebarCollapsed,
+        ...(willOpen ? { rightDrawerOpen: false } : {}),
+      };
+    }),
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
+  // #271: 右ドロワーを開く(true)なら左サイドバーを折りたたむ(左右排他)
+  setRightDrawerOpen: (open) =>
+    set({
+      rightDrawerOpen: open,
+      ...(open ? { sidebarCollapsed: true } : {}),
+    }),
+  setRightPanelSlot: (el) => set({ rightPanelSlot: el }),
   toggleFolderExpanded: (path) =>
     set((s) => {
       const next = new Set(s.expandedFolders);

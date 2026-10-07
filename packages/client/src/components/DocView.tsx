@@ -31,6 +31,7 @@ import { getTableMenuItems } from '../editor/table-menu';
 import { findTableAt } from '../editor/table-utils';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
+import { useRightPanelActions } from '../hooks/use-right-panel';
 import { useVirtualKeyboard } from '../hooks/use-virtual-keyboard';
 import { dispatchAttachmentChanged } from '../lib/attachment-events';
 import { titleFromPath } from '../lib/doc-path';
@@ -51,6 +52,7 @@ import { EditorToolbar } from './EditorToolbar';
 import { HistoryPanel } from './HistoryPanel';
 import { NewDocFromLinkDialog } from './NewDocFromLinkDialog';
 import { PromptDialog } from './PromptDialog';
+import { RightPanelPortal } from './RightPanelPortal';
 import { TagChipEditor } from './TagChipEditor';
 import { TemplatePickerDialog } from './TemplatePickerDialog';
 
@@ -73,7 +75,8 @@ interface DocViewProps {
   onModeChange?: (mode: 'view' | 'edit') => void;
 }
 
-function folderOfPath(path: string): string {
+function folderOfPath(path?: string): string {
+  if (!path) return '';
   const idx = path.lastIndexOf('/');
   return idx === -1 ? '' : path.slice(0, idx);
 }
@@ -217,6 +220,8 @@ export function DocView({
   const setLockedByOtherName = useEditStore((s) => s.setLockedByOtherName);
   const setSidebarTab = useUIStore((s) => s.setSidebarTab);
   const toggleTag = useUIStore((s) => s.toggleTag);
+  // #271: 右パネルの操作アクション
+  const { openRightPanel } = useRightPanelActions();
   // #212: 本文最大幅の個人設定(normal/wide/full)。編集/閲覧共通
   const contentWidth = useUserSettingsStore((s) => s.contentWidth);
   // #175: 仮想キーボード出現時に scroll 領域下端へ空ける px 数
@@ -1046,6 +1051,13 @@ export function DocView({
         <div className="flex flex-shrink-0 gap-2">
           <button
             type="button"
+            onClick={() => openRightPanel('backlinks')}
+            className="h-[30px] rounded border border-line px-3 text-sm text-ink-soft hover:bg-hoverbg"
+          >
+            <span aria-hidden="true">🔗</span> リンク
+          </button>
+          <button
+            type="button"
             onClick={() => setHistoryVisible(true)}
             className="h-[30px] rounded border border-line px-3 text-sm text-ink-soft hover:bg-hoverbg"
           >
@@ -1142,9 +1154,15 @@ export function DocView({
               onChange={handleSourceTextChange}
             />
           )}
-          <BacklinksPanel path={doc.path} enabled={isVisible} />
         </div>
       </div>
+
+      {/* #271: 右パネルへのポータル描画(活性DocViewのみ) */}
+      {active && isVisible && (
+        <RightPanelPortal tab="backlinks">
+          <BacklinksPanel path={doc.path} enabled />
+        </RightPanelPortal>
+      )}
 
       {session.draftPrompt && (
         <ConfirmDialog

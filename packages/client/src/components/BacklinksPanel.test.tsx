@@ -85,7 +85,6 @@ function renderBacklinksPanel(
 describe('BacklinksPanel', () => {
   beforeEach(() => {
     useUserSettingsStore.setState({
-      backlinksCollapsed: false,
       backlinksSort: 'updated-desc',
     });
   });
@@ -107,7 +106,7 @@ describe('BacklinksPanel', () => {
         'この文書へのリンクはありません',
       );
     });
-    expect(screen.getByTestId('backlinks-toggle-btn').textContent).toContain('この文書へのリンク (0)');
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toContain('この文書へのリンク (0)');
   });
 
   it('1件以上の場合に参照元一覧と整形された抜粋を表示し、生の[[ ]]は含まれない', async () => {
@@ -188,41 +187,7 @@ describe('BacklinksPanel', () => {
     expect(onLocationChange).toHaveBeenLastCalledWith('/doc/Ref1.md');
   });
 
-  it('折りたたみトグルボタンで開閉でき、折りたたみ中は一覧が隠れる', async () => {
-    const data: BacklinksResponse = {
-      backlinks: [
-        {
-          sourcePath: 'Ref1.md',
-          sourceTitle: '参照元ノート',
-          sourceFolder: '',
-          sourceUpdatedAt: '2026-07-02T12:00:00Z',
-          links: [{ line: 1, context: '[[Target]]', anchor: null, alias: null }],
-        },
-      ],
-      truncated: false,
-    };
-    stubFetch({
-      'GET /api/docs/backlinks': data,
-    });
-
-    renderBacklinksPanel();
-
-    await waitFor(() => {
-      expect(screen.getByTestId('backlinks-list')).toBeTruthy();
-    });
-
-    // 折りたたむ
-    fireEvent.click(screen.getByTestId('backlinks-toggle-btn'));
-    expect(screen.queryByTestId('backlinks-list')).toBeNull();
-    expect(useUserSettingsStore.getState().backlinksCollapsed).toBe(true);
-
-    // 再度展開する
-    fireEvent.click(screen.getByTestId('backlinks-toggle-btn'));
-    expect(screen.getByTestId('backlinks-list')).toBeTruthy();
-    expect(useUserSettingsStore.getState().backlinksCollapsed).toBe(false);
-  });
-
-  it('enabled=false または折りたたみ中はバックリンクAPIのフェッチを抑止する', async () => {
+  it('enabled=false の場合はバックリンクAPIのフェッチを抑止する', async () => {
     const calls = stubFetch();
 
     // enabled=false でマウント
