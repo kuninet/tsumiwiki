@@ -1,10 +1,15 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { Menu, RefreshCw } from 'lucide-react';
+import { Menu, PanelRight, RefreshCw } from 'lucide-react';
 import { useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { api } from '../api/client';
 import { TAGS_QUERY_KEY, TREE_QUERY_KEY } from '../api/docs';
 import { useMediaQuery } from '../hooks/use-media-query';
+import {
+  isMainRoute,
+  useIsRightPanelOpen,
+  useRightPanelActions,
+} from '../hooks/use-right-panel';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
@@ -16,10 +21,14 @@ import { UserMenu } from './UserMenu';
 
 export function Header() {
   const queryClient = useQueryClient();
+  const location = useLocation();
   const showToast = useToastStore((s) => s.show);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const isMobile = useMediaQuery('(max-width: 767px)');
   const toggleSidebarCollapsed = useUIStore((s) => s.toggleSidebarCollapsed);
+
+  const isRightPanelOpen = useIsRightPanelOpen();
+  const { toggleRightPanel } = useRightPanelActions();
 
   // Ctrl/Cmd+Kで検索ボックスへフォーカス(編集モード中はDocView側のリンクダイアログを優先する)
   useEffect(() => {
@@ -83,6 +92,20 @@ export function Header() {
           <RefreshCw size={14} aria-hidden="true" />
           <span className="hidden md:inline">更新確認</span>
         </button>
+        {isMainRoute(location.pathname) && (
+          <button
+            type="button"
+            onClick={toggleRightPanel}
+            aria-label={isRightPanelOpen ? '右パネルを閉じる' : '右パネルを開く'}
+            aria-pressed={isRightPanelOpen}
+            title={isRightPanelOpen ? '右パネルを閉じる' : '右パネルを開く'}
+            className={`flex h-8 w-8 items-center justify-center rounded border border-line text-ink-soft hover:bg-hoverbg ${
+              isRightPanelOpen ? 'bg-active text-accent' : ''
+            }`}
+          >
+            <PanelRight size={16} aria-hidden="true" />
+          </button>
+        )}
         <ThemeToggle />
         <UserMenu />
       </div>

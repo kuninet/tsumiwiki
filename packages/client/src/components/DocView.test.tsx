@@ -7,6 +7,7 @@ import { docUrl } from '../lib/doc-path';
 import { useEditStore } from '../stores/edit';
 import { useTabsStore } from '../stores/tabs';
 import { useToastStore } from '../stores/toast';
+import { useUIStore } from '../stores/ui';
 import { useUserSettingsStore } from '../stores/user-settings';
 import { DocView } from './DocView';
 
@@ -548,118 +549,120 @@ describe('DocView', () => {
     });
   });
 
-  it('本文ラッパ内にBacklinksPanelが組み込まれ、編集モード中も共存する(#267)', async () => {
-    stubFetch({
-      'GET /api/docs/backlinks': {
-        backlinks: [
-          {
-            sourcePath: '参照元.md',
-            sourceTitle: '参照元',
-            sourceFolder: '',
-            sourceUpdatedAt: '2026-07-02T00:00:00Z',
-            links: [{ line: 1, context: '[[メモ]]', anchor: null, alias: null }],
-          },
-        ],
-        truncated: false,
-      },
-    });
-
+  it('本文ラッパ内にBacklinksPanelは配置されず、ヘッダーにリンクボタンが表示される(#271)', async () => {
     renderDocView();
-
-    // 本文ラッパ内にBacklinksPanelが存在すること
     const contentWrap = screen.getByTestId('doc-content-wrap');
-    const backlinksPanel = screen.getByTestId('backlinks-panel');
-    expect(contentWrap.contains(backlinksPanel)).toBe(true);
-
-    // 編集モードに入ってもバックリンク一覧が表示されていること
-    await screen.findByRole('button', { name: /保存/ });
-    expect(screen.getByTestId('backlinks-panel')).toBeTruthy();
-    expect(screen.getByText('参照元')).toBeTruthy();
+    expect(contentWrap.querySelector('[data-testid="backlinks-panel"]')).toBeNull();
+    expect(screen.getByRole('button', { name: /リンク/ })).toBeTruthy();
   });
 
-  it('DocView内のBacklinksPanelで参照元リンクをクリックすると該当文書へ画面遷移する(#267 レビューM1)', async () => {
-    stubFetch({
-      'GET /api/docs/backlinks': {
+  it('スロットが存在する場合、BacklinksPanelがポータル描画され参照元リンクで画面遷移する(#267, #271)', async () => {
+    const slot = document.createElement('div');
+    document.body.appendChild(slot);
+    useUIStore.setState({ rightPanelSlot: slot });
+    useUserSettingsStore.setState({ rightPanelOpen: true, rightPanelTab: 'backlinks' });
+
+    try {
+      stubFetch({
+        'GET /api/docs/backlinks': {
+          backlinks: [
+            {
+              sourcePath: '参照元.md',
+              sourceTitle: '参照元ノート',
+              sourceFolder: '',
+              sourceUpdatedAt: '2026-07-02T00:00:00Z',
+              links: [{ line: 1, context: '[[メモ]]', anchor: null, alias: null }],
+            },
+          ],
+          truncated: false,
+        },
+      });
+
+      renderDocViewWithProbe(DOC);
+
+      const linkBtn = await screen.findByTestId('backlink-item-参照元.md');
+      fireEvent.click(linkBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('location-pathname').textContent).toBe(
+          encodeURI('/doc/参照元.md'),
+        );
+      });
+    } finally {
+      document.body.removeChild(slot);
+    }
+  });
+
+  it('ツリー更新または別文書保存時にバックリンクのキャッシュが無効化されて自動リロードされる(#267, #271)', async () => {
+    const slot = document.createElement('div');
+    document.body.appendChild(slot);
+    useUIStore.setState({ rightPanelSlot: slot });
+    useUserSettingsStore.setState({ rightPanelOpen: true, rightPanelTab: 'backlinks' });
+
+    try {
+      let backlinksData: { backlinks: unknown[]; truncated: boolean } = { backlinks: [], truncated: false };
+      stubFetch({
+        'GET /api/tree': { docs: [], folders: [] },
+        'GET /api/docs/backlinks': () => backlinksData,
+      });
+
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/doc/メモ.md']}>
+            <DocView doc={DOC} currentUser={CURRENT_USER} />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      // 最初はバックリンク0件で空状態
+      await screen.findByTestId('backlinks-empty');
+      expect(screen.getByTestId('backlinks-empty').textContent).toBe('この文書へのリンクはありません');
+
+      // 1) ツリー更新 (TREE_QUERY_KEY) によるキャッシュ無効化でバックリンクが自動リロードされる
+      backlinksData = {
         backlinks: [
           {
-            sourcePath: '参照元.md',
-            sourceTitle: '参照元ノート',
+            sourcePath: '新着1.md',
+            sourceTitle: '新着文書1',
             sourceFolder: '',
-            sourceUpdatedAt: '2026-07-02T00:00:00Z',
+            sourceUpdatedAt: '2026-07-03T00:00:00Z',
             links: [{ line: 1, context: '[[メモ]]', anchor: null, alias: null }],
           },
         ],
         truncated: false,
-      },
-    });
+      };
+      act(() => {
+        queryClient.invalidateQueries({ queryKey: ['tree'] });
+      });
 
-    renderDocViewWithProbe(DOC);
+      await waitFor(() => {
+        expect(screen.getByText('新着文書1')).toBeTruthy();
+      });
 
-    const linkBtn = await screen.findByTestId('backlink-item-参照元.md');
-    fireEvent.click(linkBtn);
+      // 2) 別文書保存時 (BACKLINKS_QUERY_KEY) のキャッシュ無効化でも自動リロードされる
+      backlinksData = {
+        backlinks: [
+          {
+            sourcePath: '新着2.md',
+            sourceTitle: '新着文書2',
+            sourceFolder: '',
+            sourceUpdatedAt: '2026-07-04T00:00:00Z',
+            links: [{ line: 1, context: '[[メモ]]', anchor: null, alias: null }],
+          },
+        ],
+        truncated: false,
+      };
+      act(() => {
+        queryClient.invalidateQueries({ queryKey: ['backlinks'] });
+      });
 
-    await waitFor(() => {
-      expect(screen.getByTestId('location-pathname').textContent).toBe(
-        encodeURI('/doc/参照元.md'),
-      );
-    });
-  });
-
-  it('ツリー更新または別文書保存時にバックリンクのキャッシュが無効化されて自動リロードされる(#267 レビューM2)', async () => {
-    let backlinksData: { backlinks: unknown[]; truncated: boolean } = { backlinks: [], truncated: false };
-    stubFetch({
-      'GET /api/tree': { docs: [], folders: [] },
-      'GET /api/docs/backlinks': () => backlinksData,
-    });
-
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    renderDocView(DOC, CURRENT_USER, queryClient);
-
-    // 最初はバックリンク0件で空状態
-    await screen.findByTestId('backlinks-empty');
-    expect(screen.getByTestId('backlinks-empty').textContent).toBe('この文書へのリンクはありません');
-
-    // 1) ツリー更新 (TREE_QUERY_KEY) によるキャッシュ無効化でバックリンクが自動リロードされる
-    backlinksData = {
-      backlinks: [
-        {
-          sourcePath: '新着1.md',
-          sourceTitle: '新着文書1',
-          sourceFolder: '',
-          sourceUpdatedAt: '2026-07-03T00:00:00Z',
-          links: [{ line: 1, context: '[[メモ]]', anchor: null, alias: null }],
-        },
-      ],
-      truncated: false,
-    };
-    act(() => {
-      queryClient.invalidateQueries({ queryKey: ['tree'] });
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('新着文書1')).toBeTruthy();
-    });
-
-    // 2) 別文書保存時 (BACKLINKS_QUERY_KEY) のキャッシュ無効化でも自動リロードされる
-    backlinksData = {
-      backlinks: [
-        {
-          sourcePath: '新着2.md',
-          sourceTitle: '新着文書2',
-          sourceFolder: '',
-          sourceUpdatedAt: '2026-07-04T00:00:00Z',
-          links: [{ line: 1, context: '[[メモ]]', anchor: null, alias: null }],
-        },
-      ],
-      truncated: false,
-    };
-    act(() => {
-      queryClient.invalidateQueries({ queryKey: ['backlinks'] });
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('新着文書2')).toBeTruthy();
-    });
+      await waitFor(() => {
+        expect(screen.getByText('新着文書2')).toBeTruthy();
+      });
+    } finally {
+      document.body.removeChild(slot);
+    }
   });
 
   it('未解決リンク(.is-unresolved)をクリックすると作成ダイアログが開き、作成でPOST/api/docsとopenDoc/navigateが呼ばれる(#268)', async () => {

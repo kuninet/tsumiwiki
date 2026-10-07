@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEditStore } from '../stores/edit';
+import { useUIStore } from '../stores/ui';
+import { useUserSettingsStore } from '../stores/user-settings';
 import { Header } from './Header';
 
 function stubFetch(overrides: Record<string, unknown> = {}) {
@@ -28,21 +30,17 @@ function stubFetch(overrides: Record<string, unknown> = {}) {
   return fetchMock;
 }
 
-function ParamsProbe() {
-  const params = useParams();
-  return <div data-testid="params-probe">{params['*']}</div>;
-}
-
-function renderHeader() {
+function renderHeader(initialEntries = ['/']) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/']}>
+      <MemoryRouter initialEntries={initialEntries}>
         <Routes>
           <Route path="/" element={<Header />} />
+          <Route path="/doc/*" element={<Header />} />
           <Route path="/login" element={<div>ログイン画面</div>} />
-          <Route path="/settings" element={<div>設定画面</div>} />
-          <Route path="/doc/*" element={<ParamsProbe />} />
+          <Route path="/settings" element={<Header />} />
+          <Route path="/trash" element={<Header />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -50,6 +48,11 @@ function renderHeader() {
 }
 
 describe('Header', () => {
+  beforeEach(() => {
+    useUserSettingsStore.setState({ rightPanelOpen: false });
+    useUIStore.setState({ rightDrawerOpen: false });
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     cleanup();
@@ -106,5 +109,27 @@ describe('Header', () => {
         expect.objectContaining({ method: 'POST' }),
       );
     });
+  });
+
+  it('MainPageルート(/, /doc/*)では右パネル開閉ボタンが表示されトグルできる(#271)', async () => {
+    stubFetch();
+    renderHeader(['/doc/a.md']);
+    await screen.findByRole('button', { name: /ユーザーメニュー/ });
+
+    const toggleBtn = screen.getByRole('button', { name: '右パネルを開く' });
+    expect(toggleBtn.getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(toggleBtn);
+    expect(useUserSettingsStore.getState().rightPanelOpen).toBe(true);
+    expect(toggleBtn.getAttribute('aria-label')).toBe('右パネルを閉じる');
+    expect(toggleBtn.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('MainPage以外のルート(/settings, /trash)では右パネル開閉ボタンが表示されない(#271)', async () => {
+    stubFetch();
+    renderHeader(['/settings']);
+    await screen.findByRole('button', { name: /ユーザーメニュー/ });
+
+    expect(screen.queryByRole('button', { name: /右パネル/ })).toBeNull();
   });
 });

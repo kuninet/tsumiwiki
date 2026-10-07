@@ -1,17 +1,33 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { ApiRequestError } from '../api/client';
 import { useCreateNoteByDate, useCreateOrOpenTodayNote } from '../api/daily-notes';
 import { useApplyTemplate } from '../api/templates';
+import { useHorizontalResize } from '../hooks/use-horizontal-resize';
 import { useMediaQuery } from '../hooks/use-media-query';
 import { useNewDocShortcut } from '../hooks/use-new-doc-shortcut';
+import { isMainRoute, useRightPanelActions } from '../hooks/use-right-panel';
+import { useRightPanelShortcut } from '../hooks/use-right-panel-shortcut';
 import { useTabSwitchShortcut } from '../hooks/use-tab-switch-shortcut';
 import { useTabsBootCleanup } from '../hooks/use-tabs-boot-cleanup';
+import { useWindowWidth } from '../hooks/use-window-width';
 import { docUrl } from '../lib/doc-path';
-import { useUIStore } from '../stores/ui';
+import {
+  COLLAPSE_BUTTON_WIDTH,
+  MAIN_MIN_WIDTH,
+  RIGHT_PANEL_MIN_WIDTH,
+  resolveSideConflict,
+} from '../lib/right-panel-layout';
+import {
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  useUIStore,
+} from '../stores/ui';
+import { useUserSettingsStore } from '../stores/user-settings';
 import { DatePickerDialog } from './DatePickerDialog';
 import { FolderTree } from './FolderTree';
 import { Header } from './Header';
+import { RightPanel } from './RightPanel';
 import { StatusBar } from './StatusBar';
 import { TagPane } from './TagPane';
 import { TemplatePickerDialog } from './TemplatePickerDialog';
@@ -23,10 +39,16 @@ export function AppShell() {
   const sidebarWidth = useUIStore((s) => s.sidebarWidth);
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
   const sidebarTab = useUIStore((s) => s.sidebarTab);
+  const rightDrawerOpen = useUIStore((s) => s.rightDrawerOpen);
   const setSidebarWidth = useUIStore((s) => s.setSidebarWidth);
   const toggleSidebarCollapsed = useUIStore((s) => s.toggleSidebarCollapsed);
   const setSidebarTab = useUIStore((s) => s.setSidebarTab);
   const requestCreateDoc = useUIStore((s) => s.requestCreateDoc);
+
+  const rightPanelOpen = useUserSettingsStore((s) => s.rightPanelOpen);
+  const setRightPanelOpen = useUserSettingsStore((s) => s.setRightPanelOpen);
+
+  const { closeRightPanel, toggleRightPanel } = useRightPanelActions();
 
   // Ctrl+N / ⌘N グローバルショートカット(#137 Phase C-1)
   useNewDocShortcut();
@@ -34,8 +56,11 @@ export function AppShell() {
   useTabSwitchShortcut();
   // 起動時のタブ復元後始末(#139 Phase D)
   useTabsBootCleanup();
+  // Ctrl/Cmd+Shift+U 右パネルトグルショートカット(#271)
+  useRightPanelShortcut();
 
   const navigate = useNavigate();
+  const location = useLocation();
   const createOrOpenTodayNote = useCreateOrOpenTodayNote();
   const createNoteByDate = useCreateNoteByDate();
   const applyTemplate = useApplyTemplate();
@@ -72,47 +97,102 @@ export function AppShell() {
     setTemplatePickerOpen(true);
   }
 
-  const draggingRef = useRef(false);
-
-  useEffect(() => {
-    function handleMouseMove(e: MouseEvent) {
-      if (!draggingRef.current) return;
-      setSidebarWidth(e.clientX);
-    }
-    function handleMouseUp() {
-      if (!draggingRef.current) return;
-      draggingRef.current = false;
-      document.body.style.userSelect = '';
-      document.body.style.cursor = '';
-    }
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [setSidebarWidth]);
-
   // モバイル判定(Tailwind md=768px に合わせる)。狭幅端末ではサイドバーをドロワー化する
   const isMobile = useMediaQuery('(max-width: 767px)');
+  const innerWidth = useWindowWidth();
+
+  // #271: 左サイドバーのリサイズを共通フックに移行。
+  // 右パネルが開いているときは本文最小幅(400px)と右パネル最小幅(240px)を確保するよう上限をクランプし、
+  // 左ドラッグ自身で左サイドバーが勝手に折りたたまれるのを防ぐ(M1)。
+  // 非 MainPage ルート(/trash, /settings 等)では右パネルは非表示だが、rightPanelOpen が true のまま
+  // 保持されている場合、その後 MainPage に遷移した際のリサイズ衝突(D7)を未然に防ぐため、
+  // ルートによらず rightPanelOpen の状態に基づいて上限をクランプする
+  const handleSidebarResize = useCallback(
+    (width: number) => {
+      const maxAllowed = !rightPanelOpen
+        ? SIDEBAR_MAX_WIDTH
+        : Math.min(
+            SIDEBAR_MAX_WIDTH,
+            innerWidth - COLLAPSE_BUTTON_WIDTH * 2 - RIGHT_PANEL_MIN_WIDTH - MAIN_MIN_WIDTH,
+          );
+      const clamped = Math.min(Math.max(SIDEBAR_MIN_WIDTH, width), Math.max(SIDEBAR_MIN_WIDTH, maxAllowed));
+      setSidebarWidth(clamped);
+    },
+    [innerWidth, rightPanelOpen, setSidebarWidth],
+  );
+
+  const { onMouseDown: handleSidebarResizeMouseDown } = useHorizontalResize({
+    side: 'left',
+    onResize: handleSidebarResize,
+  });
+
   // 初回モバイル判定 or デスクトップ→モバイル遷移で自動折畳。
   // prev の初期値を false にすることで、iPhone等での初回接続時にも「false→true」エッジが発火する
   const prevIsMobileRef = useRef(false);
   useEffect(() => {
     if (isMobile && !prevIsMobileRef.current) {
-      useUIStore.setState({ sidebarCollapsed: true });
+      useUIStore.setState({ sidebarCollapsed: true, rightDrawerOpen: false });
     }
     prevIsMobileRef.current = isMobile;
   }, [isMobile]);
 
   // モバイル時にルート変化(文書選択など)があればドロワーを閉じる。
   // ドロワー内でフォルダ/タグを開くだけならURLは変わらないので閉じない
-  const location = useLocation();
   useEffect(() => {
     if (isMobile) {
-      useUIStore.setState({ sidebarCollapsed: true });
+      useUIStore.setState({ sidebarCollapsed: true, rightDrawerOpen: false });
     }
   }, [isMobile, location.pathname]);
+
+  // デスクトップで左サイドバーを開くときの左右排他フォールバック(D7)
+  function handleToggleLeftSidebar() {
+    if (sidebarCollapsed && !isMobile) {
+      const conflict = resolveSideConflict({
+        innerWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
+        sidebarWidth,
+        leftOpen: false,
+        rightOpen: rightPanelOpen,
+        justOpened: 'left',
+      });
+      if (conflict === 'close-right') {
+        setRightPanelOpen(false);
+      }
+    }
+    toggleSidebarCollapsed();
+  }
+
+  // ウィンドウ縮小・右パネル展開時の左右排他フォールバック(D7, C-4-12)。
+  // 初回マウント時(N1)、MainPage進入時(N3)、ウィンドウ縮小・右パネル展開時に評価し、
+  // 左サイドバー自身の幅ドラッグ・変更では左サイドバーを折りたたまない(M1)
+  const prevInnerWidthRef = useRef<number | null>(null);
+  const prevRightPanelOpenRef = useRef(rightPanelOpen);
+  const prevIsMainRouteRef = useRef(false);
+  useEffect(() => {
+    const isInitialMount = prevInnerWidthRef.current === null;
+    const innerWidthChanged = !isInitialMount && innerWidth !== prevInnerWidthRef.current;
+    const rightPanelOpened = rightPanelOpen && !prevRightPanelOpenRef.current;
+    const isCurrentMainRoute = isMainRoute(location.pathname);
+    const enteredMainRoute = isCurrentMainRoute && !prevIsMainRouteRef.current;
+
+    prevInnerWidthRef.current = innerWidth;
+    prevRightPanelOpenRef.current = rightPanelOpen;
+    prevIsMainRouteRef.current = isCurrentMainRoute;
+
+    if (!isMobile && isCurrentMainRoute && !sidebarCollapsed && rightPanelOpen) {
+      if (isInitialMount || innerWidthChanged || rightPanelOpened || enteredMainRoute) {
+        const conflict = resolveSideConflict({
+          innerWidth,
+          sidebarWidth,
+          leftOpen: !sidebarCollapsed,
+          rightOpen: rightPanelOpen,
+          justOpened: rightPanelOpened ? 'right' : 'resize',
+        });
+        if (conflict === 'close-left') {
+          useUIStore.setState({ sidebarCollapsed: true });
+        }
+      }
+    }
+  }, [innerWidth, isMobile, location.pathname, sidebarCollapsed, rightPanelOpen, sidebarWidth]);
 
   return (
     <div className="flex h-screen flex-col bg-canvas font-sans text-ink">
@@ -221,12 +301,7 @@ export function AppShell() {
             {!isMobile && (
               <div
                 data-testid="sidebar-resize-handle"
-                onMouseDown={(e) => {
-                  e.preventDefault(); // ドラッグ中のテキスト選択を防ぐ
-                  draggingRef.current = true;
-                  document.body.style.userSelect = 'none';
-                  document.body.style.cursor = 'col-resize';
-                }}
+                onMouseDown={handleSidebarResizeMouseDown}
                 className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-accent-soft"
               />
             )}
@@ -235,7 +310,7 @@ export function AppShell() {
         {!isMobile && (
           <button
             type="button"
-            onClick={toggleSidebarCollapsed}
+            onClick={handleToggleLeftSidebar}
             aria-label={sidebarCollapsed ? 'サイドバーを表示' : 'サイドバーを折りたたむ'}
             className="w-4 flex-shrink-0 border-r border-line text-ink-faint hover:bg-hoverbg"
           >
@@ -245,6 +320,32 @@ export function AppShell() {
         <main className="min-w-0 flex-1 overflow-auto bg-canvas">
           <Outlet />
         </main>
+
+        {/* #271: 右パネル(MainPage ルートのときのみ表示) */}
+        {isMainRoute(location.pathname) && (
+          <>
+            {!isMobile && (
+              <button
+                type="button"
+                onClick={toggleRightPanel}
+                aria-label={rightPanelOpen ? '右パネルを折りたたむ' : '右パネルを表示'}
+                className="w-4 flex-shrink-0 border-l border-line text-ink-faint hover:bg-hoverbg"
+              >
+                {rightPanelOpen ? '›' : '‹'}
+              </button>
+            )}
+
+            {isMobile && rightDrawerOpen && (
+              <div
+                data-testid="right-panel-overlay"
+                className="fixed inset-0 z-30 bg-black/40"
+                onClick={closeRightPanel}
+              />
+            )}
+
+            {(!isMobile ? rightPanelOpen : true) && <RightPanel />}
+          </>
+        )}
       </div>
 
       <StatusBar />

@@ -9,8 +9,8 @@ import {
   useUserSettingsStore,
 } from '../stores/user-settings';
 
-// バックリンク一覧パネル(#267)
-// 文書末尾に折りたたみ可能なセクションとして配置される。
+// バックリンク一覧パネル(#267, #271)
+// 右サイドパネルのバックリンクタブ内に配置される。
 // props は path と enabled(表示中タブフラグ) のみとし、独立した部品として運用可能にする。
 
 interface BacklinksPanelProps {
@@ -76,14 +76,10 @@ function BacklinkContextView({ context }: { context: string }) {
 export function BacklinksPanel({ path, enabled = true }: BacklinksPanelProps) {
   const navigate = useNavigate();
 
-  const collapsed = useUserSettingsStore((s) => s.backlinksCollapsed);
-  const setCollapsed = useUserSettingsStore((s) => s.setBacklinksCollapsed);
   const sortOrder = useUserSettingsStore((s) => s.backlinksSort);
   const setSortOrder = useUserSettingsStore((s) => s.setBacklinksSort);
 
-  // 非表示タブまたは折りたたみ中はフェッチを抑止する
-  const isFetchEnabled = enabled && !collapsed;
-  const { data, isLoading, error } = useBacklinks(path, { enabled: isFetchEnabled });
+  const { data, isLoading, error } = useBacklinks(path, { enabled });
 
   // ソート順の適用: 更新日降順(既定)または名前順降順
   const sortedBacklinks = useMemo(() => {
@@ -102,35 +98,25 @@ export function BacklinksPanel({ path, enabled = true }: BacklinksPanelProps) {
     return list;
   }, [data?.backlinks, sortOrder]);
 
-  const countText =
-    !collapsed && Array.isArray(data?.backlinks)
-      ? ` (${data.backlinks.length}${data.truncated ? '+' : ''})`
-      : '';
+  const countText = Array.isArray(data?.backlinks)
+    ? ` (${data.backlinks.length}${data.truncated ? '+' : ''})`
+    : '';
 
   const isOffline = isOfflineOrNetworkError(error);
 
   return (
     <section
       data-testid="backlinks-panel"
-      className="mt-8 pt-4 border-t border-line text-sm"
+      className="p-3 text-sm"
       aria-label="バックリンク"
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div className="flex items-center justify-between gap-2">
-        <button
-          type="button"
-          data-testid="backlinks-toggle-btn"
-          onClick={() => setCollapsed(!collapsed)}
-          className="flex items-center gap-1.5 font-medium text-ink-soft hover:text-ink select-none cursor-pointer text-left"
-          aria-expanded={!collapsed}
-        >
-          <span className="text-xs text-ink-faint inline-block w-3 text-center" aria-hidden="true">
-            {collapsed ? '▶' : '▼'}
-          </span>
-          <span>この文書へのリンク{countText}</span>
-        </button>
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <h2 className="font-medium text-ink-soft select-none text-left text-sm">
+          この文書へのリンク{countText}
+        </h2>
 
-        {!collapsed && Array.isArray(data?.backlinks) && data.backlinks.length > 0 && (
+        {Array.isArray(data?.backlinks) && data.backlinks.length > 0 && (
           <div className="flex items-center gap-1 text-xs text-ink-faint">
             <label htmlFor="backlinks-sort-select" className="sr-only">
               並び順
@@ -149,78 +135,76 @@ export function BacklinksPanel({ path, enabled = true }: BacklinksPanelProps) {
         )}
       </div>
 
-      {!collapsed && (
-        <div className="mt-3">
-          {isLoading && (
-            <div data-testid="backlinks-loading" className="text-xs text-ink-faint py-2">
-              読み込み中...
-            </div>
-          )}
+      <div>
+        {isLoading && (
+          <div data-testid="backlinks-loading" className="text-xs text-ink-faint py-2">
+            読み込み中...
+          </div>
+        )}
 
-          {error && (
-            <div data-testid="backlinks-error" className="text-xs text-ink-faint py-2">
-              {isOffline
-                ? 'オフラインまたはサーバー未稼働のため表示できません'
-                : 'バックリンクを取得できませんでした'}
-            </div>
-          )}
+        {error && (
+          <div data-testid="backlinks-error" className="text-xs text-ink-faint py-2">
+            {isOffline
+              ? 'オフラインまたはサーバー未稼働のため表示できません'
+              : 'バックリンクを取得できませんでした'}
+          </div>
+        )}
 
-          {!isLoading && !error && Array.isArray(data?.backlinks) && (
-            <>
-              {sortedBacklinks.length === 0 ? (
-                <div data-testid="backlinks-empty" className="text-xs text-ink-faint py-2">
-                  この文書へのリンクはありません
-                </div>
-              ) : (
-                <ul data-testid="backlinks-list" className="divide-y divide-line/60">
-                  {sortedBacklinks.map((entry) => (
-                    <li key={entry.sourcePath} className="py-2 first:pt-0 last:pb-0">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <button
-                          type="button"
-                          data-testid={`backlink-item-${entry.sourcePath}`}
-                          onClick={() => navigate(docUrl(entry.sourcePath))}
-                          className="font-medium text-primary hover:underline text-left truncate cursor-pointer text-sm"
-                          title={entry.sourcePath}
-                        >
-                          {entry.sourceTitle}
-                        </button>
-                        <div className="flex items-center gap-2 text-xs text-ink-faint flex-shrink-0">
-                          {entry.sourceFolder && <span>{entry.sourceFolder}</span>}
-                          {entry.sourceUpdatedAt && (
-                            <span>{relativeTime(entry.sourceUpdatedAt)}</span>
-                          )}
-                        </div>
+        {!isLoading && !error && Array.isArray(data?.backlinks) && (
+          <>
+            {sortedBacklinks.length === 0 ? (
+              <div data-testid="backlinks-empty" className="text-xs text-ink-faint py-2">
+                この文書へのリンクはありません
+              </div>
+            ) : (
+              <ul data-testid="backlinks-list" className="divide-y divide-line/60">
+                {sortedBacklinks.map((entry) => (
+                  <li key={entry.sourcePath} className="py-2 first:pt-0 last:pb-0">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <button
+                        type="button"
+                        data-testid={`backlink-item-${entry.sourcePath}`}
+                        onClick={() => navigate(docUrl(entry.sourcePath))}
+                        className="font-medium text-primary hover:underline text-left truncate cursor-pointer text-sm"
+                        title={entry.sourcePath}
+                      >
+                        {entry.sourceTitle}
+                      </button>
+                      <div className="flex items-center gap-2 text-xs text-ink-faint flex-shrink-0">
+                        {entry.sourceFolder && <span>{entry.sourceFolder}</span>}
+                        {entry.sourceUpdatedAt && (
+                          <span>{relativeTime(entry.sourceUpdatedAt)}</span>
+                        )}
                       </div>
+                    </div>
 
-                      {entry.links.length > 0 && (
-                        <div className="mt-1 space-y-1 pl-2 border-l-2 border-line/60">
-                          {entry.links.map((link, idx) => (
-                            <button
-                              key={idx}
-                              type="button"
-                              onClick={() => navigate(docUrl(entry.sourcePath))}
-                              className="block w-full text-left text-xs text-ink-soft leading-relaxed hover:bg-hoverbg cursor-pointer p-1 -ml-1 rounded transition-colors"
-                            >
-                              <BacklinkContextView context={link.context} />
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
+                    {entry.links.length > 0 && (
+                      <div className="mt-1 space-y-1 pl-2 border-l-2 border-line/60">
+                        {entry.links.map((link, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => navigate(docUrl(entry.sourcePath))}
+                            className="block w-full text-left text-xs text-ink-soft leading-relaxed hover:bg-hoverbg cursor-pointer p-1 -ml-1 rounded transition-colors"
+                          >
+                            <BacklinkContextView context={link.context} />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
 
-              {data.truncated && (
-                <div data-testid="backlinks-truncated" className="text-xs text-ink-faint mt-2">
-                  上位200件のみ表示しています
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
+            {data.truncated && (
+              <div data-testid="backlinks-truncated" className="text-xs text-ink-faint mt-2">
+                上位200件のみ表示しています
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </section>
   );
 }
