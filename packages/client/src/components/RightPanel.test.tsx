@@ -33,16 +33,23 @@ describe('RightPanel (C-5)', () => {
     );
   }
 
-  it('C-5-1: PR1 では [バックリンク] タブのみが存在し role=tablist かつ aria-selected=true', () => {
+  it('C-5-1: [バックリンク] と [履歴] タブが存在し、タブ切り替えができる(#271)', () => {
     renderPanel('/doc/a.md');
 
     const tablist = screen.getByRole('tablist');
     expect(tablist).toBeTruthy();
 
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(1);
+    expect(tabs).toHaveLength(2);
     expect(tabs[0].textContent).toBe('バックリンク');
     expect(tabs[0].getAttribute('aria-selected')).toBe('true');
+    expect(tabs[1].textContent).toBe('履歴');
+    expect(tabs[1].getAttribute('aria-selected')).toBe('false');
+
+    fireEvent.click(tabs[1]);
+    expect(useUserSettingsStore.getState().rightPanelTab).toBe('history');
+    expect(tabs[1].getAttribute('aria-selected')).toBe('true');
+    expect(tabs[0].getAttribute('aria-selected')).toBe('false');
   });
 
   it('C-5-3: / (文書なし) でパネルを開くと right-panel-empty が表示されスロットの子は 0', () => {
@@ -67,7 +74,7 @@ describe('RightPanel (C-5)', () => {
   it('C-5-5: パネル内のタブボタンにフォーカスがあるとき Escape でパネルが閉じる', () => {
     renderPanel('/doc/a.md');
 
-    const tab = screen.getByRole('tab');
+    const tab = screen.getAllByRole('tab')[0];
     tab.focus();
 
     fireEvent.keyDown(tab, { key: 'Escape' });
@@ -78,7 +85,7 @@ describe('RightPanel (C-5)', () => {
     renderPanel('/doc/a.md');
 
     // defaultPrevented のケース
-    const tab = screen.getByRole('tab');
+    const tab = screen.getAllByRole('tab')[0];
     const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
     event.preventDefault();
     tab.dispatchEvent(event);

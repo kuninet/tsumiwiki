@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AllHistoryEntry, HistoryEntry } from '@tsumiwiki/shared';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { ApiRequestError } from '../api/client';
 import { docQueryKey, TREE_QUERY_KEY, useTree } from '../api/docs';
@@ -27,7 +28,6 @@ import { DiffView } from './DiffView';
 
 interface HistoryPanelProps {
   path: string;
-  onClose: () => void;
   // #106: 編集中に「この版に戻す」が押された場合の整合処理。
   // dirty=true なら確認ダイアログで未保存変更の破棄を警告する。
   // beforeRestore は restoreRevision の前に呼ばれ、編集セッションを片付ける
@@ -51,16 +51,7 @@ function isAllHistoryEntry(entry: HistoryEntry | AllHistoryEntry): entry is AllH
   return 'paths' in entry;
 }
 
-export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryPanelProps) {
-  // Escapeキーでパネルを閉じる(操作性・a11y)
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose();
-    }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
-
+export function HistoryPanel({ path, isDirty, beforeRestore }: HistoryPanelProps) {
   const [scope, setScope] = useState<'file' | 'all'>('file');
   const { data: fileHistory, isLoading: fileLoading } = useHistory(path);
   const { data: allHistory, isLoading: allLoading } = useAllHistory(scope === 'all');
@@ -75,18 +66,22 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
 
+  const initialSelectedKeyRef = useRef<string | null>(null);
+
   // スコープ切替時は選択中の版をリセットする。「全体」は差分タブのみのため合わせて固定する
   useEffect(() => {
     setSelectedRev(null);
     if (scope === 'all') setTab('diff');
   }, [scope]);
 
-  // 初回取得時は最新版を選択状態にする
+  // 初回取得時は最新版を選択状態にする(スコープやパス変更時の初回のみ)
   useEffect(() => {
-    if (history && history.length > 0 && !selectedRev) {
+    const key = `${scope}:${path}`;
+    if (history && history.length > 0 && initialSelectedKeyRef.current !== key) {
+      initialSelectedKeyRef.current = key;
       setSelectedRev(history[0].rev);
     }
-  }, [history, selectedRev]);
+  }, [history, scope, path]);
 
   // 「全体」スコープでは1コミット内の代表1ファイル(paths[0])を差分対象にする
   const selectedAllEntry =
@@ -148,7 +143,9 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
       queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       showToast('success', 'この版に戻しました');
-      onClose(); // 復元後は旧版選択が残らないようパネルを閉じる
+      // #271: 復元成功時は旧版選択を解除し差分タブに戻す(パネルは開いたまま維持)
+      setSelectedRev(null);
+      setTab('diff');
     } catch (err) {
       showToast('error', err instanceof ApiRequestError ? err.message : '復元に失敗しました');
     } finally {
@@ -157,35 +154,23 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
   }
 
   return (
-    <div className="fixed inset-y-0 right-0 z-[40] flex w-[400px] flex-col border-l border-line bg-panel shadow-lg">
-      <div className="flex flex-shrink-0 items-center justify-between border-b border-line px-4 py-3">
-        <h2 className="truncate text-sm font-bold text-ink">
-          履歴 <span className="text-ink-faint">·</span> {titleFromPath(path)}
-        </h2>
-        <div className="flex flex-shrink-0 items-center">
-          <Link
-            to={historyUrl(path)}
-            // Cmd/Ctrl/Shiftクリック(新タブ・新ウィンドウ)時はパネルを閉じない。
-            // ユーザーの意図は「元パネルは残しつつ新タブで全画面を並べて見る」ため
-            onClick={(e) => {
-              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-              onClose();
-            }}
-            title="全画面で開く"
-            aria-label="履歴を全画面で開く"
-            className="text-ink-faint hover:text-ink text-xs mr-2"
-          >
-            ⛶ 全画面
-          </Link>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="閉じる"
-            className="text-ink-faint hover:text-ink"
-          >
-            ×
-          </button>
-        </div>
+    <div
+      className="flex h-full flex-1 flex-col min-h-0 overflow-hidden"
+      data-testid="history-panel"
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div className="flex flex-shrink-0 items-center justify-between border-b border-line px-3 py-2">
+        <span className="truncate text-xs font-semibold text-ink-soft" title={titleFromPath(path)}>
+          {titleFromPath(path)}
+        </span>
+        <Link
+          to={historyUrl(path)}
+          title="全画面で開く"
+          aria-label="履歴を全画面で開く"
+          className="flex items-center gap-1 text-xs text-ink-faint hover:text-ink"
+        >
+          ⛶ 全画面
+        </Link>
       </div>
 
       <div className="flex flex-shrink-0 items-center border-b border-line px-4 py-2">
@@ -329,20 +314,23 @@ export function HistoryPanel({ path, onClose, isDirty, beforeRestore }: HistoryP
         )}
       </div>
 
-      {restoreConfirmVisible && (
-        <ConfirmDialog
-          title="この版に戻す"
-          message={
-            isDirty
-              ? '未保存の変更が失われます。この版に戻します。よろしいですか?'
-              : '現在の内容を破棄してこの版に戻します。よろしいですか?'
-          }
-          confirmLabel="戻す"
-          variant="primary"
-          onConfirm={() => void handleRestore()}
-          onCancel={() => setRestoreConfirmVisible(false)}
-        />
-      )}
+      {restoreConfirmVisible &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <ConfirmDialog
+            title="この版に戻す"
+            message={
+              isDirty
+                ? '未保存の変更が失われます。この版に戻します。よろしいですか?'
+                : '現在の内容を破棄してこの版に戻します。よろしいですか?'
+            }
+            confirmLabel="戻す"
+            variant="primary"
+            onConfirm={() => void handleRestore()}
+            onCancel={() => setRestoreConfirmVisible(false)}
+          />,
+          document.body,
+        )}
     </div>
   );
 }

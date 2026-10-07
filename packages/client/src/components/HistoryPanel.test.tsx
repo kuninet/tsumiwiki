@@ -46,7 +46,6 @@ function stubFetch(overrides: Record<string, unknown> = {}) {
 }
 
 function renderHistoryPanel(
-  onClose = vi.fn(),
   options: { isDirty?: boolean; beforeRestore?: () => Promise<void> } = {},
 ) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -56,7 +55,6 @@ function renderHistoryPanel(
       <MemoryRouter>
         <HistoryPanel
           path="メモ.md"
-          onClose={onClose}
           isDirty={options.isDirty}
           beforeRestore={options.beforeRestore}
         />
@@ -121,7 +119,7 @@ describe('HistoryPanel', () => {
     expect(screen.getByText('旧')).toBeTruthy();
   });
 
-  it('この版に戻すと、ロック取得→復元→ロック解放の順でAPIを呼ぶ', async () => {
+  it('この版に戻すと、ロック取得→復元→ロック解放の順でAPIを呼び、復元後は選択を解除する', async () => {
     const calls = stubFetch({
       'GET /api/history': {
         history: [{ rev: 'abc1234', authorName: '太郎', date: '2026-07-01T00:00:00+09:00', message: '更新' }],
@@ -145,6 +143,12 @@ describe('HistoryPanel', () => {
       .filter((c) => c.path === '/api/locks' || c.path === '/api/history/restore')
       .map((c) => `${c.method} ${c.path}`);
     expect(relevant).toEqual(['POST /api/locks', 'POST /api/history/restore', 'DELETE /api/locks']);
+
+    // #271 M2: 復元成功時は選択が解除され、「この版に戻す」ボタンが disabled になる
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: 'この版に戻す' }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
   });
 
   it('編集中(isDirty=true)は確認ダイアログで未保存変更の破棄を明示する(#106)', async () => {
@@ -155,7 +159,7 @@ describe('HistoryPanel', () => {
       'GET /api/history/diff': { diff: '' },
     });
 
-    renderHistoryPanel(vi.fn(), { isDirty: true });
+    renderHistoryPanel({ isDirty: true });
     await screen.findByText(/太郎/);
 
     fireEvent.click(screen.getByRole('button', { name: 'この版に戻す' }));
@@ -187,7 +191,7 @@ describe('HistoryPanel', () => {
       events.push('beforeRestore');
     });
 
-    renderHistoryPanel(vi.fn(), { isDirty: true, beforeRestore });
+    renderHistoryPanel({ isDirty: true, beforeRestore });
     await screen.findByText(/太郎/);
 
     fireEvent.click(screen.getByRole('button', { name: 'この版に戻す' }));
@@ -215,7 +219,7 @@ describe('HistoryPanel', () => {
     });
     const beforeRestore = vi.fn(async () => {});
 
-    renderHistoryPanel(vi.fn(), { isDirty: false, beforeRestore });
+    renderHistoryPanel({ isDirty: false, beforeRestore });
     await screen.findByText(/太郎/);
 
     fireEvent.click(screen.getByRole('button', { name: 'この版に戻す' }));
@@ -240,7 +244,7 @@ describe('HistoryPanel', () => {
       throw new Error('編集の破棄に失敗');
     });
 
-    renderHistoryPanel(vi.fn(), { isDirty: true, beforeRestore });
+    renderHistoryPanel({ isDirty: true, beforeRestore });
     await screen.findByText(/太郎/);
 
     fireEvent.click(screen.getByRole('button', { name: 'この版に戻す' }));
@@ -394,7 +398,7 @@ describe('HistoryPanel', () => {
     });
   });
 
-  it('[⛶ 全画面]リンクは/history/<エンコード済みパス>を指し、クリックでonCloseが呼ばれる', async () => {
+  it('[⛶ 全画面]リンクは/history/<エンコード済みパス>を指す(#271)', async () => {
     stubFetch({
       'GET /api/history': {
         history: [{ rev: 'abc1234', authorName: '太郎', date: '2026-07-01T00:00:00+09:00', message: '更新' }],
@@ -402,18 +406,14 @@ describe('HistoryPanel', () => {
       'GET /api/history/diff': { diff: '' },
     });
 
-    const onClose = vi.fn();
-    renderHistoryPanel(onClose);
+    renderHistoryPanel();
     await screen.findByText(/太郎/);
 
     const link = screen.getByRole('link', { name: /全画面/ });
     expect(link.getAttribute('href')).toBe(`/history/${encodeURIComponent('メモ.md')}`);
-
-    fireEvent.click(link);
-    expect(onClose).toHaveBeenCalled();
   });
 
-  it('[⛶ 全画面]リンクのCmd/Ctrlクリックではパネルを閉じない(#66レビュー指摘対応)', async () => {
+  it('復元確認ダイアログは document.body 直下にポータル描画される(#271 M1)', async () => {
     stubFetch({
       'GET /api/history': {
         history: [{ rev: 'abc1234', authorName: '太郎', date: '2026-07-01T00:00:00+09:00', message: '更新' }],
@@ -421,21 +421,17 @@ describe('HistoryPanel', () => {
       'GET /api/history/diff': { diff: '' },
     });
 
-    const onClose = vi.fn();
-    renderHistoryPanel(onClose);
+    renderHistoryPanel();
     await screen.findByText(/太郎/);
 
-    const link = screen.getByRole('link', { name: /全画面/ });
+    fireEvent.click(screen.getByRole('button', { name: 'この版に戻す' }));
 
-    // 新タブで開く(Cmd+クリック相当)ときは元パネルを残したい
-    fireEvent.click(link, { metaKey: true });
-    expect(onClose).not.toHaveBeenCalled();
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog).toBeTruthy();
 
-    fireEvent.click(link, { ctrlKey: true });
-    expect(onClose).not.toHaveBeenCalled();
-
-    fireEvent.click(link, { shiftKey: true });
-    expect(onClose).not.toHaveBeenCalled();
+    const panel = screen.getByTestId('history-panel');
+    // パネルの内部要素ではなく document.body 直下にポータル描画されていること
+    expect(panel.contains(dialog)).toBe(false);
   });
 
   it('ロック取得に失敗した場合は復元を実行しない', async () => {
