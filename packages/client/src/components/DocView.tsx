@@ -31,7 +31,6 @@ import { getTableMenuItems } from '../editor/table-menu';
 import { findTableAt } from '../editor/table-utils';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
-import { useRightPanelActions } from '../hooks/use-right-panel';
 import { useVirtualKeyboard } from '../hooks/use-virtual-keyboard';
 import { dispatchAttachmentChanged } from '../lib/attachment-events';
 import { titleFromPath } from '../lib/doc-path';
@@ -173,7 +172,6 @@ export function DocView({
   onModeChange,
 }: DocViewProps) {
   const [linkDialogVisible, setLinkDialogVisible] = useState(false);
-  const [historyVisible, setHistoryVisible] = useState(false);
   const [discardConfirmVisible, setDiscardConfirmVisible] = useState(false);
   const [templateApplyOpen, setTemplateApplyOpen] = useState(false);
   // #51 Opus C1: タグの pending 状態を DocView 側に持ち、連続タグ操作でも
@@ -220,8 +218,6 @@ export function DocView({
   const setLockedByOtherName = useEditStore((s) => s.setLockedByOtherName);
   const setSidebarTab = useUIStore((s) => s.setSidebarTab);
   const toggleTag = useUIStore((s) => s.toggleTag);
-  // #271: 右パネルの操作アクション
-  const { openRightPanel } = useRightPanelActions();
   // #212: 本文最大幅の個人設定(normal/wide/full)。編集/閲覧共通
   const contentWidth = useUserSettingsStore((s) => s.contentWidth);
   // #175: 仮想キーボード出現時に scroll 領域下端へ空ける px 数
@@ -1049,20 +1045,6 @@ export function DocView({
           />
         </div>
         <div className="flex flex-shrink-0 gap-2">
-          <button
-            type="button"
-            onClick={() => openRightPanel('backlinks')}
-            className="h-[30px] rounded border border-line px-3 text-sm text-ink-soft hover:bg-hoverbg"
-          >
-            <span aria-hidden="true">🔗</span> リンク
-          </button>
-          <button
-            type="button"
-            onClick={() => setHistoryVisible(true)}
-            className="h-[30px] rounded border border-line px-3 text-sm text-ink-soft hover:bg-hoverbg"
-          >
-            <span aria-hidden="true">⟲</span> 履歴
-          </button>
           {session.mode === 'view' ? (
             // 閲覧モード: ロック取得のリトライエントリ(他者編集終了後や取得失敗後の再試行)
             <button
@@ -1159,9 +1141,18 @@ export function DocView({
 
       {/* #271: 右パネルへのポータル描画(活性DocViewのみ) */}
       {active && isVisible && (
-        <RightPanelPortal tab="backlinks">
-          <BacklinksPanel path={doc.path} enabled />
-        </RightPanelPortal>
+        <>
+          <RightPanelPortal tab="backlinks">
+            <BacklinksPanel path={doc.path} enabled />
+          </RightPanelPortal>
+          <RightPanelPortal tab="history">
+            <HistoryPanel
+              path={doc.path}
+              isDirty={session.mode === 'edit' && session.dirty}
+              beforeRestore={session.mode === 'edit' ? session.cancelEditing : undefined}
+            />
+          </RightPanelPortal>
+        </>
       )}
 
       {session.draftPrompt && (
@@ -1206,17 +1197,6 @@ export function DocView({
           confirmLabel="設定"
           onConfirm={handleConfirmLink}
           onCancel={() => setLinkDialogVisible(false)}
-        />
-      )}
-
-      {historyVisible && (
-        <HistoryPanel
-          path={doc.path}
-          onClose={() => setHistoryVisible(false)}
-          // #106: 編集中に復元されると dirty な内容で上書き保存される事故を防ぐ。
-          // 復元前に編集セッションを片付け、閲覧モードへ戻してから restoreRevision を走らせる
-          isDirty={session.mode === 'edit' && session.dirty}
-          beforeRestore={session.mode === 'edit' ? session.cancelEditing : undefined}
         />
       )}
 

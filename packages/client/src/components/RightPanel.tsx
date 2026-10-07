@@ -20,8 +20,8 @@ import {
   useUserSettingsStore,
 } from '../stores/user-settings';
 
-// #271: PR1 ではバックリンクタブのみ提供(PR2で履歴タブを追加)
-export const RIGHT_PANEL_TABS: readonly RightPanelTab[] = ['backlinks'] as const;
+// #271: 右パネルで提供するタブ一覧(バックリンク・履歴)
+export const RIGHT_PANEL_TABS: readonly RightPanelTab[] = ['backlinks', 'history'] as const;
 
 export const RIGHT_PANEL_TAB_LABELS: Record<RightPanelTab, string> = {
   backlinks: 'バックリンク',
