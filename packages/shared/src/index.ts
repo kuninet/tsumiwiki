@@ -111,6 +111,13 @@ export const saveDocRequestSchema = z.object({
 });
 export type SaveDocRequest = z.infer<typeof saveDocRequestSchema>;
 
+export const saveDocResponseSchema = z.object({
+  updatedAt: z.string(),
+  // 保存後のフロントマター全体(#281。サーバーが updated/tags を書き換えるため返す)。
+  frontmatter: z.record(z.string(), z.unknown()).optional(),
+});
+export type SaveDocResponse = z.infer<typeof saveDocResponseSchema>;
+
 export const moveDocRequestSchema = z.object({
   path: z.string().min(1),
   newFolder: z.string(),

@@ -6,6 +6,7 @@ import type {
   MoveDocRequest,
   MoveFolderRequest,
   SaveDocRequest,
+  SaveDocResponse,
   TreeResponse,
 } from '@tsumiwiki/shared';
 import { useToastStore } from '../stores/toast';
@@ -43,8 +44,8 @@ export function useDoc(path: string | undefined, options: UseDocOptions = {}) {
 
 // 文書保存(設計04章4.4)。tree/tags等の一斉invalidateは行わず、
 // use-editing-session側で保存文書固有のクエリのみ更新する
-export function saveDoc(body: SaveDocRequest): Promise<{ updatedAt: string }> {
-  return api('PUT', '/api/docs', body);
+export function saveDoc(body: SaveDocRequest): Promise<SaveDocResponse> {
+  return api<SaveDocResponse>('PUT', '/api/docs', body);
 }
 
 // 保存競合時、最新のupdatedAtだけを取得し直すための素の関数(設計04章4.4)
