@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { extractLinkTargets } from './doc-service.js';
+import {
+  extractLeadingFrontmatter,
+  extractLinkTargets,
+  FrontmatterUpdateError,
+  validateFrontmatterPatch,
+} from './doc-service.js';
 
 // extractLinkTargets(issue #199)の単体テスト。DocService.renameAttachment /
 // findAttachmentReferencesが参照検出に使う純関数
@@ -85,5 +90,110 @@ describe('extractLinkTargets', () => {
   it('【中2】インデントのみのコードブロックは対象外(通常どおり抽出される)', () => {
     const body = '    ![[indented.png]]';
     expect(extractLinkTargets(body)).toEqual(['indented.png']);
+  });
+});
+
+describe('validateFrontmatterPatch', () => {
+  it('undefined またはパッチなしは undefined を返す', () => {
+    expect(validateFrontmatterPatch(undefined)).toBeUndefined();
+  });
+
+  it('正常なパッチはキーを NFC 正規化して返す', () => {
+    const result = validateFrontmatterPatch({
+      料金単価: 1000,
+      自動更新: true,
+      プラン: 'pro',
+    });
+    expect(result).toEqual({
+      料金単価: 1000,
+      自動更新: true,
+      プラン: 'pro',
+    });
+  });
+
+  it('予約キー tags を含む場合は FrontmatterUpdateError を throw する', () => {
+    expect(() => validateFrontmatterPatch({ tags: ['a'] })).toThrow(FrontmatterUpdateError);
+  });
+
+  it('予約キー updated を含む場合は FrontmatterUpdateError を throw する', () => {
+    expect(() => validateFrontmatterPatch({ updated: '2026-01-01' })).toThrow(FrontmatterUpdateError);
+  });
+
+  it('危険キー __proto__ を含む場合は FrontmatterUpdateError を throw する', () => {
+    const patch = JSON.parse('{"__proto__": {"admin": true}}');
+    expect(() => validateFrontmatterPatch(patch)).toThrow(FrontmatterUpdateError);
+  });
+
+  it('危険キー constructor を含む場合は FrontmatterUpdateError を throw する', () => {
+    expect(() => validateFrontmatterPatch({ constructor: 'bad' })).toThrow(FrontmatterUpdateError);
+  });
+
+  it('危険キー prototype を含む場合は FrontmatterUpdateError を throw する', () => {
+    expect(() => validateFrontmatterPatch({ prototype: 'bad' })).toThrow(FrontmatterUpdateError);
+  });
+
+  it('空キーまたは空白のみのキーは FrontmatterUpdateError を throw する', () => {
+    expect(() => validateFrontmatterPatch({ '': 'val' })).toThrow(FrontmatterUpdateError);
+    expect(() => validateFrontmatterPatch({ '   ': 'val' })).toThrow(FrontmatterUpdateError);
+  });
+});
+
+describe('extractLeadingFrontmatter', () => {
+  it('フロントマター無しの本文はそのまま返し、frontmatter は undefined', () => {
+    const result = extractLeadingFrontmatter('# 見出し\n\n本文です');
+    expect(result).toEqual({ body: '# 見出し\n\n本文です' });
+  });
+
+  it('有効なフロントマター付き本文からプロパティとタグを抽出しヘッダーを除去する', () => {
+    const body = [
+      '---',
+      'title: テスト',
+      'tags:',
+      '  - a',
+      '  - b',
+      'updated: 2026-01-01',
+      '料金単価: 1000',
+      '---',
+      '',
+      '本文です',
+    ].join('\n');
+    const result = extractLeadingFrontmatter(body);
+    expect(result.body).toBe('\n本文です');
+    expect(result.frontmatter).toEqual({
+      title: 'テスト',
+      料金単価: 1000,
+    });
+    expect(result.tags).toEqual(['a', 'b']);
+  });
+
+  it('水平線で始まるだけの本文は誤抽出せずそのまま返す', () => {
+    const body = '---\n\nただの文章\n\n---';
+    const result = extractLeadingFrontmatter(body);
+    expect(result).toEqual({ body });
+  });
+
+  it('構文エラーのフロントマターは本文としてそのまま返す', () => {
+    const body = '---\n[壊れたYAML\n---\n\n本文';
+    const result = extractLeadingFrontmatter(body);
+    expect(result).toEqual({ body });
+  });
+
+  it('空値キー(aliases: など)は値 null として抽出される', () => {
+    const body = [
+      '---',
+      'title: テスト',
+      'aliases:',
+      '備考:',
+      '---',
+      '',
+      '本文です',
+    ].join('\n');
+    const result = extractLeadingFrontmatter(body);
+    expect(result.body).toBe('\n本文です');
+    expect(result.frontmatter).toEqual({
+      title: 'テスト',
+      aliases: null,
+      備考: null,
+    });
   });
 });

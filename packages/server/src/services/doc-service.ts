@@ -78,6 +78,13 @@ export class DocConflictError extends Error {
   }
 }
 
+export class FrontmatterUpdateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FrontmatterUpdateError';
+  }
+}
+
 // ファイルシステム禁止文字は全角等へ置換する(要件05章5.1)。
 // 文字化け防止のためUnicodeエスケープで明示する
 const FORBIDDEN_CHAR_MAP: Record<string, string> = {
@@ -214,6 +221,79 @@ function localIso(d = new Date()): string {
 
 // フロントマターブロック(開始〜終了フェンス)の抽出用
 const FM_BLOCK_RE = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/;
+
+const RESERVED_FM_KEYS = new Set(['tags', 'updated']);
+const DANGEROUS_FM_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+// フロントマター更新パッチの検証(issue #286)
+export function validateFrontmatterPatch(
+  patch?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (!patch) return undefined;
+  const normalized: Record<string, unknown> = {};
+  for (const [rawKey, value] of Object.entries(patch)) {
+    const key = rawKey.normalize('NFC');
+    if (!key.trim()) {
+      throw new FrontmatterUpdateError('フロントマターのキー名を空にすることはできません');
+    }
+    if (RESERVED_FM_KEYS.has(key)) {
+      throw new FrontmatterUpdateError(`フロントマターの予約キー '${key}' は直接変更できません`);
+    }
+    if (DANGEROUS_FM_KEYS.has(key)) {
+      throw new FrontmatterUpdateError(`フロントマターに危険なキー名 '${key}' は指定できません`);
+    }
+    normalized[key] = value;
+  }
+  return normalized;
+}
+
+// 本文先頭の YAML フロントマターを抽出し、ヘッダーを除去した本文とプロパティを分離する(issue #286)
+export function extractLeadingFrontmatter(body: string): {
+  body: string;
+  frontmatter?: Record<string, unknown>;
+  tags?: string[];
+} {
+  const m = FM_BLOCK_RE.exec(body);
+  if (!m) {
+    return { body };
+  }
+
+  try {
+    const doc = parseYamlDocument(m[1]);
+    if (doc.errors.length > 0) {
+      return { body };
+    }
+    const json = doc.toJSON();
+    if (!json || typeof json !== 'object' || Array.isArray(json)) {
+      // ルートがマップでない(スカラーや配列)場合は本文として扱う(AT-10 水平線等)
+      return { body };
+    }
+
+    const rawRecord = json as Record<string, unknown>;
+    const frontmatter: Record<string, unknown> = {};
+    let tags: string[] | undefined;
+
+    for (const [k, v] of Object.entries(rawRecord)) {
+      if (k === 'tags') {
+        if (Array.isArray(v)) {
+          tags = v.map((item) => String(item));
+        } else if (typeof v === 'string') {
+          tags = [v];
+        }
+      } else if (k !== 'updated') {
+        frontmatter[k] = v;
+      }
+    }
+
+    return {
+      body: body.slice(m[0].length),
+      frontmatter: Object.keys(frontmatter).length > 0 ? frontmatter : undefined,
+      tags,
+    };
+  } catch {
+    return { body };
+  }
+}
 
 // #159: 文書本文が同フォルダに置いた画像添付を参照している「bareファイル名」を抽出する。
 // Obsidian embed `![[X]]`(`|alias`・`#anchor` は捨てる)とマークダウン画像 `![alt](X)`
@@ -540,7 +620,8 @@ export class DocService {
     tags: string[] | undefined,
     baseUpdatedAt: string,
     author: GitAuthor,
-  ): Promise<{ updatedAt: string }> {
+    frontmatter?: Record<string, unknown>,
+  ): Promise<{ updatedAt: string; frontmatter: Record<string, unknown> }> {
     const normalized = this.validateDocPath(relPath);
     const abs = resolveInLibrary(this.libraryPath, normalized);
     const lock = this.locks.getActive(normalized);
@@ -561,39 +642,102 @@ export class DocService {
       );
     }
 
+    // body 先頭に YAML ヘッダーがある場合、フロントマター二重化を防ぐため抽出・マージする(issue #286)
+    const extracted = extractLeadingFrontmatter(body);
+    const effectiveBody = extracted.body;
+    const effectiveTags = tags !== undefined ? tags : extracted.tags;
+
     // 保存はLFに統一する(NFR-COMP-03。CRLF文書も保存時にLF化する)
-    const content = this.composeContent(current, body, tags).replace(/\r\n/g, '\n');
+    const content = this.composeContent(
+      current,
+      effectiveBody,
+      effectiveTags,
+      frontmatter,
+      extracted.frontmatter,
+    ).replace(/\r\n/g, '\n');
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `edit: ${normalized}`, author);
     await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
     const after = await stat(abs);
-    return { updatedAt: after.mtime.toISOString() };
+    return {
+      updatedAt: after.mtime.toISOString(),
+      frontmatter: this.parseFrontmatterData(content),
+    };
   }
 
-  // フロントマターの再結合(外科的編集)。yamlのDocument APIで tags / updated
+  // フロントマターの再結合(外科的編集)。yamlのDocument APIで tags / updated / frontmatter
   // ノードだけを差し替え、他キー・コメント・キー順・スタイルは原文のまま保持する
   // (FR-OBS-07。gray-matterでの再直列化はコメント脱落等の無関係な差分を生むため)
-  private composeContent(current: string, body: string, tags: string[] | undefined): string {
+  private composeContent(
+    current: string,
+    body: string,
+    tags: string[] | undefined,
+    frontmatter?: Record<string, unknown>,
+    bodyFrontmatter?: Record<string, unknown>,
+  ): string {
+    const patch = validateFrontmatterPatch(frontmatter);
+    const bodyPatch = validateFrontmatterPatch(bodyFrontmatter);
     const normalizedTags = tags
       ?.map((t) => t.trim().replace(/^#/, '').normalize('NFC'))
       .filter(Boolean);
 
     const fmMatch = FM_BLOCK_RE.exec(current);
     if (!fmMatch) {
-      // 元々フロントマターがない文書には不要なフロントマターを付けない
-      if (!normalizedTags || normalizedTags.length === 0) return body;
+      // 元々フロントマターがない文書
+      // body 先頭ヘッダー由来のプロパティは空値(null)も含めて保持する
+      const fmObj: Record<string, unknown> = {};
+      if (bodyPatch) {
+        for (const [k, v] of Object.entries(bodyPatch)) {
+          fmObj[k] = v;
+        }
+      }
+      // 明示的な frontmatter 引数は null でキー削除、それ以外で上書き
+      if (patch) {
+        for (const [k, v] of Object.entries(patch)) {
+          if (v === null) {
+            delete fmObj[k];
+          } else {
+            fmObj[k] = v;
+          }
+        }
+      }
+
+      const hasTags = normalizedTags !== undefined && normalizedTags.length > 0;
+      const hasProps = Object.keys(fmObj).length > 0;
+
+      if (!hasTags && !hasProps) {
+        return body;
+      }
+
       if (/^---\r?\n/.test(body)) {
         // 未終端フロントマター等、解釈の割れる文書にはFMを追加しない(二重化防止)
+        if (
+          (patch !== undefined && Object.keys(patch).length > 0) ||
+          (bodyPatch !== undefined && Object.keys(bodyPatch).length > 0)
+        ) {
+          throw new FrontmatterUpdateError('フロントマターの解析に失敗しました(未終端または不正な形式)');
+        }
         this.logger?.warn('フロントマターの構造が不明なためタグ更新をスキップしました');
         return body;
       }
-      const fm = yamlStringify({ tags: normalizedTags, updated: localIso() });
+
+      if (hasTags) {
+        fmObj.tags = normalizedTags;
+      }
+      fmObj.updated = localIso();
+      const fm = yamlStringify(fmObj);
       return `---\n${fm}---\n\n${body.replace(/^\n/, '')}`;
     }
 
     const doc = parseYamlDocument(fmMatch[1]);
     if (doc.errors.length > 0) {
-      // 壊れたフロントマターには触らない(本文のみ更新。タグ変更は反映しない)
+      // 壊れたフロントマター
+      if (
+        (patch !== undefined && Object.keys(patch).length > 0) ||
+        (bodyPatch !== undefined && Object.keys(bodyPatch).length > 0)
+      ) {
+        throw new FrontmatterUpdateError('フロントマターの解析に失敗しました(構文エラー)');
+      }
       this.logger?.warn(
         { errors: doc.errors.map((e) => e.message) },
         '壊れたフロントマターのためタグ更新をスキップしました',
@@ -602,6 +746,44 @@ export class DocService {
         ? body
         : current.slice(0, fmMatch[0].length) + body.replace(/^\n/, '');
     }
+
+    const json = doc.toJSON();
+    if (!json || typeof json !== 'object' || Array.isArray(json)) {
+      if (
+        (patch !== undefined && Object.keys(patch).length > 0) ||
+        (bodyPatch !== undefined && Object.keys(bodyPatch).length > 0)
+      ) {
+        throw new FrontmatterUpdateError('フロントマターのルートがマップ(オブジェクト)ではありません');
+      }
+    }
+
+    // 1. body 先頭ヘッダー由来のプロパティを適用
+    // 値が null のキー(aliases: など)は削除命令ではなく空プロパティのため、
+    // 既存値があれば維持し、なければ空値(doc.set(key, null))として保持する
+    if (bodyPatch) {
+      for (const [key, value] of Object.entries(bodyPatch)) {
+        if (value === null) {
+          if (!doc.has(key)) {
+            doc.set(key, null);
+          }
+        } else {
+          doc.set(key, value);
+        }
+      }
+    }
+
+    // 2. 明示的な frontmatter 引数を適用(引数が優先)
+    // 値が null の場合はキーを削除(doc.delete)、それ以外は上書き
+    if (patch) {
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) {
+          doc.delete(key);
+        } else {
+          doc.set(key, value);
+        }
+      }
+    }
+
     if (normalizedTags !== undefined) {
       if (normalizedTags.length > 0) doc.set('tags', normalizedTags);
       else doc.delete('tags');
