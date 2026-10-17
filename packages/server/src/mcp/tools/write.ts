@@ -27,17 +27,28 @@ export function registerWriteTools(mcp: McpServer, app: FastifyInstance): void {
     {
       title: 'ノート保存',
       description:
-        '既存ノートの本文・タグを更新する。baseUpdatedAtにはread_noteで取得したupdatedAtを渡すこと' +
+        '既存ノートの本文・タグ・フロントマターのプロパティを更新する。baseUpdatedAtにはread_noteで取得したupdatedAtを渡すこと' +
         '(取得後に他者が更新していると競合エラーになる)。UIで編集ロック保持中のノートは保存できない',
       inputSchema: {
         path: z.string().min(1).describe('保存するノートの相対パス'),
         body: z.string().describe('更新後の本文(フロントマターを除く部分)'),
         baseUpdatedAt: z.string().describe('read_noteで取得したupdatedAt(競合検知用)'),
         tags: z.array(z.string()).optional().describe('更新後のタグ(未指定なら変更しない)'),
+        frontmatter: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe(
+            '更新するフロントマターのプロパティ(部分更新・マージ)。指定キーのみ上書きし、' +
+            '値にnullを渡すとそのキーを削除する。未指定キーは原文のまま保持。' +
+            'tags は tags 引数で、updated はサーバー管理のため指定不可。' +
+            '変更するキーだけを渡すこと(read_noteの日付値はISO形式に変換されているため、そのまま戻すと書式が変わる)',
+          ),
       },
     },
-    async ({ path: docPath, body, baseUpdatedAt, tags }) =>
-      asResult(await app.docService.saveDocMcp(docPath, body, tags, baseUpdatedAt, MCP_AUTHOR)),
+    async ({ path: docPath, body, baseUpdatedAt, tags, frontmatter }) =>
+      asResult(
+        await app.docService.saveDocMcp(docPath, body, tags, baseUpdatedAt, MCP_AUTHOR, frontmatter),
+      ),
   );
 
   mcp.registerTool(

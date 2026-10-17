@@ -150,12 +150,14 @@ Read 6 種 + Write 5 種の計 11 個。全て `docService` / `queryService` 経
 | ツール | 引数 | 用途 |
 |---|---|---|
 | `create_note` | `path: string`, `content: string` | 新規作成。既存パスならエラー(`.md` 必須) |
-| `save_note` | `path: string`, `body: string`, `baseUpdatedAt: string`, `tags?: string[]` | 更新。`baseUpdatedAt` は `read_note` で得た値を渡す(競合検知) |
+| `save_note` | `path: string`, `body: string`, `baseUpdatedAt: string`, `tags?: string[]`, `frontmatter?: Record<string, unknown>` | 更新。`baseUpdatedAt` は `read_note` で得た値を渡す(競合検知)。`frontmatter` で独自項目の部分更新(null でキー削除)。戻り値に `updatedAt` と更新後 `frontmatter` を返す |
 | `move_note` | `path: string`, `newFolder: string`, `newTitle: string` | リネーム / 移動 |
 | `delete_note` | `path: string` | `.trash/` へ送る(完全削除ではない) |
 | `create_daily_note` | (なし) | ライブラリ設定 `dailyNotes.folder` / `template` / `filenamePattern` に基づき今日の Daily Note を生成 or 既存を返す |
 
 パスは常に **リポジトリルート相対の POSIX 形式**(`Projects/foo.md` など)。`..` / `.git/*` / `.trash/*` / 非 `.md` 拡張子は全て拒否される。
+
+- **`save_note` のフロントマター自動抽出**: `body` の先頭に YAML ヘッダー(`---`)が含まれる場合、二重化を防ぐため自動抽出されてフロントマターにマージされます。本文ヘッダー由来の空キー(`aliases:` など)はキー削除されず保持されます(明示的な `frontmatter` 引数で `key: null` を渡した場合はキー削除されます)。
 
 ---
 
