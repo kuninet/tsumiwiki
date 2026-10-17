@@ -10,6 +10,7 @@ import type {
   DocResponse,
   DocSummary,
   RenameAttachmentResponse,
+  SaveDocResponse,
   TrashEntry,
   TreeResponse,
 } from '@tsumiwiki/shared';
@@ -380,6 +381,19 @@ export class DocService {
 
   // ---- 文書 ----
 
+  // フロントマターのパース(壊れたYAMLやトップレベル配列/スカラーは空オブジェクト扱い)
+  private parseFrontmatterData(content: string): Record<string, unknown> {
+    try {
+      const parsed = matter(content);
+      if (parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)) {
+        return parsed.data as Record<string, unknown>;
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  }
+
   async getDoc(relPath: string): Promise<DocResponse> {
     const normalized = this.validateDocPath(relPath);
     const abs = resolveInLibrary(this.libraryPath, normalized);
@@ -393,12 +407,10 @@ export class DocService {
       throw new DocNotFoundError(normalized);
     }
 
-    let frontmatter: Record<string, unknown> = {};
+    const frontmatter = this.parseFrontmatterData(content);
     let body = content;
     try {
-      const parsed = matter(content);
-      frontmatter = parsed.data as Record<string, unknown>;
-      body = parsed.content;
+      body = matter(content).content;
     } catch {
       // 壊れたフロントマターは空扱い(本文は全文を返す)
     }
@@ -484,7 +496,7 @@ export class DocService {
     baseUpdatedAt: string,
     userId: number,
     author: GitAuthor,
-  ): Promise<{ updatedAt: string }> {
+  ): Promise<SaveDocResponse> {
     const normalized = this.validateDocPath(relPath);
     const abs = resolveInLibrary(this.libraryPath, normalized);
     // 保存はロック保持者のみ(FR-LOCK-01/02。#22計画の結合点をここで解決)
@@ -513,7 +525,10 @@ export class DocService {
     // 明示保存に成功したら本人の下書きは不要になる(FR-EDIT-08)
     this.drafts.removeOwn(normalized, userId);
     const after = await stat(abs);
-    return { updatedAt: after.mtime.toISOString() };
+    return {
+      updatedAt: after.mtime.toISOString(),
+      frontmatter: this.parseFrontmatterData(content),
+    };
   }
 
   // MCP経由の保存(issue #190)。呼び出しユーザーの概念がないため、UI編集ロックの

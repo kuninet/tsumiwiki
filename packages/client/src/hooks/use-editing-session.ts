@@ -223,7 +223,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     savingRef.current = true;
     setSaveErrorLocal(false); // 新しい保存試行時は前回のエラー表示をクリアする
     try {
-      const { updatedAt } = await saveDoc({
+      const { updatedAt, frontmatter } = await saveDoc({
         path,
         body: contentRef.current.body,
         tags: contentRef.current.tags,
@@ -238,6 +238,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
           ? {
               ...old,
               updatedAt,
+              frontmatter: frontmatter ?? old.frontmatter,
               body: contentRef.current.body,
               tags: contentRef.current.tags,
             }
@@ -280,7 +281,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     if (!path) return;
     try {
       const latest = await fetchDoc(path);
-      const { updatedAt } = await saveDoc({
+      const { updatedAt, frontmatter } = await saveDoc({
         path,
         body: contentRef.current.body,
         tags: contentRef.current.tags,
@@ -291,6 +292,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
           ? {
               ...old,
               updatedAt,
+              frontmatter: frontmatter ?? old.frontmatter,
               body: contentRef.current.body,
               tags: contentRef.current.tags,
             }

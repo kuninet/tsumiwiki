@@ -51,6 +51,7 @@ import { EditorToolbar } from './EditorToolbar';
 import { HistoryPanel } from './HistoryPanel';
 import { NewDocFromLinkDialog } from './NewDocFromLinkDialog';
 import { PromptDialog } from './PromptDialog';
+import { PropertiesPanel } from './PropertiesPanel';
 import { RightPanelPortal } from './RightPanelPortal';
 import { TagChipEditor } from './TagChipEditor';
 import { TemplatePickerDialog } from './TemplatePickerDialog';
@@ -1120,6 +1121,8 @@ export function DocView({
           data-testid="doc-content-wrap"
           className={`mx-auto ${contentWidthMaxClass(contentWidth)} px-4 py-4 sm:px-6 lg:px-8`}
         >
+          {/* #281: フロントマターのプロパティ表示(初期は折りたたみ)。ソース編集中も見えるよう hidden の外に置く */}
+          <PropertiesPanel frontmatter={doc.frontmatter} />
           {/* #224 ソース編集モード: editorインスタンスはunmountせず保持したままCSSで隠す
               (エディタ状態・NodeView等を保ったまま行き来できるようにするため) */}
           <div hidden={sourceMode}>

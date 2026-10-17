@@ -137,6 +137,61 @@ describe('文書CRUD', () => {
     expect(raw).toContain('更新後の本文');
   }, 20_000);
 
+  it('S1: 保存応答のfrontmatterに未知キーと新しいupdatedが含まれ、コメント行が保全される(#281)', async () => {
+    await writeFile(
+      join(lib, 'フロントマター保存.md'),
+      '---\n# コメント行\nprice: 980\nupdated: 2024-01-01T00:00:00+09:00\n---\n\n本文\n',
+      'utf8',
+    );
+    await app.indexerService.indexFile('フロントマター保存.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('フロントマター保存.md')}`);
+    const saved = await saveDoc({
+      path: 'フロントマター保存.md',
+      body: '新しい本文',
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+    const body = saved.json();
+    expect(body.frontmatter).toBeDefined();
+    expect(body.frontmatter.price).toBe(980);
+    expect(body.frontmatter.updated).not.toBe(got.json().frontmatter.updated);
+    expect(Date.parse(body.frontmatter.updated)).toBeGreaterThan(
+      Date.parse('2024-01-01T00:00:00+09:00'),
+    );
+
+    const raw = await readFile(join(lib, 'フロントマター保存.md'), 'utf8');
+    expect(raw).toContain('# コメント行');
+  }, 20_000);
+
+  it('S2: フロントマターなし文書の保存応答ではfrontmatterが空オブジェクトになる(#281)', async () => {
+    await writeFile(join(lib, 'FMなし.md'), '素の本文\n', 'utf8');
+    await app.indexerService.indexFile('FMなし.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('FMなし.md')}`);
+    const saved = await saveDoc({
+      path: 'FMなし.md',
+      body: '更新本文',
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().frontmatter).toEqual({});
+  }, 20_000);
+
+  it('S3: 壊れたYAMLフロントマターを持つ文書の保存でもエラーにならずfrontmatterが空オブジェクトになる(#281)', async () => {
+    await writeFile(join(lib, '壊れたFM.md'), '---\n: 不正なYAML\n---\n\n本文\n', 'utf8');
+    await app.indexerService.indexFile('壊れたFM.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('壊れたFM.md')}`);
+    const saved = await saveDoc({
+      path: '壊れたFM.md',
+      body: '更新本文',
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().frontmatter).toEqual({});
+  }, 20_000);
+
   it('取得後に変更された文書への保存は409(競合検知)', async () => {
     const created = await api('POST', '/api/docs', { folder: '', title: '競合テスト' });
     const docPath = created.json().path;
