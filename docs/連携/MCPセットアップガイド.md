@@ -56,7 +56,7 @@ curl -i -X POST http://localhost:3000/mcp
 # WWW-Authenticate: Bearer realm="tsumiwiki-mcp"
 ```
 
-正しいトークンで `tools/list` を叩き、11 個のツールが返ることを確認:
+正しいトークンで `tools/list` を叩き、12 個のツールが返ることを確認:
 
 ```bash
 export MCP_TOKEN=<設定したトークン>
@@ -132,7 +132,7 @@ claude mcp list
 
 ## 5. 公開ツール一覧
 
-Read 6 種 + Write 5 種の計 11 個。全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。
+Read 6 種 + Write 6 種の計 12 個。全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。
 
 ### Read
 
@@ -154,6 +154,7 @@ Read 6 種 + Write 5 種の計 11 個。全て `docService` / `queryService` 経
 | `move_note` | `path: string`, `newFolder: string`, `newTitle: string` | リネーム / 移動 |
 | `delete_note` | `path: string` | `.trash/` へ送る(完全削除ではない) |
 | `create_daily_note` | (なし) | ライブラリ設定 `dailyNotes.folder` / `template` / `filenamePattern` に基づき今日の Daily Note を生成 or 既存を返す |
+| `append_to_daily_note` | `text: string`, `heading?: string`(既定 `## メモ`), `source?: string` | 今日のデイリーノートの指定見出しの節末尾に `HH:MM [source] text` を1件追記(なければノート・見出しごと作成)。本文全体の読み書きは不要。戻り値は `path` / `created` / `updatedAt`。箇条書きにしたいときは `text` を `- ` で始める。日付と時刻はサーバーのローカル時刻(`TZ` 環境変数)で決まる。UI で編集中のノートには書けず、`isError` かつ `structuredContent.code` が `DOC_LOCKED` になる |
 
 パスは常に **リポジトリルート相対の POSIX 形式**(`Projects/foo.md` など)。`..` / `.git/*` / `.trash/*` / 非 `.md` 拡張子は全て拒否される。
 
