@@ -1,13 +1,12 @@
-import { readFile } from 'node:fs/promises';
-import type { FastifyBaseLogger, FastifyInstance, FastifyPluginCallback } from 'fastify';
-import {
-  dailyNoteByDateRequestSchema,
-  expandTemplateVariables,
-  formatDate,
-  type LibrarySettings,
-} from '@tsumiwiki/shared';
-import { resolveInLibrary } from '../lib/paths.js';
+import type { FastifyPluginCallback } from 'fastify';
+import { dailyNoteByDateRequestSchema } from '@tsumiwiki/shared';
 import { sendError } from '../plugins/auth.js';
+import {
+  ensureDailyNote,
+  InvalidDailyNoteSettingsError,
+  renderDailyNoteBody,
+  resolveDailyNotePath,
+} from '../services/daily-note.js';
 import { DocConflictError } from '../services/doc-service.js';
 import { authorOf, handling } from './docs.js';
 
@@ -29,37 +28,16 @@ export const dailyNotesRoutes: FastifyPluginCallback = (app, _opts, done) => {
   app.post('/api/daily-notes/today', async (req, reply) => {
     if (!req.user) return sendError(reply, 401, 'UNAUTHORIZED', '認証が必要です');
     return handling(reply, async () => {
-      const { settings } = await app.librarySettingsService.get();
-      const now = new Date();
-      const resolved = resolveDailyNotePath(settings, now);
-      if (!resolved) {
-        return sendError(
-          reply,
-          400,
-          'INVALID_SETTINGS',
-          'ファイル名パターンが不正です。ライブラリ設定を確認してください',
-        );
-      }
-      const { title, relPath } = resolved;
-
-      // 既存文書があればそれを返す(created:false)
       try {
-        const existing = await app.docService.getDoc(relPath);
-        return { path: existing.path, created: false };
-      } catch {
-        // 存在しない → テンプレを読んで作成する
-      }
-
-      const body = await renderDailyNoteBody(app, settings, now, title, req.user!.displayName, req.log);
-
-      // レース: 二人同時押しで敗者が DocConflictError を受けるので、既存パスとして返す
-      try {
-        const created = await app.docService.createDocWithContent(relPath, body, authorOf(req));
-        return { path: created.path, created: true };
+        return await ensureDailyNote(app, new Date(), req.user!.displayName, authorOf(req), req.log);
       } catch (e) {
-        if (e instanceof DocConflictError) {
-          const existing = await app.docService.getDoc(relPath);
-          return { path: existing.path, created: false };
+        if (e instanceof InvalidDailyNoteSettingsError) {
+          return sendError(
+            reply,
+            400,
+            'INVALID_SETTINGS',
+            'ファイル名パターンが不正です。ライブラリ設定を確認してください',
+          );
         }
         throw e;
       }
@@ -121,59 +99,3 @@ export const dailyNotesRoutes: FastifyPluginCallback = (app, _opts, done) => {
 
   done();
 };
-
-// ファイル名パターンを指定日付で展開し、title/relPath を組み立てる。
-// パターンが空文字に展開される(=不正な設定)場合は null を返す
-function resolveDailyNotePath(
-  settings: LibrarySettings,
-  date: Date,
-): { title: string; relPath: string } | null {
-  // ファイル名パターンは Obsidian と同じく素の日付フォーマット文字列として扱う
-  // (例 'YYYY-MM-DD' → '2026-07-05')。{{...}} 変数構文は librarySettingsSchema で拒否済み
-  const title = formatDate(date, settings.dailyNotes.filenamePattern);
-  if (!title) return null;
-  const relPath = settings.dailyNotes.folder
-    ? `${settings.dailyNotes.folder}/${title}.md`
-    : `${title}.md`;
-  return { title, relPath };
-}
-
-// テンプレ設定があれば読み込んで変数展開し、無ければ既定本文を返す
-async function renderDailyNoteBody(
-  app: FastifyInstance,
-  settings: LibrarySettings,
-  date: Date,
-  title: string,
-  user: string,
-  log: FastifyBaseLogger,
-): Promise<string> {
-  if (!settings.dailyNotes.template) {
-    return defaultDailyNoteBody(date, title);
-  }
-  try {
-    const tmplAbs = resolveInLibrary(app.config.libraryPath, settings.dailyNotes.template);
-    // ライブラリ外・保護パスへの逃走は librarySettingsSchema の refine と
-    // resolveInLibrary の両方で弾く
-    const raw = await readFile(tmplAbs, 'utf8');
-    return expandTemplateVariables(
-      raw,
-      { date, title, user },
-      { stripCursor: true }, // Phase 3 でカーソル配置UIを実装するまでは空文字化する
-    );
-  } catch (e) {
-    // テンプレが見つからない・読めない場合はテンプレ無し扱い(admin向けの警告ログは残す)
-    log.warn(
-      { err: e, template: settings.dailyNotes.template },
-      'デイリーノート用テンプレートを読み込めませんでした。既定本文で作成します',
-    );
-    return defaultDailyNoteBody(date, title);
-  }
-}
-
-// テンプレ未設定・読取失敗時の既定本文(空白でもいいが、frontmatter に日付を残すと後で便利)
-function defaultDailyNoteBody(date: Date, title: string): string {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const dd = String(date.getDate()).padStart(2, '0');
-  return `---\ndate: ${yyyy}-${mm}-${dd}\n---\n\n# ${title}\n\n`;
-}

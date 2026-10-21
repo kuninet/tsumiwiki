@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
 import { openDatabase } from '../db/index.js';
@@ -111,7 +111,7 @@ describe('POST /mcp JSON-RPC', () => {
     expect(res.json().result.serverInfo.name).toBe('tsumiwiki');
   });
 
-  it('tools/listで期待する11個のツール名が全て含まれる', async () => {
+  it('tools/listで期待する12個のツール名が全て含まれる', async () => {
     const res = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(res.statusCode).toBe(200);
     const names = res.json().result.tools.map((t: { name: string }) => t.name);
@@ -127,11 +127,12 @@ describe('POST /mcp JSON-RPC', () => {
       'move_note',
       'delete_note',
       'create_daily_note',
+      'append_to_daily_note',
     ];
     for (const name of expected) {
       expect(names).toContain(name);
     }
-    expect(expected).toHaveLength(11);
+    expect(expected).toHaveLength(12);
   });
 
   it('search_notesを何もない状態で呼ぶと空配列が返る', async () => {
@@ -914,6 +915,237 @@ describe('POST /mcp JSON-RPC', () => {
     expect(saveNoteTool).toBeDefined();
     expect(saveNoteTool.inputSchema.properties.frontmatter).toBeDefined();
     expect(saveNoteTool.inputSchema.properties.frontmatter.type).toBe('object');
+  });
+});
+
+describe('append_to_daily_note', () => {
+  // 日付と時刻を固定する(Date だけを偽装し、タイマー類は本物のまま)
+  const NOW = new Date(2026, 6, 5, 14, 30, 0);
+  const NOTE = '日記/2026-07-05.md';
+  let seq = 100;
+
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+    await buildMcpApp();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function callTool(name: string, args: Record<string, unknown>) {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: seq++,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().result;
+  }
+
+  const rawNote = () => readFile(join(lib, NOTE), 'utf8');
+  // 保存時にサーバーが付け替える updated 行は比較から除く
+  const withoutUpdated = (raw: string) =>
+    raw
+      .split('\n')
+      .filter((l) => !l.startsWith('updated:'))
+      .join('\n');
+
+  it('デイリーノートが無い状態で呼ぶと作成され、## メモ と entry が入る', async () => {
+    const result = await callTool('append_to_daily_note', {
+      text: '作業完了',
+      source: 'Claude Code',
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent.path).toBe(NOTE);
+    expect(result.structuredContent.created).toBe(true);
+    expect(typeof result.structuredContent.updatedAt).toBe('string');
+    const raw = await rawNote();
+    expect(raw).toContain('# 2026-07-05\n\n## メモ\n\n14:30 [Claude Code] 作業完了\n');
+  });
+
+  it('既存ノートの ## メモ 節の末尾に入り、他の行は変わらない', async () => {
+    const original =
+      '---\ndate: 2026-07-05\n---\n\n# 2026-07-05\n\n## タスク\n\n- [ ] 朝会\n\n## メモ\n\n- 既存1\n- 既存2\n\n## 振り返り\n\n特になし\n';
+    await callTool('create_note', { path: NOTE, content: original });
+
+    const result = await callTool('append_to_daily_note', { text: '追記です', source: 'A' });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent.created).toBe(false);
+
+    const expected =
+      '---\ndate: 2026-07-05\n---\n\n# 2026-07-05\n\n## タスク\n\n- [ ] 朝会\n\n## メモ\n\n- 既存1\n- 既存2\n\n14:30 [A] 追記です\n\n## 振り返り\n\n特になし\n';
+    expect(withoutUpdated(await rawNote())).toBe(expected);
+  });
+
+  it('見出しがないノートでは末尾に見出しごと入る', async () => {
+    await callTool('create_note', {
+      path: NOTE,
+      content: '---\ndate: 2026-07-05\n---\n\n# 2026-07-05\n\n## タスク\n\n- [ ] 朝会\n',
+    });
+    await callTool('append_to_daily_note', { text: '追記です' });
+    expect(withoutUpdated(await rawNote())).toBe(
+      '---\ndate: 2026-07-05\n---\n\n# 2026-07-05\n\n## タスク\n\n- [ ] 朝会\n\n## メモ\n\n14:30 追記です\n',
+    );
+  });
+
+  it('heading を指定するとその節に入る', async () => {
+    await callTool('create_note', {
+      path: NOTE,
+      content: '# 2026-07-05\n\n## 作業ログ\n\n- a\n\n## メモ\n\nb\n',
+    });
+    await callTool('append_to_daily_note', { text: 'c', heading: '## 作業ログ' });
+    expect(await rawNote()).toBe('# 2026-07-05\n\n## 作業ログ\n\n- a\n\n14:30 c\n\n## メモ\n\nb\n');
+  });
+
+  it('複数行の text は1行目だけに接頭辞が付く', async () => {
+    await callTool('append_to_daily_note', { text: '1行目\n  2行目\n3行目\n', source: 'A' });
+    expect(await rawNote()).toContain('## メモ\n\n14:30 [A] 1行目\n  2行目\n3行目\n');
+  });
+
+  it('他ユーザーが編集ロック中なら DOC_LOCKED の isError になり、本文は変わらない', async () => {
+    await callTool('create_daily_note', {});
+    const before = await rawNote();
+    const user = app.userService.create({
+      username: 'yamada',
+      displayName: '山田',
+      password: 'p',
+      role: 'user',
+    });
+    app.lockService.acquire(NOTE, user.id);
+
+    const result = await callTool('append_to_daily_note', { text: '追記です' });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent.code).toBe('DOC_LOCKED');
+    expect(result.structuredContent.holder).toEqual({ displayName: '山田' });
+    expect(result.structuredContent.message).toContain('山田');
+    expect(await rawNote()).toBe(before);
+  });
+
+  it('存在確認の直後にロックが取られても DOC_LOCKED になる', async () => {
+    await callTool('create_daily_note', {});
+    const user = app.userService.create({
+      username: 'yamada',
+      displayName: '山田',
+      password: 'p',
+      role: 'user',
+    });
+    const original = app.docService.getDoc.bind(app.docService);
+    vi.spyOn(app.docService, 'getDoc').mockImplementation(async (p: string) => {
+      const doc = await original(p);
+      app.lockService.acquire(NOTE, user.id);
+      return doc;
+    });
+
+    const result = await callTool('append_to_daily_note', { text: '追記です' });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent.code).toBe('DOC_LOCKED');
+  });
+
+  it('2回続けて呼ぶと2件とも残り、呼んだ順に並ぶ', async () => {
+    await callTool('append_to_daily_note', { text: '1件目' });
+    vi.setSystemTime(new Date(2026, 6, 5, 14, 45, 0));
+    await callTool('append_to_daily_note', { text: '2件目' });
+    const raw = await rawNote();
+    expect(raw).toContain('## メモ\n\n14:30 1件目\n\n14:45 2件目\n');
+  });
+
+  it('同時に6回呼んでも6件すべて残る', async () => {
+    await callTool('create_daily_note', {});
+    const results = await Promise.all(
+      [1, 2, 3, 4, 5, 6].map((n) => callTool('append_to_daily_note', { text: `c${n}`, source: 'S' })),
+    );
+    for (const r of results) expect(r.isError).toBeFalsy();
+    const raw = await rawNote();
+    for (const n of [1, 2, 3, 4, 5, 6]) {
+      expect(raw.match(new RegExp(`^14:30 \\[S\\] c${n}$`, 'gm'))).toHaveLength(1);
+    }
+  });
+
+  it('閉じのない --- で始まる文書でも先頭の --- と既存の本文が残る', async () => {
+    await callTool('create_note', { path: NOTE, content: '---\n\n## メモ\n\na\n' });
+    await callTool('append_to_daily_note', { text: '追記', source: 'S' });
+    expect(await rawNote()).toBe('---\n\n## メモ\n\na\n\n14:30 [S] 追記\n');
+  });
+
+  it('... で閉じたフロントマターは二重にならず、本文もそのまま残る', async () => {
+    await callTool('create_note', {
+      path: NOTE,
+      content: '---\ndate: 2026-07-05\n...\n\n## メモ\n\na\n',
+    });
+    await callTool('append_to_daily_note', { text: '追記', source: 'S' });
+    const raw = await rawNote();
+    expect(raw.match(/date: 2026-07-05/g)).toHaveLength(1);
+    expect(raw.match(/^## メモ$/gm)).toHaveLength(1);
+    expect(raw.endsWith('\n## メモ\n\na\n\n14:30 [S] 追記\n')).toBe(true);
+    const read = await callTool('read_note', { path: NOTE });
+    expect(String(read.structuredContent.frontmatter.date)).toContain('2026-07-05');
+  });
+
+  it('--- / # 見出し / --- で始まる文書でも見出しが重複・欠落せず追記される', async () => {
+    await callTool('create_note', {
+      path: NOTE,
+      content: '---\n# 見出し\n---\n\n## メモ\n\na\n',
+    });
+    const result = await callTool('append_to_daily_note', { text: '追記', source: 'S' });
+    expect(result.isError).toBeFalsy();
+    const raw = await rawNote();
+    expect(raw.match(/# 見出し/g)).toHaveLength(1);
+    expect(raw.endsWith('\n## メモ\n\na\n\n14:30 [S] 追記\n')).toBe(true);
+  });
+
+  it('空のフロントマター(--- / ---)で始まる文書の本文が消えない', async () => {
+    await callTool('create_note', { path: NOTE, content: '---\n---\n## メモ\n\na\n' });
+    await callTool('append_to_daily_note', { text: '追記', source: 'S' });
+    expect(await rawNote()).toBe('---\n---\n## メモ\n\na\n\n14:30 [S] 追記\n');
+  });
+
+  it('箇条書きの text は直前のリストに続き、段落の text は空行で区切られる', async () => {
+    await callTool('create_note', { path: NOTE, content: '## メモ\n\n- 既存\n' });
+    await callTool('append_to_daily_note', { text: '- 項目', source: 'S' });
+    await callTool('append_to_daily_note', { text: '- [ ] 確認', source: 'S' });
+    await callTool('append_to_daily_note', { text: '段落', source: 'S' });
+    expect(await rawNote()).toBe(
+      '## メモ\n\n- 既存\n- 14:30 [S] 項目\n- [ ] 14:30 [S] 確認\n\n14:30 [S] 段落\n',
+    );
+  });
+
+  it('フロントマター(date など)がそのまま残る', async () => {
+    await callTool('create_note', {
+      path: NOTE,
+      content: '---\ndate: 2026-07-05\n# 手書きコメント\nmood: good\n---\n\n# 2026-07-05\n',
+    });
+    await callTool('append_to_daily_note', { text: '追記です' });
+    const raw = await rawNote();
+    expect(raw.startsWith('---\ndate: 2026-07-05\n# 手書きコメント\nmood: good\n')).toBe(true);
+    expect(raw.match(/^---$/gm)).toHaveLength(2);
+    const read = await callTool('read_note', { path: NOTE });
+    expect(read.structuredContent.frontmatter.mood).toBe('good');
+  });
+
+  it('本文が水平線とYAML風の行で始まっていてもフロントマターとして誤抽出されない', async () => {
+    const original = '---\ndate: 2026-07-05\n---\n---\nnote: これは本文\n---\n\n## メモ\n\nx\n';
+    await callTool('create_note', { path: NOTE, content: original });
+    await callTool('append_to_daily_note', { text: '追記です' });
+    expect(withoutUpdated(await rawNote())).toBe(
+      '---\ndate: 2026-07-05\n---\n---\nnote: これは本文\n---\n\n## メモ\n\nx\n\n14:30 追記です\n',
+    );
+  });
+
+  it('text が空白だけ・source に改行・heading が不正な場合はエラーになる', async () => {
+    expect((await callTool('append_to_daily_note', { text: '  \n ' })).isError).toBe(true);
+    expect((await callTool('append_to_daily_note', { text: 'a', source: 'x\ny' })).isError).toBe(true);
+    const bad = await callTool('append_to_daily_note', { text: 'a', heading: 'メモ' });
+    expect(bad.isError).toBe(true);
+    expect(bad.structuredContent.code).toBe('INVALID_HEADING');
+  });
+
+  it('create_daily_note は共通処理経由でも従来どおり作成・既存返却する', async () => {
+    const first = await callTool('create_daily_note', {});
+    expect(first.structuredContent).toEqual({ path: NOTE, created: true });
+    const second = await callTool('create_daily_note', {});
+    expect(second.structuredContent).toEqual({ path: NOTE, created: false });
   });
 });
 

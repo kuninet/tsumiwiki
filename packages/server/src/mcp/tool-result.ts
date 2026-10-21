@@ -10,3 +10,12 @@ export function toolResult(result: unknown) {
     structuredContent: shaped,
   };
 }
+
+// 構造化されたエラーを isError で返す(呼び出し側が code で分岐できるようにする)
+export function toolError(payload: Record<string, unknown>) {
+  return {
+    isError: true as const,
+    content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],
+    structuredContent: payload,
+  };
+}

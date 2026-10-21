@@ -222,6 +222,13 @@ function localIso(d = new Date()): string {
 // フロントマターブロック(開始〜終了フェンス)の抽出用
 const FM_BLOCK_RE = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/;
 
+// 先頭のフロントマターブロックを除いた本文を返す。composeContent と同じ FM_BLOCK_RE で判定する
+// (gray-matter とは閉じのない `---` や `...` 終端の扱いが異なるため、書き戻す経路ではこちらを使う)
+function bodyAfterFrontmatter(content: string): string {
+  const m = FM_BLOCK_RE.exec(content);
+  return m ? content.slice(m[0].length) : content;
+}
+
 const RESERVED_FM_KEYS = new Set(['tags', 'updated']);
 const DANGEROUS_FM_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -350,6 +357,9 @@ export class DocService {
     private readonly drafts: DraftService,
     private readonly logger?: Logger,
   ) {}
+
+  // appendDocMcp のパスごとの直列化キュー(末尾の Promise)。完了時に自分が末尾なら削除する
+  private readonly appendTails = new Map<string, Promise<unknown>>();
 
   // Gitコミット失敗はエラーにしない: ディスクが正本であり保存自体は完了している。
   // 未コミット差分は外部変更syncジョブ(設計06章6.4)が回収する
@@ -663,6 +673,54 @@ export class DocService {
       updatedAt: after.mtime.toISOString(),
       frontmatter: this.parseFrontmatterData(content),
     };
+  }
+
+  // MCPの追記系ツール(#288)用の保存。同一パスへの呼び出しは直列化し、ロック検査から
+  // 読み取り・書き込みまでを他の追記と交錯させない(同時追記が互いを上書きしないため)。
+  // 本文は保存側(composeContent)と同じ FM_BLOCK_RE で切り出して transform に渡し、
+  // 結果をそのまま本文として書き戻す(body 先頭の YAML 風ブロックは抽出しない)。
+  // UI編集ロック中は saveDocMcp と同じく DocLockedError で拒否する
+  async appendDocMcp(
+    relPath: string,
+    transform: (body: string) => string,
+    author: GitAuthor,
+  ): Promise<{ updatedAt: string }> {
+    const normalized = this.validateDocPath(relPath);
+    const prev = this.appendTails.get(normalized) ?? Promise.resolve();
+    const run = prev.then(() => this.appendLocked(normalized, transform, author));
+    const tail = run.catch(() => undefined);
+    this.appendTails.set(normalized, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.appendTails.get(normalized) === tail) this.appendTails.delete(normalized);
+    }
+  }
+
+  private async appendLocked(
+    normalized: string,
+    transform: (body: string) => string,
+    author: GitAuthor,
+  ): Promise<{ updatedAt: string }> {
+    const abs = resolveInLibrary(this.libraryPath, normalized);
+    const lock = this.locks.getActive(normalized);
+    if (lock) throw new DocLockedError(lock);
+
+    let current: string;
+    try {
+      current = await readFile(abs, 'utf8');
+    } catch {
+      throw new DocNotFoundError(normalized);
+    }
+
+    const body = transform(bodyAfterFrontmatter(current));
+    // 保存はLFに統一する(NFR-COMP-03。CRLF文書も保存時にLF化する)
+    const content = this.composeContent(current, body, undefined).replace(/\r\n/g, '\n');
+    await this.writeAtomic(abs, content);
+    await this.tryCommit([normalized], `edit: ${normalized}`, author);
+    await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
+    const after = await stat(abs);
+    return { updatedAt: after.mtime.toISOString() };
   }
 
   // フロントマターの再結合(外科的編集)。yamlのDocument APIで tags / updated / frontmatter
