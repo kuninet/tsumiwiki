@@ -27,9 +27,15 @@ export interface AppConfig {
   mcpAuth: McpAuthMode;
   // MCP_AUTH=none なのに MCP_TOKEN も設定されている(トークンは無視される)ことの警告用
   mcpTokenIgnored: boolean;
+  // MCPプロンプト work_log が読むレシピノートのパス(ライブラリ相対、NFC正規化済み)(issue #296)
+  mcpWorkLogRecipe: string;
 }
 
 export type McpAuthMode = 'token' | 'none';
+
+// work_log プロンプトのレシピノートの既定パス(issue #296)。
+// パスの妥当性は起動時には検査せず、読み込み時に docService.getDoc が検査する
+const DEFAULT_WORK_LOG_RECIPE = '作業ログの書き方.md';
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'];
 
@@ -130,6 +136,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     mcpToken,
     mcpAuth,
     mcpTokenIgnored,
+    mcpWorkLogRecipe: (env.MCP_WORK_LOG_RECIPE || DEFAULT_WORK_LOG_RECIPE).normalize('NFC'),
   };
 }
 

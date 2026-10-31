@@ -17,6 +17,21 @@ describe('loadConfig', () => {
     expect(config.attachmentMaxEdgePx).toBe(2048);
   });
 
+  it('MCP_WORK_LOG_RECIPEの既定値は「作業ログの書き方.md」で、空文字も既定値になる', () => {
+    expect(loadConfig({ LIBRARY_PATH: '/tmp/lib' }).mcpWorkLogRecipe).toBe('作業ログの書き方.md');
+    expect(
+      loadConfig({ LIBRARY_PATH: '/tmp/lib', MCP_WORK_LOG_RECIPE: '' }).mcpWorkLogRecipe,
+    ).toBe('作業ログの書き方.md');
+  });
+
+  it('MCP_WORK_LOG_RECIPEを指定でき、NFCに正規化される', () => {
+    const config = loadConfig({
+      LIBRARY_PATH: '/tmp/lib',
+      MCP_WORK_LOG_RECIPE: '運用/ロク\u3099.md',
+    });
+    expect(config.mcpWorkLogRecipe).toBe('運用/ログ.md');
+  });
+
   it('ATTACHMENT_MAX_EDGE_PXは0(無効)を指定できる', () => {
     const config = loadConfig({ LIBRARY_PATH: '/tmp/lib', ATTACHMENT_MAX_EDGE_PX: '0' });
     expect(config.attachmentMaxEdgePx).toBe(0);
