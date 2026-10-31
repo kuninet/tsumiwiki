@@ -1,4 +1,5 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { execSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -230,5 +231,41 @@ describe('レビュー指摘の回帰テスト', () => {
       `/api/history/content?path=${encodeURIComponent(other.json().path)}&rev=${history[2].rev}`,
     );
     expect(res.statusCode).toBe(404);
+  }, 30_000);
+});
+
+describe('pathspec マジックの無効化(#292)', () => {
+  // .obsidian 配下(保護パス)の秘密情報をコミットし、その前後の rev を返す
+  function commitSecret(): { before: string; secretRev: string } {
+    const before = execSync('git rev-parse HEAD', { cwd: lib }).toString().trim();
+    execSync(
+      'git add -f .obsidian/secret.json && git -c user.name=t -c user.email=t@t commit -qm obs',
+      { cwd: lib },
+    );
+    const secretRev = execSync('git rev-parse HEAD', { cwd: lib }).toString().trim();
+    return { before, secretRev };
+  }
+
+  beforeEach(async () => {
+    await mkdir(join(lib, '.obsidian'), { recursive: true });
+    await writeFile(join(lib, '.obsidian/secret.json'), '{"apiKey":"SECRET"}\n');
+  });
+
+  it('履歴一覧に :(glob)**/*.md を渡しても全ノートの履歴は返らない', async () => {
+    const res = await api('GET', `/api/history?path=${encodeURIComponent(':(glob)**/*.md')}`);
+    if (res.statusCode === 200) expect(res.json().history).toEqual([]);
+    else expect(res.statusCode).toBeGreaterThanOrEqual(400);
+  }, 20_000);
+
+  it('差分に :(exclude)x.md を渡しても保護パスの内容は返らない', async () => {
+    const { before, secretRev } = commitSecret();
+    for (const url of [
+      `/api/history/diff?path=${encodeURIComponent(':(exclude)x.md')}&rev=${before}`,
+      `/api/history/all/diff?path=${encodeURIComponent(':(exclude)x.md')}&rev=${secretRev}`,
+    ]) {
+      const res = await api('GET', url);
+      expect(res.body, url).not.toContain('SECRET');
+      if (res.statusCode === 200) expect(res.json().diff, url).toBe('');
+    }
   }, 30_000);
 });

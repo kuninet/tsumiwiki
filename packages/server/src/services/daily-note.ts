@@ -16,6 +16,22 @@ export class InvalidDailyNoteSettingsError extends Error {
   }
 }
 
+// 'YYYY-MM-DD' 文字列をローカルTZの 0:00:00 の Date に変換する(#189 / #292)。
+// 形式不正・実在しない暦日(2026-02-30 や 13月など)は null を返す。
+// REST(/by-date)と MCP(create_daily_note の date)で判定を共有する
+export function parseLocalDate(s: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const date = new Date(y, mo - 1, d);
+  // new Date は月日のオーバーフローを次の月/年へ繰り上げてしまうので、
+  // 構成後の年月日が入力と一致するかで実在する暦日かを検証する
+  if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d) return null;
+  return date;
+}
+
 // ファイル名パターンを指定日付で展開し、title/relPath を組み立てる。
 // パターンが空文字に展開される(=不正な設定)場合は null を返す
 export function resolveDailyNotePath(

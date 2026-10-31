@@ -75,4 +75,25 @@ export function registerReadTools(mcp: McpServer, app: FastifyInstance): void {
     },
     async () => asResult(await app.docService.getTree()),
   );
+
+  mcp.registerTool(
+    'get_backlinks',
+    {
+      title: 'バックリンク取得',
+      description:
+        '指定ノートへ [[リンク]] を張っているノートの一覧を取得する。リンク元ごとに行番号・前後の文脈を含む。' +
+        'limit はリンク元ノートの最大件数(既定200)で、超えた分は切り捨てられ truncated: true になる',
+      inputSchema: {
+        path: z.string().min(1).describe('リンク先ノートの相対パス(例: 日記/2026-08-16.md)'),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('リンク元ノートの最大件数(既定200)'),
+      },
+    },
+    async ({ path: docPath, limit }) =>
+      asResult(await app.docService.getBacklinks(docPath, limit ? { limit } : undefined)),
+  );
 }
