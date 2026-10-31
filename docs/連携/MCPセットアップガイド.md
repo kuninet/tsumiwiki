@@ -224,16 +224,24 @@ Read 7 種 + 履歴 4 種 + Write 9 種の計 20 個。全て `docService` / `qu
 |---|---|---|
 | `create_note` | `path: string`, `content: string` | 新規作成。既存パスならエラー(`.md` 必須) |
 | `save_note` | `path: string`, `body: string`, `baseUpdatedAt: string`, `tags?: string[]`, `frontmatter?: Record<string, unknown>` | 更新。`baseUpdatedAt` は `read_note` で得た値を渡す(競合検知)。`frontmatter` で独自項目の部分更新(null でキー削除)。戻り値に `updatedAt` と更新後 `frontmatter` を返す |
-| `update_frontmatter` | `path: string`, `frontmatter?: Record<string, unknown>`, `tags?: string[]`, `addTags?: string[]`, `removeTags?: string[]`, `baseUpdatedAt?: string` | 本文を送らずにフロントマターのプロパティとタグだけを更新する(本文は変わらない)。`frontmatter` は `save_note` と同じ部分マージ(null でキー削除、`tags` / `updated` は指定不可)。`tags` は全置き換え、`addTags` / `removeTags` はフロントマターの `tags` への追加・削除(本文中のインライン `#タグ` は対象外)。`frontmatter` / `tags` / `addTags` / `removeTags` のどれも無ければ `NOTHING_TO_UPDATE`、`tags` と `addTags` / `removeTags` の同時指定は `INVALID_ARGUMENTS`。`baseUpdatedAt` は指定したときだけ競合検知する。UI で編集中のノートには書けず `DOC_LOCKED`。戻り値は `updatedAt` / `frontmatter` / `tags` |
+| `update_frontmatter` | `path: string`, `frontmatter?: Record<string, unknown>`, `tags?: string[]`, `addTags?: string[]`, `removeTags?: string[]`, `baseUpdatedAt?: string` | 本文を送らずにフロントマターのプロパティとタグだけを更新する(本文は原則変わらない。例外は表の下の注意を参照)。`frontmatter` は `save_note` と同じ部分マージ(null でキー削除、`tags` / `updated` は指定不可)。`tags` は全置き換え、`addTags` / `removeTags` はフロントマターの `tags` への追加・削除(本文中のインライン `#タグ` は対象外)。`frontmatter` / `tags` / `addTags` / `removeTags` のどれも無ければ `NOTHING_TO_UPDATE`、`tags` と `addTags` / `removeTags` の同時指定は `INVALID_ARGUMENTS`。`baseUpdatedAt` は指定したときだけ競合検知する。UI で編集中のノートには書けず `DOC_LOCKED`。戻り値は `updatedAt` / `frontmatter` / `tags` |
 | `move_note` | `path: string`, `newFolder: string`, `newTitle: string` | リネーム / 移動 |
 | `create_folder` | `path: string` | フォルダを作成(途中のフォルダもまとめて作る)。空フォルダは Git 管理外 |
-| `move_folder` | `path: string`, `newPath: string` | フォルダの改名・移動(例: `議事録/2026` → `議事録/2026年度`)。配下のノートごと移動する。配下を UI で誰かが編集中なら拒否。移動先に同名フォルダがある場合や自分自身の配下への移動もエラー |
+| `move_folder` | `path: string`, `newPath: string` | フォルダの改名・移動(例: `議事録/2026` → `議事録/2026年度`)。配下のノートごと移動する。配下を UI で誰かが編集中なら拒否。移動先に同名フォルダがある場合や自分自身の配下への移動もエラー。`path` がファイルのときもエラー(ノートの移動は `move_note` を使う) |
 | `delete_note` | `path: string` | `.trash/` へ送る(完全削除ではない) |
 | `create_daily_note` | `date?: string (YYYY-MM-DD)` | ライブラリ設定 `dailyNotes.folder` / `template` / `filenamePattern` に基づき指定日(省略時は今日)の Daily Note を生成 or 既存を返す。実在しない日付・形式不正は `isError` かつ `structuredContent.code` が `INVALID_DATE` |
 | `append_to_daily_note` | `text: string`, `heading?: string`(既定 `## メモ`), `source?: string` | 今日のデイリーノートの指定見出しの節末尾に `HH:MM [source] text` を1件追記(なければノート・見出しごと作成)。本文全体の読み書きは不要。戻り値は `path` / `created` / `updatedAt`。箇条書きにしたいときは `text` を `- ` で始める。日付と時刻はサーバーのローカル時刻(`TZ` 環境変数)で決まる。UI で編集中のノートには書けず、`isError` かつ `structuredContent.code` が `DOC_LOCKED` になる |
 
 パスは常に **リポジトリルート相対の POSIX 形式**(`Projects/foo.md` など)。`..` / `.git/*` / `.trash/*` / 非 `.md` 拡張子は全て拒否される。
 
+- **`update_frontmatter` で本文やフロントマターの書式が変わる場合**: 本文は送り直さずにそのまま残しますが、次の場合はファイルの見た目が変わります。
+  - フロントマターがないノートにフロントマターを新設すると、閉じフェンス(`---`)と本文の間に空行が1行入る
+  - 改行コードが CRLF のノートは、保存時に LF にそろう
+  - フロントマターは YAML として読み直して書き戻すため、書式が変わることがある(例: `tags: [a, c]` が `tags: [ a, c ]` になる、`...` で閉じたフロントマターが `---` で閉じる形になる)。値そのものは変わらない
+  - `addTags` / `removeTags` は、今のタグを原文の表記のまま残す(`2026-01-01`・`true`・`1.0` などのタグも消えない)。`tags` の中にある入れ子の配列など、タグとして読めない要素は追加・削除の対象外とし、そのまま残す
+  - `tags` がなく単数形の `tag` だけがあるノートでは、`tag` を残したまま、そのタグを含めた `tags` を新しく書く
+  - フロントマターが壊れている(YAML の構文エラー、閉じフェンスがない、ルートがマップでない)ノートは、タグだけの指定でもエラーにして何も書き込まない
+- **`update_frontmatter` と `save_note` の同時実行**: `update_frontmatter` は `append_to_daily_note` とは順番に処理されますが、`save_note` とは同時に走りえます。その場合は後から書いたほうが残ります(先に書いた変更は消える)。`read_note` で得た `updatedAt` を `baseUpdatedAt` に渡すと、途中で変更されていれば競合エラーになるので安全です。
 - **`save_note` のフロントマター自動抽出**: `body` の先頭に YAML ヘッダー(`---`)が含まれる場合、二重化を防ぐため自動抽出されてフロントマターにマージされます。本文ヘッダー由来の空キー(`aliases:` など)はキー削除されず保持されます(明示的な `frontmatter` 引数で `key: null` を渡した場合はキー削除されます)。
 
 ---

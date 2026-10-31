@@ -3,7 +3,15 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import matter from 'gray-matter';
 import type { Logger } from 'pino';
-import { parseDocument as parseYamlDocument, stringify as yamlStringify } from 'yaml';
+import {
+  isAlias,
+  isNode,
+  isScalar,
+  isSeq,
+  parseDocument as parseYamlDocument,
+  stringify as yamlStringify,
+  YAMLSeq,
+} from 'yaml';
 import { REV_PATTERN } from '@tsumiwiki/shared';
 import type {
   BacklinksResponse,
@@ -23,7 +31,7 @@ import type { DraftService } from './draft-service.js';
 import type { GitAuthor, GitService } from './git-service.js';
 import type { IndexerService } from './indexer-service.js';
 import { DocLockedError, type LockService } from './lock-service.js';
-import { parseDocMeta } from './markdown-meta.js';
+import { normalizeTagName, parseDocMeta, splitTagString } from './markdown-meta.js';
 
 // 文書・フォルダ操作(FR-DOC / 設計03章)
 // - ファイル書き込みはアトミック(一時ファイル→rename。NFR-AVL-03)
@@ -227,6 +235,97 @@ const FM_BLOCK_RE = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/;
 function bodyAfterFrontmatter(content: string): string {
   const m = FM_BLOCK_RE.exec(content);
   return m ? content.slice(m[0].length) : content;
+}
+
+// タグの指定。配列は全置き換え、関数は「今のフロントマター tags → 新しい tags」の差分適用
+// (update_frontmatter の addTags / removeTags。#292)
+export type TagsUpdate = string[] | ((current: string[]) => string[]);
+
+type YamlDoc = ReturnType<typeof parseYamlDocument>;
+
+// tags 列の要素1個をタグとして読む。スカラーは原文の表記(`2026-01-01`・`true`・`1.0` 等)を
+// そのまま使い、null と空文字は undefined(捨てる)。入れ子の列・マップ等はタグとして扱わない
+function tagOfNode(item: unknown): string | undefined {
+  if (!isScalar(item) || item.value === null || item.value === undefined) return undefined;
+  const t = normalizeTagName(item.source ?? String(item.value));
+  return t || undefined;
+}
+
+// yaml Document 上の今の tags を読み、update の結果で書き戻す(#292)。
+// 読み取りと書き戻しを同じ Document で行い、パーサの解釈差でタグが消えないようにする。
+// - tags が無ければ単数キー tag を読む(書き戻し先は常に tags。tag はそのまま残す)
+// - 列の中の入れ子の列・マップ等は add/remove の対象外として元の位置に残す
+// - 既存のスカラー要素は元のノードを残すため、表記は原文のまま
+// - tags 直下の列はその場で書き換え、エイリアス・tag キー・文字列からは新しい列を作る
+//   (tags 直下の列にアンカーが付いていれば、参照側まで変わるためエラーにする)
+function applyTagsUpdateToDocument(doc: YamlDoc, update: (current: string[]) => string[]): void {
+  // 索引(parseDocMeta の `tags ?? tag`)と同じく、tags が無いか空値なら tag を読む
+  const isEmpty = (n: unknown) =>
+    n === undefined || n === null || (isScalar(n) && n.value === null);
+  const key = !isEmpty(doc.get('tags', true)) ? 'tags' : doc.has('tag') ? 'tag' : undefined;
+  const raw: unknown = key ? doc.get(key, true) : undefined;
+  const node: unknown = isAlias(raw) ? raw.resolve(doc) : raw;
+
+  let target: YAMLSeq | undefined;
+  let items: unknown[];
+  if (isEmpty(node)) {
+    items = [];
+  } else if (isSeq(node)) {
+    if (key === 'tags' && !isAlias(raw)) {
+      if (node.anchor) {
+        // 他のキーからエイリアスで参照されうる列は、書き換えると参照側まで変わるため触らない
+        throw new FrontmatterUpdateError(
+          'フロントマターの tags にアンカー(&)が付いているため、タグを追加・削除できません',
+        );
+      }
+      target = node;
+      items = [...node.items];
+    } else {
+      items = node.items.map((it) => (isNode(it) ? it.clone() : it));
+    }
+  } else if (isScalar(node)) {
+    items =
+      typeof node.value === 'string'
+        ? splitTagString(node.value).map((t) => doc.createNode(t))
+        : [node.clone()];
+  } else {
+    throw new FrontmatterUpdateError('フロントマターの tags をタグの並びとして解釈できません');
+  }
+
+  const current = items.map(tagOfNode).filter((t): t is string => t !== undefined);
+  const next = update(current).map(normalizeTagName).filter(Boolean);
+  const nextSet = new Set(next);
+  const present = new Set(current);
+  // スカラー要素は残すタグだけ元のノードのまま残し、タグとして読めない要素はそのまま残す
+  const kept = items.filter((it) => {
+    if (!isScalar(it)) return true;
+    const t = tagOfNode(it);
+    return t !== undefined && nextSet.has(t);
+  });
+  const added = [...nextSet].filter((t) => !present.has(t)).map((t) => doc.createNode(t));
+  const result = [...kept, ...added];
+
+  if (result.length === 0) {
+    doc.delete('tags');
+    return;
+  }
+  if (target) {
+    target.items = result;
+    return;
+  }
+  const seq = new YAMLSeq(doc.schema);
+  seq.items = result;
+  doc.set('tags', seq);
+}
+
+// MCP の直列化編集(追記・フロントマター更新)で、今の全文から決める書き戻し内容。
+// strictFrontmatter が true なら、フロントマターが壊れているときはタグだけの指定でも
+// FrontmatterUpdateError で拒否する(update_frontmatter 用。追記は従来どおり)
+interface McpEditPlan {
+  body: string;
+  tags?: TagsUpdate;
+  frontmatter?: Record<string, unknown>;
+  strictFrontmatter?: boolean;
 }
 
 const RESERVED_FM_KEYS = new Set(['tags', 'updated']);
@@ -709,24 +808,30 @@ export class DocService {
     author: GitAuthor,
   ): Promise<{ updatedAt: string; frontmatter: Record<string, unknown>; tags: string[] }> {
     const normalized = this.validateDocPath(relPath);
+    let tags: TagsUpdate | undefined = patch.tags;
+    if (tags === undefined && (patch.addTags?.length || patch.removeTags?.length)) {
+      // 今のタグは composeContent が書き戻しに使う yaml Document から読む(解釈差でタグを落とさない)
+      const add = (patch.addTags ?? []).map(normalizeTagName).filter(Boolean);
+      const remove = new Set((patch.removeTags ?? []).map(normalizeTagName));
+      tags = (current) => {
+        const next = [...current];
+        for (const t of add) {
+          if (!next.includes(t)) next.push(t);
+        }
+        return next.filter((t) => !remove.has(t));
+      };
+    }
     const { updatedAt, content } = await this.serializedMcpEdit(
       normalized,
       author,
       baseUpdatedAt,
-      (current) => {
-        let tags = patch.tags;
-        if (tags === undefined && (patch.addTags?.length || patch.removeTags?.length)) {
-          // composeContent の tags 正規化(trim・先頭#除去・NFC)と同じ形で比較する
-          const norm = (t: string) => t.trim().replace(/^#/, '').normalize('NFC');
-          const next = parseDocMeta(current).frontmatterTags;
-          for (const t of (patch.addTags ?? []).map(norm)) {
-            if (t && !next.includes(t)) next.push(t);
-          }
-          const remove = new Set((patch.removeTags ?? []).map(norm));
-          tags = next.filter((t) => !remove.has(t));
-        }
-        return { body: bodyAfterFrontmatter(current), tags, frontmatter: patch.frontmatter };
-      },
+      (current) => ({
+        body: bodyAfterFrontmatter(current),
+        tags,
+        frontmatter: patch.frontmatter,
+        // 壊れたフロントマターはタグだけの指定でもエラーにし、ファイルを書かない
+        strictFrontmatter: true,
+      }),
     );
     return {
       updatedAt,
@@ -740,11 +845,7 @@ export class DocService {
     normalized: string,
     author: GitAuthor,
     baseUpdatedAt: string | undefined,
-    plan: (current: string) => {
-      body: string;
-      tags?: string[];
-      frontmatter?: Record<string, unknown>;
-    },
+    plan: (current: string) => McpEditPlan,
   ): Promise<{ updatedAt: string; content: string }> {
     const prev = this.appendTails.get(normalized) ?? Promise.resolve();
     const run = prev.then(() => this.mcpEditLocked(normalized, author, baseUpdatedAt, plan));
@@ -763,11 +864,7 @@ export class DocService {
     normalized: string,
     author: GitAuthor,
     baseUpdatedAt: string | undefined,
-    plan: (current: string) => {
-      body: string;
-      tags?: string[];
-      frontmatter?: Record<string, unknown>;
-    },
+    plan: (current: string) => McpEditPlan,
   ): Promise<{ updatedAt: string; content: string }> {
     const abs = resolveInLibrary(this.libraryPath, normalized);
     const lock = this.locks.getActive(normalized);
@@ -788,9 +885,11 @@ export class DocService {
       );
     }
 
-    const { body, tags, frontmatter } = plan(current);
+    const { body, tags, frontmatter, strictFrontmatter } = plan(current);
     // 保存はLFに統一する(NFR-COMP-03。CRLF文書も保存時にLF化する)
-    const content = this.composeContent(current, body, tags, frontmatter).replace(/\r\n/g, '\n');
+    const content = this.composeContent(current, body, tags, frontmatter, undefined, {
+      strict: strictFrontmatter,
+    }).replace(/\r\n/g, '\n');
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `edit: ${normalized}`, author);
     await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
@@ -804,19 +903,32 @@ export class DocService {
   private composeContent(
     current: string,
     body: string,
-    tags: string[] | undefined,
+    tags: TagsUpdate | undefined,
     frontmatter?: Record<string, unknown>,
     bodyFrontmatter?: Record<string, unknown>,
+    options: { strict?: boolean } = {},
   ): string {
     const patch = validateFrontmatterPatch(frontmatter);
     const bodyPatch = validateFrontmatterPatch(bodyFrontmatter);
-    const normalizedTags = tags
-      ?.map((t) => t.trim().replace(/^#/, '').normalize('NFC'))
-      .filter(Boolean);
+    const tagsUpdater = typeof tags === 'function' ? tags : undefined;
+    const normalizedTags = Array.isArray(tags)
+      ? tags.map(normalizeTagName).filter(Boolean)
+      : undefined;
+    // strict(update_frontmatter)では、タグの指定だけでも壊れたフロントマターを拒否する
+    const rejectBroken =
+      (patch !== undefined && Object.keys(patch).length > 0) ||
+      (bodyPatch !== undefined && Object.keys(bodyPatch).length > 0) ||
+      (options.strict === true && tags !== undefined);
 
     const fmMatch = FM_BLOCK_RE.exec(current);
     if (!fmMatch) {
       // 元々フロントマターがない文書
+      if (options.strict && /^---\r?\n/.test(body)) {
+        // 未終端フロントマター等、解釈の割れる文書には何も書かない(タグだけの指定でも拒否)
+        throw new FrontmatterUpdateError(
+          'フロントマターの解析に失敗しました(未終端または不正な形式)',
+        );
+      }
       // body 先頭ヘッダー由来のプロパティは空値(null)も含めて保持する
       const fmObj: Record<string, unknown> = {};
       if (bodyPatch) {
@@ -835,7 +947,8 @@ export class DocService {
         }
       }
 
-      const hasTags = normalizedTags !== undefined && normalizedTags.length > 0;
+      const newTags = normalizedTags ?? tagsUpdater?.([]).map(normalizeTagName).filter(Boolean);
+      const hasTags = newTags !== undefined && newTags.length > 0;
       const hasProps = Object.keys(fmObj).length > 0;
 
       if (!hasTags && !hasProps) {
@@ -844,10 +957,7 @@ export class DocService {
 
       if (/^---\r?\n/.test(body)) {
         // 未終端フロントマター等、解釈の割れる文書にはFMを追加しない(二重化防止)
-        if (
-          (patch !== undefined && Object.keys(patch).length > 0) ||
-          (bodyPatch !== undefined && Object.keys(bodyPatch).length > 0)
-        ) {
+        if (rejectBroken) {
           throw new FrontmatterUpdateError('フロントマターの解析に失敗しました(未終端または不正な形式)');
         }
         this.logger?.warn('フロントマターの構造が不明なためタグ更新をスキップしました');
@@ -855,7 +965,7 @@ export class DocService {
       }
 
       if (hasTags) {
-        fmObj.tags = normalizedTags;
+        fmObj.tags = newTags;
       }
       fmObj.updated = localIso();
       const fm = yamlStringify(fmObj);
@@ -865,10 +975,7 @@ export class DocService {
     const doc = parseYamlDocument(fmMatch[1]);
     if (doc.errors.length > 0) {
       // 壊れたフロントマター
-      if (
-        (patch !== undefined && Object.keys(patch).length > 0) ||
-        (bodyPatch !== undefined && Object.keys(bodyPatch).length > 0)
-      ) {
+      if (rejectBroken) {
         throw new FrontmatterUpdateError('フロントマターの解析に失敗しました(構文エラー)');
       }
       this.logger?.warn(
@@ -884,7 +991,9 @@ export class DocService {
     if (!json || typeof json !== 'object' || Array.isArray(json)) {
       if (
         (patch !== undefined && Object.keys(patch).length > 0) ||
-        (bodyPatch !== undefined && Object.keys(bodyPatch).length > 0)
+        (bodyPatch !== undefined && Object.keys(bodyPatch).length > 0) ||
+        // strict でも、中身が空のフロントマター(json が null)にはタグを足せるようにする
+        (options.strict === true && tags !== undefined && json !== null && json !== undefined)
       ) {
         throw new FrontmatterUpdateError('フロントマターのルートがマップ(オブジェクト)ではありません');
       }
@@ -920,6 +1029,8 @@ export class DocService {
     if (normalizedTags !== undefined) {
       if (normalizedTags.length > 0) doc.set('tags', normalizedTags);
       else doc.delete('tags');
+    } else if (tagsUpdater) {
+      applyTagsUpdateToDocument(doc, tagsUpdater);
     }
     doc.set('updated', localIso());
     return `---\n${doc.toString()}---\n${body}`;
@@ -1710,7 +1821,9 @@ export class DocService {
     }
     const oldAbs = resolveInLibrary(this.libraryPath, oldNorm);
     const newAbs = resolveInLibrary(this.libraryPath, newNorm);
-    if (!(await this.exists(oldAbs))) {
+    // 移動元はフォルダに限る(ファイルを渡すと拡張子の検査を通らずに改名できてしまうため)。
+    // ファイルは「その名前のフォルダは無い」として扱う
+    if (!(await this.isDirectory(oldAbs))) {
       throw new DocNotFoundError(oldNorm);
     }
     const caseOnly = newNorm.toLowerCase() === oldNorm.toLowerCase();
@@ -1769,6 +1882,14 @@ export class DocService {
     try {
       await stat(abs);
       return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async isDirectory(abs: string): Promise<boolean> {
+    try {
+      return (await stat(abs)).isDirectory();
     } catch {
       return false;
     }

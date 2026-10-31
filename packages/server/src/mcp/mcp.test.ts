@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execSync } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1346,6 +1347,37 @@ describe('フォルダ・バックリンク・履歴ツール', () => {
     const badLimit = await callTool('list_library_history', { limit: 0 });
     expect(badLimit.isError).toBe(true);
   }, 30_000);
+
+  it('move_folder にファイルを渡すとエラーになり、ファイルは動かない', async () => {
+    await callTool('create_note', { path: 'file.md', content: '# x\n' });
+    const r = await callTool('move_folder', { path: 'file.md', newPath: 'renamed.txt' });
+    expect(r.isError).toBe(true);
+    expect(await readFile(join(lib, 'file.md'), 'utf8')).toBe('# x\n');
+    await expect(readFile(join(lib, 'renamed.txt'), 'utf8')).rejects.toThrow();
+  });
+
+  it('履歴ツールのパスに git の pathspec マジックを渡しても、保護パスや他ノートの履歴は返らない', async () => {
+    await callTool('create_note', { path: 'x.md', content: 'x\n' });
+    const first = execSync('git rev-list --max-parents=0 HEAD', { cwd: lib }).toString().trim();
+    await mkdir(join(lib, '.obsidian'), { recursive: true });
+    await writeFile(join(lib, '.obsidian/secret.json'), '{"apiKey":"SECRET"}\n');
+    execSync(
+      'git add -f .obsidian/secret.json && git -c user.name=t -c user.email=t@t commit -qm obs',
+      { cwd: lib },
+    );
+    await callTool('create_note', { path: 'y.md', content: 'y\n' });
+
+    const diff = await callTool('get_history_diff', { path: ':(exclude)x.md', rev: first });
+    expect(JSON.stringify(diff)).not.toContain('SECRET');
+    if (!diff.isError) expect(diff.structuredContent.diff).toBe('');
+
+    const hist = await callTool('get_history', { path: ':(glob)**/*.md' });
+    if (!hist.isError) expect(hist.structuredContent.history).toEqual([]);
+
+    // 通常のパスでは従来どおり取れる
+    const normal = await callTool('get_history', { path: 'y.md' });
+    expect(normal.structuredContent.history).toHaveLength(1);
+  }, 30_000);
 });
 
 describe('update_frontmatter', () => {
@@ -1505,6 +1537,88 @@ describe('update_frontmatter', () => {
   it('存在しないノートはエラー', async () => {
     const r = await callTool('update_frontmatter', { path: 'none.md', frontmatter: { a: 1 } });
     expect(r.isError).toBe(true);
+  });
+
+  // 書き込んだ原文に対して update_frontmatter を呼び、結果とファイルの全文を返す
+  async function updateRaw(p: string, raw: string, args: Record<string, unknown>) {
+    await writeFile(join(lib, p), raw);
+    const r = await callTool('update_frontmatter', { path: p, ...args });
+    return { r, after: await readFile(join(lib, p), 'utf8') };
+  }
+
+  it('addTags で既存のタグを落とさない(... 終端・日付風・真偽値と小数・入れ子の列)', async () => {
+    const cases: Array<[string, string, string]> = [
+      ['dots.md', '---\ntags: [a]\n...\n本文\n', 'tags: [ a, b ]'],
+      ['date.md', '---\ntags: [2026-01-01, x]\n---\n本文\n', 'tags: [ 2026-01-01, x, b ]'],
+      // null はタグではないので捨てる。true・1.0 は原文の表記のまま残す
+      ['scalar.md', '---\ntags: [a, true, null, 1.0]\n---\n本文\n', 'tags: [ a, true, 1.0, b ]'],
+      // 入れ子の列はタグとして扱わず、元の位置にそのまま残す
+      ['nested.md', '---\ntags: [[x, y], z]\n---\n本文\n', 'tags: [ [ x, y ], z, b ]'],
+    ];
+    for (const [p, raw, tagsLine] of cases) {
+      const { r, after } = await updateRaw(p, raw, { addTags: ['b'] });
+      expect(r.isError, p).toBeFalsy();
+      expect(after.split('\n')[1], p).toBe(tagsLine);
+      expect(after.startsWith('---\n'), p).toBe(true);
+      expect(after.endsWith('\n---\n本文\n'), p).toBe(true);
+    }
+  });
+
+  it('removeTags でも、消さないタグは原文の表記のまま残る', async () => {
+    const raw = '---\ntags: [a, true, 1.0, 2026-01-01, [x, y]]\n---\n本文\n';
+    const { r, after } = await updateRaw('rm.md', raw, { removeTags: ['a', '#true'] });
+    expect(r.isError).toBeFalsy();
+    expect(after.split('\n')[1]).toBe('tags: [ 1.0, 2026-01-01, [ x, y ] ]');
+  });
+
+  it('tags がエイリアスでも addTags が効き、アンカー側は変わらない', async () => {
+    const raw = '---\nbase: &b [a, c]\ntags: *b\n---\n本文\n';
+    const { r, after } = await updateRaw('alias.md', raw, { addTags: ['d'] });
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent.tags).toEqual(['a', 'c', 'd']);
+    expect(r.structuredContent.frontmatter.base).toEqual(['a', 'c']);
+    expect(after.endsWith('---\n本文\n')).toBe(true);
+  });
+
+  it('単数キー tag のノートに addTags すると、tag は残したまま tags に今のタグと合わせて書く', async () => {
+    const { r, after } = await updateRaw('single.md', '---\ntag: foo\n---\n本文\n', {
+      addTags: ['bar'],
+    });
+    expect(r.isError).toBeFalsy();
+    expect(after).toContain('tag: foo\ntags:\n  - foo\n  - bar\n');
+    expect(r.structuredContent.frontmatter.tag).toBe('foo');
+    expect(r.structuredContent.tags).toEqual(['foo', 'bar']);
+  });
+
+  it('tags がマップやアンカー付きの列なら addTags はエラーになり、ファイルは変わらない', async () => {
+    for (const [p, raw] of [
+      ['map.md', '---\ntags: {a: 1}\n---\n本文\n'],
+      ['anchor.md', '---\ntags: &t [a]\nx: *t\n---\n本文\n'],
+    ] as const) {
+      const { r, after } = await updateRaw(p, raw, { addTags: ['b'] });
+      expect(r.isError, p).toBe(true);
+      expect(after, p).toBe(raw);
+    }
+  });
+
+  it('フロントマターが壊れていると、タグだけの指定でもエラーになりファイルは1バイトも変わらない', async () => {
+    const cases: Array<[string, string, Record<string, unknown>]> = [
+      // 閉じフェンスの後に本文の水平線があるケース(以前はフロントマターが丸ごと消えた)
+      ['broken1.md', '---\ntags: [a\n---\n---\n本文\n', { addTags: ['b'] }],
+      // 以前は成功扱いのまま本文先頭の空行が消えた
+      ['broken2.md', '---\ntags: [a\n---\n\n本文\n', { addTags: ['b'] }],
+      ['broken3.md', '---\ntags: [a\n---\n\n本文\n', { removeTags: ['a'] }],
+      ['broken4.md', '---\ntags: [a\n---\n\n本文\n', { tags: ['z'] }],
+      // 閉じフェンスの無いフロントマター
+      ['unterminated.md', '---\ntags: [a]\n本文\n', { addTags: ['b'] }],
+    ];
+    for (const [p, raw, args] of cases) {
+      await writeFile(join(lib, p), raw);
+      const before = await readFile(join(lib, p));
+      const r = await callTool('update_frontmatter', { path: p, ...args });
+      expect(r.isError, p).toBe(true);
+      expect((await readFile(join(lib, p))).equals(before), p).toBe(true);
+    }
   });
 
   it('append_to_daily_note と同時に呼んでも両方の変更が残る', async () => {

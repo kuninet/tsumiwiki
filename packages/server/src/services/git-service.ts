@@ -41,6 +41,15 @@ export class GitService {
     return this.gitInstance;
   }
 
+  // パス(pathspec)を渡す git 呼び出しはすべてここを通す。--literal-pathspecs で
+  // `:(exclude)x.md`・`:(glob)**/*.md`・`*` 等のマジック・ワイルドカードを無効にし、
+  // 渡したパスそのものだけに絞る(保護パスや他ノートの内容が漏れないように。#292)。
+  // 環境変数 GIT_LITERAL_PATHSPECS は、simple-git の env() が継承環境を丸ごと置き換え、
+  // process.env を引き継ぐと GIT_ASKPASS 等が unsafe 判定で拒否されるため使わない
+  private literalPathRaw(args: string[]): Promise<string> {
+    return this.git.raw(['--literal-pathspecs', ...args]);
+  }
+
   // push専用インスタンス: 無応答リモート(ネットワーク障害等)で保存系の
   // キューを塞がないよう、出力停止60秒でプロセスを打ち切る
   private pushGitInstance: SimpleGit | null = null;
@@ -103,7 +112,7 @@ export class GitService {
   // 指定パスの変更をコミットする(保存・作成・添付追加等。設計06章6.2)
   async commit(paths: string[], message: string, author: GitAuthor): Promise<void> {
     await this.queue.run(async () => {
-      await this.git.add(paths);
+      await this.literalPathRaw(['add', '--', ...paths]);
       await this.commitStaged(message, author);
     });
   }
@@ -132,7 +141,7 @@ export class GitService {
   // 履歴に混入する既知の症状があるため付けない。代償としてリネーム後の文書は
   // リネーム前の履歴が途切れる(現状のリネーム機能自体があまり使われない前提での判断。#66)
   async history(relPath: string): Promise<HistoryEntry[]> {
-    const out = await this.git.raw([
+    const out = await this.literalPathRaw([
       'log',
       '--pretty=format:%H%x09%an%x09%aI%x09%s',
       '--',
@@ -216,7 +225,7 @@ export class GitService {
 
   // 指定パスに触れた直近のコミット(--followしない。ごみ箱の由来特定用)
   async lastCommitFor(relPath: string): Promise<HistoryEntry | null> {
-    const out = await this.git.raw([
+    const out = await this.literalPathRaw([
       'log',
       '-1',
       '--pretty=format:%H%x09%an%x09%aI%x09%s',
@@ -231,12 +240,14 @@ export class GitService {
 
   // 過去版の内容(FR-HIST-03)
   async contentAt(rev: string, relPath: string): Promise<string> {
-    return this.git.show([`${rev}:${relPath}`]);
+    // `rev:path` は pathspec ではなくツリー内のパス指定(マジックは効かない)。
+    // 呼び出し側で rev は REV_PATTERN、path は validateDocPath を通している
+    return this.literalPathRaw(['show', `${rev}:${relPath}`]);
   }
 
   // 2版間の差分(unified形式。FR-HIST-03)
   async diff(revA: string, revB: string, relPath: string): Promise<string> {
-    return this.git.diff([revA, revB, '--', relPath]);
+    return this.literalPathRaw(['diff', revA, revB, '--', relPath]);
   }
 
   // 未コミットの外部変更があるか(FR-DOC-08 / 設計06章6.4)

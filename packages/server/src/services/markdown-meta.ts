@@ -29,16 +29,28 @@ export interface DocMeta {
 // タグに使える文字: Unicode文字・数字・アンダースコア・ハイフン・スラッシュ(階層)
 const INLINE_TAG_RE = /(^|[\s(])#([\p{L}\p{N}_/-]+)/gmu;
 
+// フロントマターのタグ1個の正規化(前後空白・先頭の # を除き、NFC に揃える)。
+// 索引(parseDocMeta)と保存側(DocService.composeContent・update_frontmatter)が
+// 同じ形で比較できるよう、タグの正規化はこの関数に集約する
+export function normalizeTagName(tag: string): string {
+  return tag.trim().replace(/^#/, '').normalize('NFC');
+}
+
+// カンマ・空白区切りの tags 文字列(`tags: a, b`)をタグの列に分ける
+export function splitTagString(value: string): string[] {
+  return value.split(/[,\s]+/);
+}
+
 // フロントマターのtagsを配列に正規化(配列 / カンマ区切り文字列 / 単一文字列を許容)
 function normalizeFrontmatterTags(value: unknown): string[] {
   const raw: unknown[] = Array.isArray(value)
     ? value
     : typeof value === 'string'
-      ? value.split(/[,\s]+/)
+      ? splitTagString(value)
       : [];
   return raw
     .filter((t): t is string | number => typeof t === 'string' || typeof t === 'number')
-    .map((t) => String(t).trim().replace(/^#/, '').normalize('NFC'))
+    .map((t) => normalizeTagName(String(t)))
     .filter((t) => t.length > 0);
 }
 
