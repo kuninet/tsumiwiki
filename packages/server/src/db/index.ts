@@ -116,6 +116,21 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_doc_links_target_key ON doc_links(target_key);
   UPDATE doc_index SET size = -1;
   `,
+  // v5: フロントマターのプロパティ索引(issue #293)。
+  // MCP の find_notes_by_property / list_properties で使う。tags / tag は doc_tags 側で扱うため入れない。
+  // 既存DBの全文書を次のscanAllで再スキャンさせるためsize = -1に更新する
+  `
+  CREATE TABLE doc_props (
+    doc_path TEXT NOT NULL,     -- doc_index.doc_path と同じ(NFC・/区切り)
+    key      TEXT NOT NULL,     -- プロパティ名(NFC)
+    seq      INTEGER NOT NULL,  -- 配列なら要素の順番(0始まり)、スカラーは 0
+    value    TEXT,              -- 比較用の文字列表現。null と object は NULL
+    type     TEXT NOT NULL CHECK (type IN ('string','number','boolean','date','null','object')),
+    PRIMARY KEY (doc_path, key, seq)
+  );
+  CREATE INDEX idx_doc_props_key_value ON doc_props(key, value);
+  UPDATE doc_index SET size = -1;
+  `,
 ];
 
 // 現在のスキーマバージョン(テスト・診断用)

@@ -56,7 +56,7 @@ curl -i -X POST http://localhost:3000/mcp
 # WWW-Authenticate: Bearer realm="tsumiwiki-mcp"
 ```
 
-正しいトークンで `tools/list` を叩き、20 個のツールが返ることを確認:
+正しいトークンで `tools/list` を叩き、22 個のツールが返ることを確認:
 
 ```bash
 export MCP_TOKEN=<設定したトークン>
@@ -191,7 +191,7 @@ Claude Desktop は `headers` を省く:
 
 ## 5. 公開ツール一覧
 
-Read 7 種 + 履歴 4 種 + Write 9 種の計 20 個。全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。
+Read 9 種 + 履歴 4 種 + Write 9 種の計 22 個。全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。
 
 ### Read
 
@@ -202,6 +202,8 @@ Read 7 種 + 履歴 4 種 + Write 9 種の計 20 個。全て `docService` / `qu
 | `list_recent` | `limit?: number (1-200, 既定 20)` | 最近更新されたノート一覧 |
 | `list_tags` | (なし) | 全タグと件数 |
 | `get_docs_by_tags` | `tags: string[] (非空)` | 指定タグを **全て** 持つノート(AND) |
+| `find_notes_by_property` | `key: string`, `value?: string \| number \| boolean`, `limit?: number (1-200, 既定 50)` | フロントマターのプロパティでノートを探す。`value` を省略するとそのキーを持つノートすべて。配列のプロパティは要素のどれかが一致すれば該当。数値は `1` でも `"1"` でもよく、日付は `YYYY-MM-DD` で指定する。各ノートの `values` にそのキーの値(配列は全要素)が入る。`tags` / `tag` は `USE_TAG_TOOL` エラーになるので `get_docs_by_tags` を使う |
+| `list_properties` | (なし) | ライブラリで使われているプロパティ名(`tags` は除く)と、件数・型・よく使われる値(上位 10 件)。`find_notes_by_property` の前に、どのキー・値があるか調べるのに使う |
 | `get_tree` | (なし) | フォルダツリー + 全ノートのサマリ |
 | `get_backlinks` | `path: string`, `limit?: number` | 指定ノートへ `[[リンク]]` を張っているノートの一覧(リンク元ごとに行番号・前後の文脈つき)。`limit` はリンク元ノートの最大件数(既定 200)で、超えると `truncated: true` |
 
@@ -315,4 +317,3 @@ MCP 経由の書き込みは Git コミット author が固定で `MCP Agent <mc
 - 複数トークン管理(PAT テーブル + 発行 UI + ローテーション自動化)
 - MCP Resources / Prompts(現状は Tools のみ)
 - Rate limit
-- プロパティ(フロントマター)での検索(#293)

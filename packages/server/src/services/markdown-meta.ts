@@ -19,8 +19,19 @@ export interface ExtractedLink {
   context: string;
 }
 
+export type PropType = 'string' | 'number' | 'boolean' | 'date' | 'null' | 'object';
+
+// フロントマターのプロパティ1件(doc_props の1行に対応)
+export interface ExtractedProp {
+  key: string;
+  seq: number; // 配列なら要素の順番(0始まり)、スカラーは 0
+  value: string | null; // 比較用の文字列表現。null と object は null
+  type: PropType;
+}
+
 export interface DocMeta {
   frontmatterTags: string[];
+  properties: ExtractedProp[];
   inlineTags: string[];
   links: ExtractedLink[];
   body: string; // フロントマターを除いた本文(FTS用)
@@ -197,21 +208,72 @@ export function extractDocLinks(body: string): ExtractedLink[] {
   return links;
 }
 
+// 索引に入れないキー(タグは doc_tags 側で扱う)
+const EXCLUDED_PROP_KEYS = new Set(['tags', 'tag']);
+
+// プロパティ値1つを「比較用の文字列表現 + 型」へ変換する。
+// 索引への書き込みと検索時の値の正規化の両方で使い、判定を1か所に持つ。
+// - Date(gray-matter は 2026-10-31 を Date にする)は UTC の時刻部分が 0 なら YYYY-MM-DD、
+//   そうでなければ ISO 文字列
+// - 配列・オブジェクトは呼び出し側で扱う('object' を返す)
+export function toPropValue(v: unknown): { value: string | null; type: PropType } {
+  if (v === null || v === undefined) return { value: null, type: 'null' };
+  if (typeof v === 'string') return { value: v.normalize('NFC'), type: 'string' };
+  if (typeof v === 'number') return { value: String(v), type: 'number' };
+  if (typeof v === 'boolean') return { value: v ? 'true' : 'false', type: 'boolean' };
+  if (v instanceof Date) {
+    // 不正な日付は toISOString が例外になるため、値なし扱いにして索引処理を止めない
+    if (Number.isNaN(v.getTime())) return { value: null, type: 'null' };
+    const iso = v.toISOString();
+    const isMidnight =
+      v.getUTCHours() === 0 &&
+      v.getUTCMinutes() === 0 &&
+      v.getUTCSeconds() === 0 &&
+      v.getUTCMilliseconds() === 0;
+    return { value: isMidnight ? iso.slice(0, 10) : iso, type: 'date' };
+  }
+  return { value: null, type: 'object' };
+}
+
+// gray-matter の data からプロパティ行を作る。配列は要素ごとに seq 0,1,2…(空配列は行なし)
+function extractProperties(data: Record<string, unknown>): ExtractedProp[] {
+  const props: ExtractedProp[] = [];
+  const seenKeys = new Set<string>();
+  for (const [rawKey, raw] of Object.entries(data)) {
+    const key = rawKey.normalize('NFC');
+    if (key === '' || EXCLUDED_PROP_KEYS.has(key)) continue;
+    // NFC正規化で同じキーになる別表記は先勝ち(主キー衝突で文書全体が索引不能になるのを防ぐ)
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    if (Array.isArray(raw)) {
+      raw.forEach((item, seq) => {
+        // 入れ子の配列は toPropValue で 'object' になる
+        props.push({ key, seq, ...toPropValue(item) });
+      });
+    } else {
+      props.push({ key, seq: 0, ...toPropValue(raw) });
+    }
+  }
+  return props;
+}
+
 export function parseDocMeta(content: string): DocMeta {
   let body = content;
   let frontmatterTags: string[] = [];
+  let properties: ExtractedProp[] = [];
   try {
     const parsed = matter(content);
     body = parsed.content;
-    frontmatterTags = normalizeFrontmatterTags(
-      (parsed.data as Record<string, unknown>).tags ?? (parsed.data as Record<string, unknown>).tag,
-    );
+    const data = parsed.data as Record<string, unknown>;
+    frontmatterTags = normalizeFrontmatterTags(data.tags ?? data.tag);
+    properties = extractProperties(data);
   } catch {
     // 壊れたフロントマターはタグなし扱いとし、フェンス部分を除いた本文を索引する(寛容パース)
     body = stripBrokenFrontmatter(content);
   }
   return {
     frontmatterTags,
+    properties,
     inlineTags: extractInlineTags(body),
     links: extractDocLinks(body),
     body,
