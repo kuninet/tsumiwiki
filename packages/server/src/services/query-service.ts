@@ -276,17 +276,21 @@ export class QueryService {
     const keys = this.db
       .prepare(
         `SELECT key, COUNT(DISTINCT doc_path) AS count
-         FROM doc_props GROUP BY key
+         FROM doc_props
+         WHERE doc_path IN (SELECT doc_path FROM doc_index)
+         GROUP BY key
          ORDER BY count DESC, key`,
       )
       .all() as { key: string; count: number }[];
     const typesStmt = this.db.prepare(
-      'SELECT DISTINCT type FROM doc_props WHERE key = ? ORDER BY type',
+      `SELECT DISTINCT type FROM doc_props
+       WHERE key = ? AND doc_path IN (SELECT doc_path FROM doc_index) ORDER BY type`,
     );
     // 値ごとの件数も、同一文書内で同じ値が複数回出ても1件と数える
     const topStmt = this.db.prepare(
       `SELECT value, COUNT(DISTINCT doc_path) AS count
-       FROM doc_props WHERE key = ? AND value IS NOT NULL
+       FROM doc_props
+       WHERE key = ? AND value IS NOT NULL AND doc_path IN (SELECT doc_path FROM doc_index)
        GROUP BY value
        ORDER BY count DESC, value
        LIMIT 10`,

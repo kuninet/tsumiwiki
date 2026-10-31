@@ -215,6 +215,11 @@ describe('parseDocMeta: フロントマターのプロパティ抽出', () => {
     expect(props('"": x\nk: v')).toEqual([{ key: 'k', seq: 0, value: 'v', type: 'string' }]);
   });
 
+  it('フロントマターがマッピングでない(文字列・配列)なら空配列', () => {
+    expect(parseDocMeta('---\nfoo\n---\n本文').properties).toEqual([]);
+    expect(parseDocMeta('---\n- a\n- b\n---\n本文').properties).toEqual([]);
+  });
+
   it('フロントマターが無ければ空配列', () => {
     expect(parseDocMeta('本文のみ').properties).toEqual([]);
   });

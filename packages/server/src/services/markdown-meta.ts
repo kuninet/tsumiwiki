@@ -209,7 +209,7 @@ export function extractDocLinks(body: string): ExtractedLink[] {
 }
 
 // 索引に入れないキー(タグは doc_tags 側で扱う)
-const EXCLUDED_PROP_KEYS = new Set(['tags', 'tag']);
+export const EXCLUDED_PROP_KEYS = new Set(['tags', 'tag']);
 
 // プロパティ値1つを「比較用の文字列表現 + 型」へ変換する。
 // 索引への書き込みと検索時の値の正規化の両方で使い、判定を1か所に持つ。
@@ -236,10 +236,12 @@ export function toPropValue(v: unknown): { value: string | null; type: PropType 
 }
 
 // gray-matter の data からプロパティ行を作る。配列は要素ごとに seq 0,1,2…(空配列は行なし)
-function extractProperties(data: Record<string, unknown>): ExtractedProp[] {
+function extractProperties(data: unknown): ExtractedProp[] {
+  // フロントマターがマッピングでない場合(文字列・配列など)はプロパティなし
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return [];
   const props: ExtractedProp[] = [];
   const seenKeys = new Set<string>();
-  for (const [rawKey, raw] of Object.entries(data)) {
+  for (const [rawKey, raw] of Object.entries(data as Record<string, unknown>)) {
     const key = rawKey.normalize('NFC');
     if (key === '' || EXCLUDED_PROP_KEYS.has(key)) continue;
     // NFC正規化で同じキーになる別表記は先勝ち(主キー衝突で文書全体が索引不能になるのを防ぐ)

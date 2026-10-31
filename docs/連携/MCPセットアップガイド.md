@@ -202,7 +202,7 @@ Read 9 種 + 履歴 4 種 + Write 9 種の計 22 個。全て `docService` / `qu
 | `list_recent` | `limit?: number (1-200, 既定 20)` | 最近更新されたノート一覧 |
 | `list_tags` | (なし) | 全タグと件数 |
 | `get_docs_by_tags` | `tags: string[] (非空)` | 指定タグを **全て** 持つノート(AND) |
-| `find_notes_by_property` | `key: string`, `value?: string \| number \| boolean`, `limit?: number (1-200, 既定 50)` | フロントマターのプロパティでノートを探す。`value` を省略するとそのキーを持つノートすべて。配列のプロパティは要素のどれかが一致すれば該当。数値は `1` でも `"1"` でもよく、日付は `YYYY-MM-DD` で指定する。各ノートの `values` にそのキーの値(配列は全要素)が入る。`tags` / `tag` は `USE_TAG_TOOL` エラーになるので `get_docs_by_tags` を使う |
+| `find_notes_by_property` | `key: string`, `value?: string \| number \| boolean`, `limit?: number (1-200, 既定 50)` | フロントマターのプロパティでノートを探す。`value` を省略するとそのキーを持つノートすべて。配列のプロパティは要素のどれかが一致すれば該当。数値は `1` でも `"1"` でもよく、日付は `YYYY-MM-DD` で指定する。各ノートの `values` にそのキーの値(配列は全要素)が入る。`tags` / `tag` は `USE_TAG_TOOL` エラーになるので `get_docs_by_tags` を使う。比較の注意: 時刻つきの日時は UTC の ISO 文字列で比較する / 小数は JS の数値表現で比較する(`1.0` は `1`) / 真偽値と文字列の `"true"` は一致する |
 | `list_properties` | (なし) | ライブラリで使われているプロパティ名(`tags` は除く)と、件数・型・よく使われる値(上位 10 件)。`find_notes_by_property` の前に、どのキー・値があるか調べるのに使う |
 | `get_tree` | (なし) | フォルダツリー + 全ノートのサマリ |
 | `get_backlinks` | `path: string`, `limit?: number` | 指定ノートへ `[[リンク]]` を張っているノートの一覧(リンク元ごとに行番号・前後の文脈つき)。`limit` はリンク元ノートの最大件数(既定 200)で、超えると `truncated: true` |

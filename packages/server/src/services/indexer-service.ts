@@ -238,6 +238,15 @@ export class IndexerService {
     this.db.transaction(() => this.writeRow(row))();
   }
 
+  // 索引テーブルを全削除する(reindex --full 用。この後に scanAll で再構築する)。
+  // 文書由来のテーブルを足したら、ここにも足すこと
+  clearIndex(): void {
+    this.db.exec(
+      `DELETE FROM doc_index; DELETE FROM doc_tags; DELETE FROM doc_fts;
+       DELETE FROM doc_links; DELETE FROM doc_props; DELETE FROM attachment_index;`,
+    );
+  }
+
   // 文書をインデックスから除去する(削除・ごみ箱移動時)
   removeFile(relPath: string): void {
     const normalized = normalizeRelPath(relPath);

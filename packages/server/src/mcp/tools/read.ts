@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { EXCLUDED_PROP_KEYS } from '../../services/markdown-meta.js';
 import { toolError, toolResult as asResult } from '../tool-result.js';
 
 // 読み取り系ツール(issue #190)。queryService / docServiceを経由し生fsは使わない
@@ -84,7 +85,7 @@ export function registerReadTools(mcp: McpServer, app: FastifyInstance): void {
       },
     },
     async ({ key, value, limit }) => {
-      if (key === 'tags' || key === 'tag') {
+      if (EXCLUDED_PROP_KEYS.has(key)) {
         return toolError({
           code: 'USE_TAG_TOOL',
           message: 'タグは get_docs_by_tags で検索してください',

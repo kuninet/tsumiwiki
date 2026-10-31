@@ -1743,6 +1743,61 @@ describe('プロパティ検索(find_notes_by_property / list_properties)', () =
     expect(paths(await callTool('find_notes_by_property', { key: 'status' }))).toEqual(['b.md']);
   });
 
+  it('move_note で移動すると新しいパスで検索され、古いパスは出ない', async () => {
+    await seed();
+    const r = await callTool('move_note', { path: 'a.md', newFolder: '移動先', newTitle: 'a2' });
+    expect(r.isError).toBeFalsy();
+    expect(paths(await callTool('find_notes_by_property', { key: 'status', value: 'todo' }))).toEqual([
+      '移動先/a2.md',
+    ]);
+    expect(paths(await callTool('find_notes_by_property', { key: 'status' }))).toEqual([
+      'b.md',
+      '移動先/a2.md',
+    ]);
+  });
+
+  it('move_folder で改名すると配下のノートが新パスで検索され、古いパスは出ない', async () => {
+    await callTool('create_note', { path: 'dir/a.md', content: '---\nstatus: todo\n---\n本文' });
+    const r = await callTool('move_folder', { path: 'dir', newPath: 'dir2' });
+    expect(r.isError).toBeFalsy();
+    expect(paths(await callTool('find_notes_by_property', { key: 'status', value: 'todo' }))).toEqual([
+      'dir2/a.md',
+    ]);
+  });
+
+  it('reindex --full 相当の全削除と再走査のあと、消えた文書の分は list_properties に残らない', async () => {
+    await seed();
+    await rm(join(lib, 'b.md'));
+    // scanAll を通さず、索引だけに b.md が残っている状態から全削除 → 再構築する
+    app.indexerService.clearIndex();
+    const counts = (db: { key: string; count: number }[]) =>
+      Object.fromEntries(db.map((i) => [i.key, i.count]));
+    expect(
+      (app.db.prepare('SELECT COUNT(*) AS n FROM doc_props').get() as { n: number }).n,
+    ).toBe(0);
+    await app.indexerService.scanAll();
+    const r = await callTool('list_properties', {});
+    expect(counts(r.structuredContent.items).status).toBe(1);
+    expect(
+      (app.db.prepare("SELECT COUNT(*) AS n FROM doc_props WHERE doc_path = 'b.md'").get() as {
+        n: number;
+      }).n,
+    ).toBe(0);
+  });
+
+  it('索引に孤児の doc_props が残っていても list_properties は数えない', async () => {
+    await seed();
+    app.db
+      .prepare(
+        "INSERT INTO doc_props (doc_path, key, seq, value, type) VALUES ('ghost.md', 'status', 0, 'ghost', 'string')",
+      )
+      .run();
+    const r = await callTool('list_properties', {});
+    const status = r.structuredContent.items.find((i: { key: string }) => i.key === 'status');
+    expect(status.count).toBe(2);
+    expect(status.topValues.map((v: { value: string }) => v.value)).not.toContain('ghost');
+  });
+
   it('key が tags / tag なら USE_TAG_TOOL', async () => {
     for (const key of ['tags', 'tag']) {
       const r = await callTool('find_notes_by_property', { key, value: 'x' });
