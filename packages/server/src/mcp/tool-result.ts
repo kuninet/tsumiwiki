@@ -1,3 +1,5 @@
+import type { DocLockedError } from '../services/lock-service.js';
+
 // MCPツールの戻り値組み立て共通処理。
 // SDKのCallToolResult.structuredContentはオブジェクト(record)必須で配列を直接渡すと
 // バリデーションエラーになるため、配列は{ items: [...] }でラップする。
@@ -18,4 +20,13 @@ export function toolError(payload: Record<string, unknown>) {
     content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],
     structuredContent: payload,
   };
+}
+
+// 編集ロック中(DocLockedError)を構造化エラーで返す。code が DOC_LOCKED
+export function lockedError(e: DocLockedError) {
+  return toolError({
+    code: 'DOC_LOCKED',
+    message: e.message,
+    holder: { displayName: e.holder.displayName },
+  });
 }

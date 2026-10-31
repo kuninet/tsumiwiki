@@ -676,7 +676,8 @@ export class DocService {
   }
 
   // MCPの追記系ツール(#288)用の保存。同一パスへの呼び出しは直列化し、ロック検査から
-  // 読み取り・書き込みまでを他の追記と交錯させない(同時追記が互いを上書きしないため)。
+  // 読み取り・書き込みまでを他の追記・フロントマター更新と交錯させない
+  // (同時に呼ばれても互いの変更を上書きしないため)。
   // 本文は保存側(composeContent)と同じ FM_BLOCK_RE で切り出して transform に渡し、
   // 結果をそのまま本文として書き戻す(body 先頭の YAML 風ブロックは抽出しない)。
   // UI編集ロック中は saveDocMcp と同じく DocLockedError で拒否する
@@ -686,8 +687,67 @@ export class DocService {
     author: GitAuthor,
   ): Promise<{ updatedAt: string }> {
     const normalized = this.validateDocPath(relPath);
+    const { updatedAt } = await this.serializedMcpEdit(normalized, author, undefined, (current) => ({
+      body: transform(bodyAfterFrontmatter(current)),
+    }));
+    return { updatedAt };
+  }
+
+  // MCP経由のフロントマターのみの更新(#292)。本文は一切変えず、プロパティとタグだけを書き換える。
+  // 追記(appendDocMcp)と同じ直列化キューに載るため、同じパスへの追記と交錯しない。
+  // tags は全置き換え、addTags / removeTags は現在のフロントマター tags への差分適用
+  // (インライン #タグは対象外)。baseUpdatedAt 指定時のみ mtime 比較で競合検知する
+  async updateFrontmatterMcp(
+    relPath: string,
+    patch: {
+      frontmatter?: Record<string, unknown>;
+      tags?: string[];
+      addTags?: string[];
+      removeTags?: string[];
+    },
+    baseUpdatedAt: string | undefined,
+    author: GitAuthor,
+  ): Promise<{ updatedAt: string; frontmatter: Record<string, unknown>; tags: string[] }> {
+    const normalized = this.validateDocPath(relPath);
+    const { updatedAt, content } = await this.serializedMcpEdit(
+      normalized,
+      author,
+      baseUpdatedAt,
+      (current) => {
+        let tags = patch.tags;
+        if (tags === undefined && (patch.addTags?.length || patch.removeTags?.length)) {
+          // composeContent の tags 正規化(trim・先頭#除去・NFC)と同じ形で比較する
+          const norm = (t: string) => t.trim().replace(/^#/, '').normalize('NFC');
+          const next = parseDocMeta(current).frontmatterTags;
+          for (const t of (patch.addTags ?? []).map(norm)) {
+            if (t && !next.includes(t)) next.push(t);
+          }
+          const remove = new Set((patch.removeTags ?? []).map(norm));
+          tags = next.filter((t) => !remove.has(t));
+        }
+        return { body: bodyAfterFrontmatter(current), tags, frontmatter: patch.frontmatter };
+      },
+    );
+    return {
+      updatedAt,
+      frontmatter: this.parseFrontmatterData(content),
+      tags: parseDocMeta(content).frontmatterTags,
+    };
+  }
+
+  // パスごとの直列化キューに載せて mcpEditLocked を実行する
+  private async serializedMcpEdit(
+    normalized: string,
+    author: GitAuthor,
+    baseUpdatedAt: string | undefined,
+    plan: (current: string) => {
+      body: string;
+      tags?: string[];
+      frontmatter?: Record<string, unknown>;
+    },
+  ): Promise<{ updatedAt: string; content: string }> {
     const prev = this.appendTails.get(normalized) ?? Promise.resolve();
-    const run = prev.then(() => this.appendLocked(normalized, transform, author));
+    const run = prev.then(() => this.mcpEditLocked(normalized, author, baseUpdatedAt, plan));
     const tail = run.catch(() => undefined);
     this.appendTails.set(normalized, tail);
     try {
@@ -697,30 +757,45 @@ export class DocService {
     }
   }
 
-  private async appendLocked(
+  // ロック検査 → 読み取り → (任意)競合検知 → composeContent → 書き込み → コミット → 索引更新。
+  // plan が現在の全文から、書き戻す本文・タグ・フロントマター更新を決める
+  private async mcpEditLocked(
     normalized: string,
-    transform: (body: string) => string,
     author: GitAuthor,
-  ): Promise<{ updatedAt: string }> {
+    baseUpdatedAt: string | undefined,
+    plan: (current: string) => {
+      body: string;
+      tags?: string[];
+      frontmatter?: Record<string, unknown>;
+    },
+  ): Promise<{ updatedAt: string; content: string }> {
     const abs = resolveInLibrary(this.libraryPath, normalized);
     const lock = this.locks.getActive(normalized);
     if (lock) throw new DocLockedError(lock);
 
     let current: string;
+    let st: Awaited<ReturnType<typeof stat>>;
     try {
+      st = await stat(abs);
       current = await readFile(abs, 'utf8');
     } catch {
       throw new DocNotFoundError(normalized);
     }
+    // 競合検知は baseUpdatedAt が渡されたときだけ行う(saveDocMcp と同じ mtime 比較)
+    if (baseUpdatedAt !== undefined && st.mtime.toISOString() !== baseUpdatedAt) {
+      throw new DocConflictError(
+        'この文書は取得後に変更されています。内容を退避してから再読み込みしてください',
+      );
+    }
 
-    const body = transform(bodyAfterFrontmatter(current));
+    const { body, tags, frontmatter } = plan(current);
     // 保存はLFに統一する(NFR-COMP-03。CRLF文書も保存時にLF化する)
-    const content = this.composeContent(current, body, undefined).replace(/\r\n/g, '\n');
+    const content = this.composeContent(current, body, tags, frontmatter).replace(/\r\n/g, '\n');
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `edit: ${normalized}`, author);
     await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
     const after = await stat(abs);
-    return { updatedAt: after.mtime.toISOString() };
+    return { updatedAt: after.mtime.toISOString(), content };
   }
 
   // フロントマターの再結合(外科的編集)。yamlのDocument APIで tags / updated / frontmatter

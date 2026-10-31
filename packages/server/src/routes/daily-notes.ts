@@ -4,6 +4,7 @@ import { sendError } from '../plugins/auth.js';
 import {
   ensureDailyNote,
   InvalidDailyNoteSettingsError,
+  parseLocalDate,
   renderDailyNoteBody,
   resolveDailyNotePath,
 } from '../services/daily-note.js';
@@ -54,11 +55,8 @@ export const dailyNotesRoutes: FastifyPluginCallback = (app, _opts, done) => {
     if (!parsed.success) {
       return sendError(reply, 400, 'VALIDATION_ERROR', '日付は YYYY-MM-DD 形式で指定してください');
     }
-    const [y, m, d] = parsed.data.date.split('-').map(Number) as [number, number, number];
-    const date = new Date(y, m - 1, d);
-    // new Date は月日のオーバーフローを次の月/年へ繰り上げてしまう(例: 13月→翌年1月)ので、
-    // 構成後の年月日が入力と一致するかで実在する暦日かを検証する
-    if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) {
+    const date = parseLocalDate(parsed.data.date);
+    if (!date) {
       return sendError(reply, 400, 'VALIDATION_ERROR', '存在しない日付です');
     }
 

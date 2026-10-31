@@ -1,23 +1,19 @@
 import type { FastifyInstance } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { InvalidDailyNoteSettingsError, ensureDailyNote } from '../../services/daily-note.js';
+import {
+  InvalidDailyNoteSettingsError,
+  ensureDailyNote,
+  parseLocalDate,
+} from '../../services/daily-note.js';
 import { DocLockedError } from '../../services/lock-service.js';
 import { formatEntry, insertIntoSection, isValidHeading } from '../daily-append.js';
 import { MCP_AUTHOR } from '../server.js';
-import { toolError, toolResult as asResult } from '../tool-result.js';
+import { lockedError, toolError, toolResult as asResult } from '../tool-result.js';
 
 // デイリーノート系ツール(issue #190 / #288)。作成処理は REST と共通の ensureDailyNote を使う。
 // req.user が無いため、テンプレ変数の user は固定文字列を使う
 const MCP_USER = 'MCP Agent';
-
-function lockedError(e: DocLockedError) {
-  return toolError({
-    code: 'DOC_LOCKED',
-    message: e.message,
-    holder: { displayName: e.holder.displayName },
-  });
-}
 
 function hhmm(date: Date): string {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
@@ -27,14 +23,28 @@ export function registerDailyTools(mcp: McpServer, app: FastifyInstance): void {
   mcp.registerTool(
     'create_daily_note',
     {
-      title: '今日のデイリーノート作成',
+      title: 'デイリーノート作成(日付指定可)',
       description:
-        '今日の日付でデイリーノートを作成する。既に存在すればそのパスを返す(created: false)',
-      inputSchema: {},
+        'デイリーノートを作成する。date(YYYY-MM-DD)を省略すると今日の日付。' +
+        '既に存在すればそのパスを返す(created: false)',
+      inputSchema: {
+        date: z.string().optional().describe('YYYY-MM-DD。省略時は今日'),
+      },
     },
-    async () => {
+    async ({ date }) => {
+      let target = new Date();
+      if (date !== undefined) {
+        const parsed = parseLocalDate(date);
+        if (!parsed) {
+          return toolError({
+            code: 'INVALID_DATE',
+            message: '日付は YYYY-MM-DD 形式の実在する日付で指定してください',
+          });
+        }
+        target = parsed;
+      }
       try {
-        return asResult(await ensureDailyNote(app, new Date(), MCP_USER, MCP_AUTHOR, app.log));
+        return asResult(await ensureDailyNote(app, target, MCP_USER, MCP_AUTHOR, app.log));
       } catch (e) {
         if (e instanceof InvalidDailyNoteSettingsError) throw new Error(e.message);
         throw e;

@@ -2,7 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { MCP_AUTHOR, MCP_SENTINEL_USER_ID } from '../server.js';
-import { toolResult as asResult } from '../tool-result.js';
+import { DocLockedError } from '../../services/lock-service.js';
+import { lockedError, toolError, toolResult as asResult } from '../tool-result.js';
 
 // 書き込み系ツール(issue #190)。docServiceを経由し生fsは使わない
 
@@ -81,5 +82,104 @@ export function registerWriteTools(mcp: McpServer, app: FastifyInstance): void {
       await app.docService.deleteDoc(docPath, MCP_SENTINEL_USER_ID, MCP_AUTHOR);
       return asResult({ ok: true });
     },
+  );
+
+  mcp.registerTool(
+    'update_frontmatter',
+    {
+      title: 'フロントマター更新',
+      description:
+        'ノートの本文は変えずに、フロントマターのプロパティとタグだけを更新する。' +
+        'frontmatter / tags / addTags / removeTags のいずれかは必須。tags と addTags/removeTags は同時に指定できない。' +
+        'タグの対象はフロントマターの tags のみで、本文中のインライン #タグは変更しない。' +
+        'baseUpdatedAt を渡すと取得後の他者更新を競合として検知する(任意)。' +
+        'UIで編集ロック保持中のノートには書けない(isError、structuredContent.code が DOC_LOCKED)。' +
+        '戻り値は updatedAt と更新後の frontmatter / tags',
+      inputSchema: {
+        path: z.string().min(1).describe('更新するノートの相対パス'),
+        frontmatter: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe(
+            '更新するフロントマターのプロパティ(部分更新・マージ)。指定キーのみ上書きし、' +
+            '値にnullを渡すとそのキーを削除する。未指定キーは原文のまま保持。' +
+            'tags は tags 引数で、updated はサーバー管理のため指定不可。' +
+            '変更するキーだけを渡すこと(read_noteの日付値はISO形式に変換されているため、そのまま戻すと書式が変わる)',
+          ),
+        tags: z.array(z.string()).optional().describe('フロントマターのタグを全て置き換える'),
+        addTags: z.array(z.string()).optional().describe('フロントマターのタグに追加する(重複は無視)'),
+        removeTags: z.array(z.string()).optional().describe('フロントマターのタグから削除する'),
+        baseUpdatedAt: z
+          .string()
+          .optional()
+          .describe('read_noteで取得したupdatedAt。指定時のみ競合検知する(本文を書き換えないので任意)'),
+      },
+    },
+    async ({ path: docPath, frontmatter, tags, addTags, removeTags, baseUpdatedAt }) => {
+      if (tags !== undefined && (addTags !== undefined || removeTags !== undefined)) {
+        return toolError({
+          code: 'INVALID_ARGUMENTS',
+          message: 'tags(全置き換え)と addTags / removeTags(差分)は同時に指定できません',
+        });
+      }
+      if (
+        frontmatter === undefined &&
+        tags === undefined &&
+        addTags === undefined &&
+        removeTags === undefined
+      ) {
+        return toolError({
+          code: 'NOTHING_TO_UPDATE',
+          message: 'frontmatter / tags / addTags / removeTags のいずれかを指定してください',
+        });
+      }
+      try {
+        return asResult(
+          await app.docService.updateFrontmatterMcp(
+            docPath,
+            { frontmatter, tags, addTags, removeTags },
+            baseUpdatedAt,
+            MCP_AUTHOR,
+          ),
+        );
+      } catch (e) {
+        if (e instanceof DocLockedError) return lockedError(e);
+        throw e;
+      }
+    },
+  );
+
+  mcp.registerTool(
+    'create_folder',
+    {
+      title: 'フォルダ作成',
+      description: 'フォルダを作成する(途中のフォルダもまとめて作成する)。空フォルダはGit管理外',
+      inputSchema: {
+        path: z.string().min(1).describe('作成するフォルダの相対パス(例: 議事録/2026)'),
+      },
+    },
+    async ({ path: folderPath }) => {
+      await app.docService.createFolder(folderPath);
+      return asResult({ ok: true, path: folderPath });
+    },
+  );
+
+  mcp.registerTool(
+    'move_folder',
+    {
+      title: 'フォルダ移動・改名',
+      description:
+        'フォルダを移動または改名する(配下のノートごと移動する)。' +
+        '例: path "議事録/2026" を newPath "議事録/2026年度" にすると改名。' +
+        '配下のノートをUIで誰かが編集ロック中なら拒否される。移動先に同名フォルダがある場合や、自分自身の配下への移動もエラー',
+      inputSchema: {
+        path: z.string().min(1).describe('移動元フォルダの現在の相対パス'),
+        newPath: z.string().min(1).describe('移動後(改名後)のフォルダの相対パス'),
+      },
+    },
+    async ({ path: folderPath, newPath }) =>
+      asResult(
+        await app.docService.moveFolder(folderPath, newPath, MCP_SENTINEL_USER_ID, MCP_AUTHOR),
+      ),
   );
 }

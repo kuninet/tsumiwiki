@@ -56,7 +56,7 @@ curl -i -X POST http://localhost:3000/mcp
 # WWW-Authenticate: Bearer realm="tsumiwiki-mcp"
 ```
 
-正しいトークンで `tools/list` を叩き、12 個のツールが返ることを確認:
+正しいトークンで `tools/list` を叩き、20 個のツールが返ることを確認:
 
 ```bash
 export MCP_TOKEN=<設定したトークン>
@@ -191,7 +191,7 @@ Claude Desktop は `headers` を省く:
 
 ## 5. 公開ツール一覧
 
-Read 6 種 + Write 6 種の計 12 個。全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。
+Read 7 種 + 履歴 4 種 + Write 9 種の計 20 個。全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。
 
 ### Read
 
@@ -203,6 +203,20 @@ Read 6 種 + Write 6 種の計 12 個。全て `docService` / `queryService` 経
 | `list_tags` | (なし) | 全タグと件数 |
 | `get_docs_by_tags` | `tags: string[] (非空)` | 指定タグを **全て** 持つノート(AND) |
 | `get_tree` | (なし) | フォルダツリー + 全ノートのサマリ |
+| `get_backlinks` | `path: string`, `limit?: number` | 指定ノートへ `[[リンク]]` を張っているノートの一覧(リンク元ごとに行番号・前後の文脈つき)。`limit` はリンク元ノートの最大件数(既定 200)で、超えると `truncated: true` |
+
+### 履歴
+
+読み取り専用。復元(restore)は編集ロックが前提のため MCP には提供しない。
+
+| ツール | 引数 | 用途 |
+|---|---|---|
+| `get_history` | `path: string` | ノートの変更履歴(新しい順)。各エントリの `rev` を下の 2 つに渡せる |
+| `get_history_content` | `path: string`, `rev: string` | 過去の版の全文(フロントマター含む) |
+| `get_history_diff` | `path: string`, `rev: string`, `against?: string` | `rev` と `against` の差分(unified diff)。`against` 省略時は現行版(HEAD)との差分 |
+| `list_library_history` | `limit?: number (1-1000)` | ライブラリ全体の変更履歴。`.trash` や添付ファイルなど文書以外のパスも含む |
+
+`rev` / `against` は 4〜40 桁の 16 進数(コミットハッシュ)。それ以外は拒否される。
 
 ### Write
 
@@ -210,9 +224,12 @@ Read 6 種 + Write 6 種の計 12 個。全て `docService` / `queryService` 経
 |---|---|---|
 | `create_note` | `path: string`, `content: string` | 新規作成。既存パスならエラー(`.md` 必須) |
 | `save_note` | `path: string`, `body: string`, `baseUpdatedAt: string`, `tags?: string[]`, `frontmatter?: Record<string, unknown>` | 更新。`baseUpdatedAt` は `read_note` で得た値を渡す(競合検知)。`frontmatter` で独自項目の部分更新(null でキー削除)。戻り値に `updatedAt` と更新後 `frontmatter` を返す |
+| `update_frontmatter` | `path: string`, `frontmatter?: Record<string, unknown>`, `tags?: string[]`, `addTags?: string[]`, `removeTags?: string[]`, `baseUpdatedAt?: string` | 本文を送らずにフロントマターのプロパティとタグだけを更新する(本文は変わらない)。`frontmatter` は `save_note` と同じ部分マージ(null でキー削除、`tags` / `updated` は指定不可)。`tags` は全置き換え、`addTags` / `removeTags` はフロントマターの `tags` への追加・削除(本文中のインライン `#タグ` は対象外)。`frontmatter` / `tags` / `addTags` / `removeTags` のどれも無ければ `NOTHING_TO_UPDATE`、`tags` と `addTags` / `removeTags` の同時指定は `INVALID_ARGUMENTS`。`baseUpdatedAt` は指定したときだけ競合検知する。UI で編集中のノートには書けず `DOC_LOCKED`。戻り値は `updatedAt` / `frontmatter` / `tags` |
 | `move_note` | `path: string`, `newFolder: string`, `newTitle: string` | リネーム / 移動 |
+| `create_folder` | `path: string` | フォルダを作成(途中のフォルダもまとめて作る)。空フォルダは Git 管理外 |
+| `move_folder` | `path: string`, `newPath: string` | フォルダの改名・移動(例: `議事録/2026` → `議事録/2026年度`)。配下のノートごと移動する。配下を UI で誰かが編集中なら拒否。移動先に同名フォルダがある場合や自分自身の配下への移動もエラー |
 | `delete_note` | `path: string` | `.trash/` へ送る(完全削除ではない) |
-| `create_daily_note` | (なし) | ライブラリ設定 `dailyNotes.folder` / `template` / `filenamePattern` に基づき今日の Daily Note を生成 or 既存を返す |
+| `create_daily_note` | `date?: string (YYYY-MM-DD)` | ライブラリ設定 `dailyNotes.folder` / `template` / `filenamePattern` に基づき指定日(省略時は今日)の Daily Note を生成 or 既存を返す。実在しない日付・形式不正は `isError` かつ `structuredContent.code` が `INVALID_DATE` |
 | `append_to_daily_note` | `text: string`, `heading?: string`(既定 `## メモ`), `source?: string` | 今日のデイリーノートの指定見出しの節末尾に `HH:MM [source] text` を1件追記(なければノート・見出しごと作成)。本文全体の読み書きは不要。戻り値は `path` / `created` / `updatedAt`。箇条書きにしたいときは `text` を `- ` で始める。日付と時刻はサーバーのローカル時刻(`TZ` 環境変数)で決まる。UI で編集中のノートには書けず、`isError` かつ `structuredContent.code` が `DOC_LOCKED` になる |
 
 パスは常に **リポジトリルート相対の POSIX 形式**(`Projects/foo.md` など)。`..` / `.git/*` / `.trash/*` / 非 `.md` 拡張子は全て拒否される。
@@ -290,4 +307,4 @@ MCP 経由の書き込みは Git コミット author が固定で `MCP Agent <mc
 - 複数トークン管理(PAT テーブル + 発行 UI + ローテーション自動化)
 - MCP Resources / Prompts(現状は Tools のみ)
 - Rate limit
-- バックリンク API(index 側の対応が必要)
+- プロパティ(フロントマター)での検索(#293)
