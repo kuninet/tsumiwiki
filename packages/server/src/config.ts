@@ -23,7 +23,13 @@ export interface AppConfig {
   logFile: string | null;
   mcpEnabled: boolean;
   mcpToken: string | null;
+  // token: Bearer 認証(既定) / none: 認証なし(送信元をローカル・LAN・Tailscaleに限定)
+  mcpAuth: McpAuthMode;
+  // MCP_AUTH=none なのに MCP_TOKEN も設定されている(トークンは無視される)ことの警告用
+  mcpTokenIgnored: boolean;
 }
+
+export type McpAuthMode = 'token' | 'none';
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'];
 
@@ -85,11 +91,21 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 
   // Remote MCP(issue #190)。既定は無効。有効化時は固定Bearerトークンを必須とし、
   // 短いトークンでの誤運用を防ぐためfail-secureで長さも検証する
+  // MCP_AUTH=none(issue #290)は認証なしで受け付けるモード。送信元の制限はmcp-network.tsが担う。
+  // MCP_AUTH未設定・空文字はtoken扱いで、従来どおりMCP_TOKENを必須とする
+  const mcpAuthRaw = env.MCP_AUTH ?? '';
+  if (mcpAuthRaw !== '' && mcpAuthRaw !== 'token' && mcpAuthRaw !== 'none') {
+    throw new Error(`MCP_AUTH は token / none のいずれかで指定してください: ${mcpAuthRaw}`);
+  }
+  const mcpAuth: McpAuthMode = mcpAuthRaw === 'none' ? 'none' : 'token';
   const mcpEnabled = env.MCP_ENABLED === 'true';
-  const mcpToken = env.MCP_TOKEN ?? null;
-  if (mcpEnabled && (mcpToken == null || mcpToken.length < 32)) {
+  const rawMcpToken = env.MCP_TOKEN ?? null;
+  if (mcpEnabled && mcpAuth === 'token' && (rawMcpToken == null || rawMcpToken.length < 32)) {
     throw new Error('MCP_ENABLED=true のときは MCP_TOKEN を 32 文字以上で設定してください');
   }
+  // noneモードではMCP_TOKENを見ない(設定されていても使わない)
+  const mcpToken = mcpAuth === 'token' ? rawMcpToken : null;
+  const mcpTokenIgnored = mcpAuth === 'none' && !!rawMcpToken;
 
   return {
     libraryPath,
@@ -112,6 +128,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     logFile: env.LOG_FILE ?? null,
     mcpEnabled,
     mcpToken,
+    mcpAuth,
+    mcpTokenIgnored,
   };
 }
 

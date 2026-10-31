@@ -4,7 +4,7 @@ TsumiWiki を Remote MCP サーバーとして起動し、Claude Desktop / Claud
 
 **対象読者**: 自分専用の TsumiWiki を自宅サーバーで運用し、外部の MCP クライアントから利用したい人。
 
-**想定構成**: 単一ユーザー + Bearer 静的トークン。複数ユーザー配布や OAuth は対象外(必要になれば別途拡張)。
+**想定構成**: 単一ユーザー + Bearer 静的トークン。複数ユーザー配布や OAuth は対象外(必要になれば別途拡張)。LAN / Tailscale 内だけで使う場合は、トークンを使わない認証なしモードも選べる(§2.4)。
 
 ---
 
@@ -69,6 +69,42 @@ curl -sS -X POST http://localhost:3000/mcp \
 
 **Accept ヘッダに `application/json, text/event-stream` の両方**を含めること(MCP SDK の要件)。
 
+### 2.4 認証なしモード(LAN / Tailscale 内専用)
+
+自宅 LAN や Tailscale の内側だけで使うなら、トークンなしで運用できる。`MCP_AUTH=none` を **明示したときだけ** 有効になる(既定は `token`)。
+
+```
+MCP_ENABLED=true
+MCP_AUTH=none
+```
+
+- `MCP_AUTH` に指定できる値は `token`(既定。未設定・空文字も同じ)と `none` のみ。それ以外の値では起動を拒否する
+- `MCP_AUTH=none` のとき `MCP_TOKEN` は不要。設定されていても無視される(起動ログに警告が出る)
+- 公開されたときに誰でもノートを削除・改ざんできてしまうのを防ぐため、**送信元アドレスが次の範囲のときだけ**受け付ける。範囲外は 403
+
+| 範囲 | 用途 |
+|---|---|
+| `127.0.0.0/8`, `::1` | 同一マシン(ループバック) |
+| `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` | プライベートネットワーク(LAN) |
+| `100.64.0.0/10`, `fc00::/7` | Tailscale(`fd7a:115c:a1e0::/48` を含む) |
+| `169.254.0.0/16`, `fe80::/10` | リンクローカル |
+
+- ソケットの送信元に加えて、`X-Forwarded-For` / `Forwarded` / `X-Real-IP` / `CF-Connecting-IP` / `True-Client-IP` が示す元の送信元も検査し、**1 つでも範囲外なら 403** にする。同一ホスト上のリバースプロキシやトンネルを通ると、ソケットの送信元は 127.0.0.1 に見えるため
+- そのため **Cloudflare Tunnel / Tailscale Funnel / 外部公開のリバースプロキシ(Caddy・Nginx など)経由では 403** になる。外部から使うなら §2.1 のトークン認証(`MCP_AUTH=token`)を使う
+- Tailscale Serve(tailnet 内だけの公開)は、転送ヘッダーが 100.x なので通る
+- **ブラウザからの接続(`Origin` / `Sec-Fetch-Site` / `Sec-Fetch-Mode` / `Sec-Fetch-Dest` のいずれかが付いたリクエスト)は 403 で拒否**する。LAN 内のブラウザで悪意あるサイトを開くと、DNS リバインディングによって送信元が LAN のアドレスのまま `/mcp` を叩かれてしまうため。Claude Code / Claude Desktop などの非ブラウザのクライアントはこれらのヘッダーを送らないので影響しない
+- ルーターのポート開放などでサーバーを直接インターネットへ公開しないこと
+- LAN 内の他の端末からは、認証なしで誰でも読み書きできる。家族共用の LAN や、信頼できない端末が接続する環境では使わない
+
+起動確認(トークン不要):
+
+```bash
+curl -sS -X POST http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
 ---
 
 ## 3. HTTPS 公開の選択肢
@@ -127,6 +163,29 @@ claude mcp list
 ```
 
 設定後 Claude Desktop を再起動。
+
+### 4.3 認証なしモード(§2.4)の場合
+
+`Authorization` ヘッダーは不要。
+
+```bash
+claude mcp add --transport http tsumiwiki http://<host>:3000/mcp
+```
+
+Claude Desktop は `headers` を省く:
+
+```json
+{
+  "mcpServers": {
+    "tsumiwiki": {
+      "type": "http",
+      "url": "http://<host>:3000/mcp"
+    }
+  }
+}
+```
+
+`<host>` には LAN 内のホスト名・IP、または Tailscale の MagicDNS 名 / 100.x のアドレスを指定する。
 
 ---
 
@@ -189,6 +248,16 @@ MCP 経由の書き込みは Git コミット author が固定で `MCP Agent <mc
 - トークンが env の `MCP_TOKEN` と完全一致しているか(前後の空白・改行に注意)
 - サーバーログに `MCP リクエスト処理に失敗しました` が出ていないか
 
+### 403 が返る(認証なしモード)
+
+`MCP_AUTH=none` で起動しているときの、送信元アドレスの制限によるエラー。
+
+- クライアントがローカル・LAN・Tailscale(§2.4 の表の範囲)から接続しているか
+- Cloudflare Tunnel / Tailscale Funnel / 外部公開のリバースプロキシを経由していないか。これらは転送ヘッダーに外部アドレスが入るため拒否される
+- ブラウザ(または `Origin` / `Sec-Fetch-*` ヘッダーを付けるクライアント)から接続していないか。レスポンスの message が「ブラウザからの接続は受け付けません」のときはこれが原因
+- サーバーログの `MCP 認証なしモード: 許可外の送信元を拒否しました` に、検査したアドレスの一覧が出る。どれが範囲外かを確認する
+- 外部から接続する構成なら、`MCP_AUTH` を外して(または `token` にして)トークン認証へ切り替える
+
 ### 404 が返る
 
 - サーバーが `MCP_ENABLED=true` で起動しているか(未設定 or `false` だと `/mcp` は存在しない)
@@ -208,6 +277,10 @@ MCP 経由の書き込みは Git コミット author が固定で `MCP Agent <mc
 ### 起動時に「MCP_TOKEN を 32 文字以上で設定してください」
 
 `MCP_ENABLED=true` にしたのに `MCP_TOKEN` が未設定 or 短すぎる場合の fail-secure エラー。トークンを生成し直して設定する(§2.1 参照)。
+
+### 起動時に「MCP_AUTH は token / none のいずれかで指定してください」
+
+`MCP_AUTH` に `token` / `none` 以外の値(typo など)を指定している。値を直すか、トークン認証なら `MCP_AUTH` を削除する(§2.4 参照)。
 
 ---
 

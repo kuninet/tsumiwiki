@@ -12,9 +12,8 @@ export const mcpAuthPlugin = fp(async (app) => {
   const expected = Buffer.from(token, 'utf8');
 
   app.addHook('preHandler', async (req: FastifyRequest, reply: FastifyReply) => {
-    // '/mcpfoo'等の非関係パスに誤爆しないよう、完全一致またはセグメント区切りのみ対象にする
-    const urlPath = req.url.split('?')[0];
-    if (urlPath !== '/mcp' && !urlPath.startsWith('/mcp/')) return;
+    // このプラグインは/mcpだけを持つカプセル化コンテキストに張られるため無条件で検査する。
+    // 生URLの文字列比較によるパス判定はパーセントエンコード(/%6dcp等)で素通りするので行わない
     const header = req.headers.authorization ?? '';
     const match = /^Bearer\s+(.+)$/i.exec(header);
     if (!match) {
