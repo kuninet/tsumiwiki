@@ -2142,3 +2142,125 @@ describe('POST /mcp 認証なしモード(MCP_AUTH=none)', () => {
     expect(res.statusCode).toBe(403);
   });
 });
+
+describe('プロンプト work_log(issue #296)', () => {
+  const RECIPE_PATH = '作業ログの書き方.md';
+  let seq = 600;
+
+  beforeEach(async () => {
+    await buildMcpApp();
+  });
+
+  // arguments 省略時の挙動は別テストで確かめる。ここでは常に arguments を渡す
+  async function getPrompt(args: Record<string, string> = {}) {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: ++seq,
+      method: 'prompts/get',
+      params: { name: 'work_log', arguments: args },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json();
+  }
+
+  it('initialize の capabilities に prompts がある', async () => {
+    const res = await mcpRequest(INITIALIZE_PAYLOAD);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().result.capabilities.prompts).toBeDefined();
+    expect(res.json().result.capabilities.tools).toBeDefined();
+  });
+
+  it('prompts/list に work_log が1件あり、引数 project は任意', async () => {
+    const res = await mcpRequest({ jsonrpc: '2.0', id: ++seq, method: 'prompts/list', params: {} });
+    expect(res.statusCode).toBe(200);
+    const prompts = res.json().result.prompts as {
+      name: string;
+      arguments: { name: string; required?: boolean }[];
+    }[];
+    expect(prompts.filter((p) => p.name === 'work_log')).toHaveLength(1);
+    const args = prompts.find((p) => p.name === 'work_log')!.arguments;
+    expect(args).toHaveLength(1);
+    expect(args[0].name).toBe('project');
+    expect(args[0].required).toBeFalsy();
+  });
+
+  it('prompts/get: レシピノートが無いときは確認する旨の文面になる', async () => {
+    const json = await getPrompt();
+    expect(json.result.messages).toHaveLength(1);
+    const msg = json.result.messages[0];
+    expect(msg.role).toBe('user');
+    expect(msg.content.type).toBe('text');
+    expect(msg.content.text).toContain(`レシピノート ${RECIPE_PATH} が見つからない`);
+    expect(msg.content.text).toContain('指定なし(作業内容から特定する)');
+    expect(msg.content.text).not.toContain('{{');
+  });
+
+  it('prompts/get: レシピノートの本文が差し込まれる(フロントマターは含まない)', async () => {
+    const createRes = await mcpRequest({
+      jsonrpc: '2.0',
+      id: ++seq,
+      method: 'tools/call',
+      params: {
+        name: 'create_note',
+        arguments: {
+          path: RECIPE_PATH,
+          content: '---\ntags: [運用]\n---\n# 作業ログの書き方\n\n保存先は 作業ログ/{プロジェクト}/ にする。\n',
+        },
+      },
+    });
+    expect(createRes.json().result.isError).toBeFalsy();
+
+    const text = (await getPrompt()).result.messages[0].content.text as string;
+    expect(text).toContain(`## レシピ(${RECIPE_PATH})`);
+    expect(text).toContain('保存先は 作業ログ/{プロジェクト}/ にする。');
+    expect(text).not.toContain('tags: [運用]');
+    expect(text).not.toContain('見つからない');
+  });
+
+  it('prompts/get: params.arguments を省略しても成功する(batch でも)', async () => {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: ++seq,
+      method: 'prompts/get',
+      params: { name: 'work_log' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().error).toBeUndefined();
+    expect(res.json().result.messages[0].content.text).toContain('指定なし(作業内容から特定する)');
+
+    const batchRes = await mcpRequest([
+      { jsonrpc: '2.0', id: ++seq, method: 'prompts/get', params: { name: 'work_log' } },
+    ]);
+    expect(batchRes.statusCode).toBe(200);
+    expect(JSON.stringify(batchRes.json())).toContain('指定なし(作業内容から特定する)');
+  });
+
+  it('prompts/get: arguments.project がメッセージに入る', async () => {
+    const text = (await getPrompt({ project: 'X' })).result.messages[0].content.text as string;
+    expect(text).toContain('対象プロジェクト: X');
+    expect(text).not.toContain('指定なし');
+  });
+
+  it('MCP_WORK_LOG_RECIPE で指定したパスのノートが読まれる', async () => {
+    await app.close();
+    await rm(lib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await buildMcpApp({ MCP_WORK_LOG_RECIPE: '運用/レシピ.md' });
+    await mcpRequest({
+      jsonrpc: '2.0',
+      id: ++seq,
+      method: 'tools/call',
+      params: { name: 'create_note', arguments: { path: '運用/レシピ.md', content: '独自の決まり' } },
+    });
+    const text = (await getPrompt()).result.messages[0].content.text as string;
+    expect(text).toContain('## レシピ(運用/レシピ.md)');
+    expect(text).toContain('独自の決まり');
+  });
+
+  it('レシピのパスが不正でも prompts/get は成功し、レシピ無しの文面になる', async () => {
+    await app.close();
+    await rm(lib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await buildMcpApp({ MCP_WORK_LOG_RECIPE: '../outside.md' });
+    const text = (await getPrompt()).result.messages[0].content.text as string;
+    expect(text).toContain('レシピノート ../outside.md が見つからない');
+  });
+});
