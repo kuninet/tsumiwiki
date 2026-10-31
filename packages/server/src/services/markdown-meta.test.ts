@@ -134,3 +134,97 @@ describe('extractDocLinks / parseDocMeta: リンク抽出', () => {
     expect(meta.links[2]).toMatchObject({ seq: 2, targetNorm: 'リンク3', line: 3 });
   });
 });
+
+describe('parseDocMeta: フロントマターのプロパティ抽出', () => {
+  const props = (fm: string) => parseDocMeta(`---\n${fm}\n---\n本文`).properties;
+
+  it('string / number / boolean を文字列表現と型で返す', () => {
+    expect(props('status: todo\npriority: 1\nratio: 1.5\ndone: false')).toEqual([
+      { key: 'status', seq: 0, value: 'todo', type: 'string' },
+      { key: 'priority', seq: 0, value: '1', type: 'number' },
+      { key: 'ratio', seq: 0, value: '1.5', type: 'number' },
+      { key: 'done', seq: 0, value: 'false', type: 'boolean' },
+    ]);
+  });
+
+  it('日付(時刻なし)は YYYY-MM-DD、日時は ISO 文字列で type date', () => {
+    expect(props('due: 2026-10-31')).toEqual([
+      { key: 'due', seq: 0, value: '2026-10-31', type: 'date' },
+    ]);
+    expect(props('at: 2026-10-31T10:30:00+09:00')).toEqual([
+      { key: 'at', seq: 0, value: '2026-10-31T01:30:00.000Z', type: 'date' },
+    ]);
+  });
+
+  it('引用符つきの日付形式の文字列は string のまま', () => {
+    expect(props('due: "2026-10-31"')).toEqual([
+      { key: 'due', seq: 0, value: '2026-10-31', type: 'string' },
+    ]);
+  });
+
+  it('null は value null・type null', () => {
+    expect(props('empty:\nnothing: null')).toEqual([
+      { key: 'empty', seq: 0, value: null, type: 'null' },
+      { key: 'nothing', seq: 0, value: null, type: 'null' },
+    ]);
+  });
+
+  it('配列は要素ごとに seq を振り、空配列は行を作らない', () => {
+    expect(props('projects: [A, B]\nnone: []')).toEqual([
+      { key: 'projects', seq: 0, value: 'A', type: 'string' },
+      { key: 'projects', seq: 1, value: 'B', type: 'string' },
+    ]);
+  });
+
+  it('配列の要素ごとに型が決まり、入れ子の配列・object は type object', () => {
+    expect(props('mix: [1, x, [a, b], {k: v}]')).toEqual([
+      { key: 'mix', seq: 0, value: '1', type: 'number' },
+      { key: 'mix', seq: 1, value: 'x', type: 'string' },
+      { key: 'mix', seq: 2, value: null, type: 'object' },
+      { key: 'mix', seq: 3, value: null, type: 'object' },
+    ]);
+  });
+
+  it('object は value null・type object', () => {
+    expect(props('meta:\n  a: 1')).toEqual([
+      { key: 'meta', seq: 0, value: null, type: 'object' },
+    ]);
+  });
+
+  it('tags / tag は除外する', () => {
+    expect(props('tags: [a, b]\ntag: c\nstatus: todo')).toEqual([
+      { key: 'status', seq: 0, value: 'todo', type: 'string' },
+    ]);
+  });
+
+  it('キーと文字列値を NFC に正規化する', () => {
+    const nfd = 'ブログ'.normalize('NFD');
+    expect(props(`${nfd}: ${nfd}`)).toEqual([
+      { key: 'ブログ', seq: 0, value: 'ブログ', type: 'string' },
+    ]);
+  });
+
+  it('NFC 正規化で同じになるキーが複数あっても片方だけ採用する(主キー衝突の防止)', () => {
+    const nfc = 'ブログ'.normalize('NFC');
+    const nfd = 'ブログ'.normalize('NFD');
+    const result = props(`${nfc}: a\n${nfd}: b`);
+    expect(result).toEqual([{ key: nfc, seq: 0, value: 'a', type: 'string' }]);
+  });
+
+  it('空文字キーは入れない', () => {
+    expect(props('"": x\nk: v')).toEqual([{ key: 'k', seq: 0, value: 'v', type: 'string' }]);
+  });
+
+  it('フロントマターがマッピングでない(文字列・配列)なら空配列', () => {
+    expect(parseDocMeta('---\nfoo\n---\n本文').properties).toEqual([]);
+    expect(parseDocMeta('---\n- a\n- b\n---\n本文').properties).toEqual([]);
+  });
+
+  it('フロントマターが無ければ空配列', () => {
+    expect(parseDocMeta('本文のみ').properties).toEqual([]);
+  });
+
+  it('壊れたフロントマターは空配列', () => {
+    expect(parseDocMeta('---\nstatus: [unclosed\n---\n本文').properties).toEqual([]);
+  });
+});

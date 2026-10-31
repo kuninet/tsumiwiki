@@ -12,7 +12,7 @@ import {
 import type { AppDatabase } from '../db/index.js';
 import { isIndexedFileName } from '../lib/attachments.js';
 import { isProtectedPath, normalizeRelPath } from '../lib/paths.js';
-import { parseDocMeta, type ExtractedLink } from './markdown-meta.js';
+import { parseDocMeta, type ExtractedLink, type ExtractedProp } from './markdown-meta.js';
 
 // 文書間リンク索引の1行
 export interface DocLinkRow {
@@ -67,7 +67,7 @@ export function backlinkTargetKeys(docPath: string, title?: string): string[] {
 
 
 // ライブラリインデックスサービス(設計02章2.3)
-// doc_index / doc_tags / doc_fts / attachment_index / doc_links はライブラリから再構築可能な
+// doc_index / doc_tags / doc_fts / attachment_index / doc_links / doc_props はライブラリから再構築可能な
 // 派生データとして管理する。
 // - 起動時: 全走査し、mtime/sizeが変わったファイルだけ再パース(差分リインデックス)
 // - 保存・外部変更時: 該当ファイルのみ更新
@@ -111,6 +111,7 @@ interface ParsedRow {
   size: number;
   frontmatterTags: string[];
   inlineTags: string[];
+  properties: ExtractedProp[];
   links: ExtractedLink[];
   body: string;
 }
@@ -237,6 +238,18 @@ export class IndexerService {
     this.db.transaction(() => this.writeRow(row))();
   }
 
+  // 索引テーブルを全削除する(reindex --full 用。この後に scanAll で再構築する)。
+  // 文書由来のテーブルを足したら、ここにも足すこと
+  clearIndex(): void {
+    // 途中で落ちて一部のテーブルだけ消えた状態を残さないよう、まとめて1トランザクションにする
+    this.db.transaction(() => {
+      this.db.exec(
+        `DELETE FROM doc_index; DELETE FROM doc_tags; DELETE FROM doc_fts;
+         DELETE FROM doc_links; DELETE FROM doc_props; DELETE FROM attachment_index;`,
+      );
+    })();
+  }
+
   // 文書をインデックスから除去する(削除・ごみ箱移動時)
   removeFile(relPath: string): void {
     const normalized = normalizeRelPath(relPath);
@@ -245,6 +258,7 @@ export class IndexerService {
       this.db.prepare('DELETE FROM doc_tags WHERE doc_path = ?').run(normalized);
       this.db.prepare('DELETE FROM doc_fts WHERE doc_path = ?').run(normalized);
       this.db.prepare('DELETE FROM doc_links WHERE source_path = ?').run(normalized);
+      this.db.prepare('DELETE FROM doc_props WHERE doc_path = ?').run(normalized);
     });
     remove();
   }
@@ -575,6 +589,7 @@ export class IndexerService {
       size,
       frontmatterTags: meta.frontmatterTags,
       inlineTags: meta.inlineTags,
+      properties: meta.properties,
       links: meta.links,
       body: meta.body,
     };
@@ -598,6 +613,15 @@ export class IndexerService {
     );
     for (const tag of row.frontmatterTags) insertTag.run(row.docPath, tag, 'frontmatter');
     for (const tag of row.inlineTags) insertTag.run(row.docPath, tag, 'inline');
+
+    // 主キー衝突は不具合なので INSERT OR IGNORE にせず、例外で気づけるようにする
+    this.db.prepare('DELETE FROM doc_props WHERE doc_path = ?').run(row.docPath);
+    const insertProp = this.db.prepare(
+      'INSERT INTO doc_props (doc_path, key, seq, value, type) VALUES (?, ?, ?, ?, ?)',
+    );
+    for (const prop of row.properties) {
+      insertProp.run(row.docPath, prop.key, prop.seq, prop.value, prop.type);
+    }
 
     this.db.prepare('DELETE FROM doc_fts WHERE doc_path = ?').run(row.docPath);
     this.db

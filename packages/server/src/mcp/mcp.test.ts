@@ -138,7 +138,7 @@ describe('POST /mcp JSON-RPC', () => {
     expect(res.json().result.serverInfo.name).toBe('tsumiwiki');
   });
 
-  it('tools/listで期待する20個のツール名が全て含まれる', async () => {
+  it('tools/listで期待する22個のツール名が全て含まれる', async () => {
     const res = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(res.statusCode).toBe(200);
     const names = res.json().result.tools.map((t: { name: string }) => t.name);
@@ -163,12 +163,14 @@ describe('POST /mcp JSON-RPC', () => {
       'update_frontmatter',
       'create_folder',
       'move_folder',
+      'find_notes_by_property',
+      'list_properties',
     ];
     for (const name of expected) {
       expect(names).toContain(name);
     }
-    expect(expected).toHaveLength(20);
-    expect(names).toHaveLength(20);
+    expect(expected).toHaveLength(22);
+    expect(names).toHaveLength(22);
   });
 
   it('search_notesを何もない状態で呼ぶと空配列が返る', async () => {
@@ -1637,6 +1639,203 @@ describe('update_frontmatter', () => {
     expect(note.frontmatter.mood).toBe('good');
     expect(note.frontmatter.weather).toBe('sunny');
     expect(note.tags).toEqual(expect.arrayContaining(['t1', 't2']));
+  });
+});
+
+describe('プロパティ検索(find_notes_by_property / list_properties)', () => {
+  let seq = 1700;
+
+  beforeEach(async () => {
+    await buildMcpApp();
+  });
+
+  async function callTool(name: string, args: Record<string, unknown>) {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: seq++,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().result;
+  }
+
+  const paths = (r: { structuredContent: { items: { path: string }[] } }) =>
+    r.structuredContent.items.map((i) => i.path).sort();
+
+  async function seed() {
+    await callTool('create_note', {
+      path: 'a.md',
+      content:
+        '---\nstatus: todo\nprojects: [A, B]\npriority: 1\ndue: 2026-10-31\ntags: [x]\n---\n本文A',
+    });
+    await callTool('create_note', {
+      path: 'b.md',
+      content: '---\nstatus: done\nprojects: [C]\n---\n本文B',
+    });
+  }
+
+  it('値指定では一致するノートだけ、value 省略ではそのキーを持つ全ノートが出る', async () => {
+    await seed();
+    const todo = await callTool('find_notes_by_property', { key: 'status', value: 'todo' });
+    expect(todo.isError).toBeFalsy();
+    expect(paths(todo)).toEqual(['a.md']);
+    expect(todo.structuredContent.items[0].values).toEqual(['todo']);
+
+    const all = await callTool('find_notes_by_property', { key: 'status' });
+    expect(paths(all)).toEqual(['a.md', 'b.md']);
+
+    const none = await callTool('find_notes_by_property', { key: 'status', value: 'nothing' });
+    expect(none.structuredContent.items).toEqual([]);
+  });
+
+  it('配列は要素のどれかで一致し、values は全要素を seq 順で返す', async () => {
+    await seed();
+    const r = await callTool('find_notes_by_property', { key: 'projects', value: 'B' });
+    expect(paths(r)).toEqual(['a.md']);
+    expect(r.structuredContent.items[0].values).toEqual(['A', 'B']);
+  });
+
+  it('数値は 1 でも "1" でも、日付は "2026-10-31" でヒットする', async () => {
+    await seed();
+    expect(paths(await callTool('find_notes_by_property', { key: 'priority', value: 1 }))).toEqual([
+      'a.md',
+    ]);
+    expect(paths(await callTool('find_notes_by_property', { key: 'priority', value: '1' }))).toEqual([
+      'a.md',
+    ]);
+    expect(
+      paths(await callTool('find_notes_by_property', { key: 'due', value: '2026-10-31' })),
+    ).toEqual(['a.md']);
+  });
+
+  it('update_frontmatter でプロパティを変えると検索結果が追従する', async () => {
+    await seed();
+    const read = await callTool('read_note', { path: 'a.md' });
+    const upd = await callTool('update_frontmatter', {
+      path: 'a.md',
+      frontmatter: { status: 'done', owner: '山田' },
+      baseUpdatedAt: read.structuredContent.updatedAt,
+    });
+    expect(upd.isError).toBeFalsy();
+
+    expect(
+      (await callTool('find_notes_by_property', { key: 'status', value: 'todo' })).structuredContent
+        .items,
+    ).toEqual([]);
+    expect(
+      paths(await callTool('find_notes_by_property', { key: 'status', value: 'done' })),
+    ).toEqual(['a.md', 'b.md']);
+    expect(paths(await callTool('find_notes_by_property', { key: 'owner', value: '山田' }))).toEqual([
+      'a.md',
+    ]);
+
+    await callTool('update_frontmatter', { path: 'a.md', frontmatter: { owner: null } });
+    expect((await callTool('find_notes_by_property', { key: 'owner' })).structuredContent.items).toEqual(
+      [],
+    );
+  });
+
+  it('ノートを削除すると検索に出なくなる', async () => {
+    await seed();
+    const del = await callTool('delete_note', { path: 'a.md' });
+    expect(del.isError).toBeFalsy();
+    expect(paths(await callTool('find_notes_by_property', { key: 'status' }))).toEqual(['b.md']);
+  });
+
+  it('move_note で移動すると新しいパスで検索され、古いパスは出ない', async () => {
+    await seed();
+    const r = await callTool('move_note', { path: 'a.md', newFolder: '移動先', newTitle: 'a2' });
+    expect(r.isError).toBeFalsy();
+    expect(paths(await callTool('find_notes_by_property', { key: 'status', value: 'todo' }))).toEqual([
+      '移動先/a2.md',
+    ]);
+    expect(paths(await callTool('find_notes_by_property', { key: 'status' }))).toEqual([
+      'b.md',
+      '移動先/a2.md',
+    ]);
+  });
+
+  it('move_folder で改名すると配下のノートが新パスで検索され、古いパスは出ない', async () => {
+    await callTool('create_note', { path: 'dir/a.md', content: '---\nstatus: todo\n---\n本文' });
+    const r = await callTool('move_folder', { path: 'dir', newPath: 'dir2' });
+    expect(r.isError).toBeFalsy();
+    expect(paths(await callTool('find_notes_by_property', { key: 'status', value: 'todo' }))).toEqual([
+      'dir2/a.md',
+    ]);
+  });
+
+  it('reindex --full 相当の全削除と再走査のあと、消えた文書の分は list_properties に残らない', async () => {
+    await seed();
+    await rm(join(lib, 'b.md'));
+    // scanAll を通さず、索引だけに b.md が残っている状態から全削除 → 再構築する
+    app.indexerService.clearIndex();
+    const counts = (db: { key: string; count: number }[]) =>
+      Object.fromEntries(db.map((i) => [i.key, i.count]));
+    expect(
+      (app.db.prepare('SELECT COUNT(*) AS n FROM doc_props').get() as { n: number }).n,
+    ).toBe(0);
+    await app.indexerService.scanAll();
+    const r = await callTool('list_properties', {});
+    expect(counts(r.structuredContent.items).status).toBe(1);
+    expect(
+      (app.db.prepare("SELECT COUNT(*) AS n FROM doc_props WHERE doc_path = 'b.md'").get() as {
+        n: number;
+      }).n,
+    ).toBe(0);
+  });
+
+  it('索引に孤児の doc_props が残っていても list_properties は数えない', async () => {
+    await seed();
+    app.db
+      .prepare(
+        "INSERT INTO doc_props (doc_path, key, seq, value, type) VALUES ('ghost.md', 'status', 0, 'ghost', 'string')",
+      )
+      .run();
+    const r = await callTool('list_properties', {});
+    const status = r.structuredContent.items.find((i: { key: string }) => i.key === 'status');
+    expect(status.count).toBe(2);
+    expect(status.topValues.map((v: { value: string }) => v.value)).not.toContain('ghost');
+  });
+
+  it('key が tags / tag なら USE_TAG_TOOL', async () => {
+    for (const key of ['tags', 'tag']) {
+      const r = await callTool('find_notes_by_property', { key, value: 'x' });
+      expect(r.isError).toBe(true);
+      expect(r.structuredContent.code).toBe('USE_TAG_TOOL');
+    }
+  });
+
+  it('不正な引数(空の key・範囲外の limit)は isError', async () => {
+    expect((await callTool('find_notes_by_property', { key: '' })).isError).toBe(true);
+    expect((await callTool('find_notes_by_property', { key: 'status', limit: 0 })).isError).toBe(
+      true,
+    );
+  });
+
+  it('list_properties が件数・型・よく使われる値を返し、tags は含まない', async () => {
+    await seed();
+    const r = await callTool('list_properties', {});
+    expect(r.isError).toBeFalsy();
+    const items = r.structuredContent.items as {
+      key: string;
+      count: number;
+      types: string[];
+      topValues: { value: string; count: number }[];
+    }[];
+    const status = items.find((i) => i.key === 'status');
+    expect(status?.count).toBe(2);
+    expect(status?.types).toEqual(['string']);
+    expect(status?.topValues.map((v) => v.value).sort()).toEqual(['done', 'todo']);
+    expect(items.map((i) => i.key)).not.toContain('tags');
+    expect(items.find((i) => i.key === 'due')?.types).toEqual(['date']);
+    // 件数の降順、同数ならキー順
+    const counts = items.map((i) => i.count);
+    expect(counts).toEqual([...counts].sort((a, b) => b - a));
+    expect(items[0].count).toBe(2);
+    expect(items.map((i) => i.key).slice(0, 2)).toEqual(
+      items.filter((i) => i.count === 2).map((i) => i.key).sort().slice(0, 2),
+    );
   });
 });
 

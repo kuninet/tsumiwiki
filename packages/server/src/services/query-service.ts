@@ -1,5 +1,6 @@
 import type { DocSummary, SearchResult, TagCount } from '@tsumiwiki/shared';
 import type { AppDatabase } from '../db/index.js';
+import { toPropValue } from './markdown-meta.js';
 
 // 検索・タグ・最近更新の読み取り系クエリ(FR-NAV-02/03/04)
 // すべてインデックス(doc_index / doc_tags / doc_fts)に対する参照のみ
@@ -216,6 +217,90 @@ export class QueryService {
       )
       .all(...tags, tags.length) as DocRow[];
     return rows.map(toSummary);
+  }
+
+  // フロントマターのプロパティで文書を探す(issue #293)。
+  // value 省略: そのキーを持つ文書。指定: 索引と同じ変換関数で文字列にして完全一致する
+  // (配列プロパティは要素のどれかが一致すれば該当)。更新日時の新しい順
+  docsByProperty(
+    key: string,
+    value?: string | number | boolean,
+    limit = 50,
+  ): (DocSummary & { values: (string | null)[] })[] {
+    const normKey = key.normalize('NFC');
+    let rows: DocRow[];
+    if (value === undefined) {
+      rows = this.db
+        .prepare(
+          `SELECT i.doc_path, i.title, i.folder, i.updated_at
+           FROM doc_index i
+           WHERE EXISTS (SELECT 1 FROM doc_props p WHERE p.doc_path = i.doc_path AND p.key = ?)
+           ORDER BY i.updated_at DESC
+           LIMIT ?`,
+        )
+        .all(normKey, limit) as DocRow[];
+    } else {
+      // 値が null になるのは 'null' / 'object' 型のみで、引数の型(string/number/boolean)では起きない
+      const normValue = toPropValue(value).value;
+      rows = this.db
+        .prepare(
+          `SELECT i.doc_path, i.title, i.folder, i.updated_at
+           FROM doc_index i
+           WHERE EXISTS (
+             SELECT 1 FROM doc_props p
+             WHERE p.doc_path = i.doc_path AND p.key = ? AND p.value = ?
+           )
+           ORDER BY i.updated_at DESC
+           LIMIT ?`,
+        )
+        .all(normKey, normValue, limit) as DocRow[];
+    }
+    const valuesStmt = this.db.prepare(
+      'SELECT value FROM doc_props WHERE doc_path = ? AND key = ? ORDER BY seq',
+    );
+    return rows.map((r) => ({
+      ...toSummary(r),
+      values: (valuesStmt.all(r.doc_path, normKey) as { value: string | null }[]).map(
+        (v) => v.value,
+      ),
+    }));
+  }
+
+  // フロントマターのプロパティ名の一覧(件数・型・よく使われる値つき。issue #293)
+  properties(): {
+    key: string;
+    count: number;
+    types: string[];
+    topValues: { value: string; count: number }[];
+  }[] {
+    const keys = this.db
+      .prepare(
+        `SELECT key, COUNT(DISTINCT doc_path) AS count
+         FROM doc_props
+         WHERE doc_path IN (SELECT doc_path FROM doc_index)
+         GROUP BY key
+         ORDER BY count DESC, key`,
+      )
+      .all() as { key: string; count: number }[];
+    const typesStmt = this.db.prepare(
+      `SELECT DISTINCT type FROM doc_props
+       WHERE key = ? AND doc_path IN (SELECT doc_path FROM doc_index) ORDER BY type`,
+    );
+    // 値ごとの件数も、同一文書内で同じ値が複数回出ても1件と数える
+    const topStmt = this.db.prepare(
+      `SELECT value, COUNT(DISTINCT doc_path) AS count
+       FROM doc_props
+       WHERE key = ? AND value IS NOT NULL AND doc_path IN (SELECT doc_path FROM doc_index)
+       GROUP BY value
+       ORDER BY count DESC, value
+       LIMIT 10`,
+    );
+    return keys.map((k) => ({
+      key: k.key,
+      count: k.count,
+      types: (typesStmt.all(k.key) as { type: string }[]).map((t) => t.type),
+      topValues: topStmt.all(k.key) as { value: string; count: number }[],
+    }));
   }
 
   // 最近更新された文書(FR-NAV-04)

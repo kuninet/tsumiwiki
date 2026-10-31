@@ -4,7 +4,7 @@ import { IndexerService } from '../services/indexer-service.js';
 
 // ライブラリインデックスの再構築CLI(issue #21 / 設計02章2.3)
 // 使い方: pnpm --filter @tsumiwiki/server reindex [-- --full]
-//   --full: doc_index/doc_tags/doc_fts/attachment_indexを全削除してから全走査する(完全な再構築)
+//   --full: doc_index/doc_tags/doc_fts/doc_links/doc_props/attachment_indexを全削除してから全走査する(完全な再構築)
 //   省略時: 差分リインデックス(mtime/sizeが変わったファイルだけ再パース。添付はstat差分のみ)
 
 async function main(): Promise<void> {
@@ -13,13 +13,8 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const db = openDatabase(config.dbPath);
 
-  if (full) {
-    db.exec(
-      'DELETE FROM doc_index; DELETE FROM doc_tags; DELETE FROM doc_fts; DELETE FROM attachment_index;',
-    );
-  }
-
   const indexer = new IndexerService(db, config.libraryPath);
+  if (full) indexer.clearIndex();
   const result = await indexer.scanAll();
   console.log(
     `インデックス再構築完了: 更新${result.indexed}件 / 削除${result.removed}件 / 変更なし${result.unchanged}件` +

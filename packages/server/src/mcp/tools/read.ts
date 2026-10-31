@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { toolResult as asResult } from '../tool-result.js';
+import { EXCLUDED_PROP_KEYS } from '../../services/markdown-meta.js';
+import { toolError, toolResult as asResult } from '../tool-result.js';
 
 // 読み取り系ツール(issue #190)。queryService / docServiceを経由し生fsは使わない
 
@@ -64,6 +65,46 @@ export function registerReadTools(mcp: McpServer, app: FastifyInstance): void {
       },
     },
     async ({ tags }) => asResult(app.queryService.docsByTags(tags)),
+  );
+
+  mcp.registerTool(
+    'find_notes_by_property',
+    {
+      title: 'プロパティ指定でノート検索',
+      description:
+        'フロントマターのプロパティでノートを探す。value を省略するとそのキーを持つノートすべて。' +
+        '配列のプロパティは要素のどれかが一致すれば該当。日付は YYYY-MM-DD で指定する。' +
+        'tags は get_docs_by_tags を使うこと',
+      inputSchema: {
+        key: z.string().min(1).describe('プロパティ名(例: status)'),
+        value: z
+          .union([z.string(), z.number(), z.boolean()])
+          .optional()
+          .describe('一致させる値。省略するとそのキーを持つノートすべて'),
+        limit: z.number().int().positive().max(200).optional().describe('最大件数(既定50)'),
+      },
+    },
+    async ({ key, value, limit }) => {
+      if (EXCLUDED_PROP_KEYS.has(key)) {
+        return toolError({
+          code: 'USE_TAG_TOOL',
+          message: 'タグは get_docs_by_tags で検索してください',
+        });
+      }
+      return asResult(app.queryService.docsByProperty(key, value, limit));
+    },
+  );
+
+  mcp.registerTool(
+    'list_properties',
+    {
+      title: 'プロパティ一覧',
+      description:
+        'ライブラリで使われているフロントマターのプロパティ名と件数、よく使われる値を返す。' +
+        'find_notes_by_property の前に、どのキー・値があるか調べるのに使う',
+      inputSchema: {},
+    },
+    async () => asResult(app.queryService.properties()),
   );
 
   mcp.registerTool(
