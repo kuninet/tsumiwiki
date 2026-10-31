@@ -100,6 +100,32 @@ describe('POST /mcp 認証', () => {
   });
 });
 
+describe('POST /mcp 認証(エンコードしたパス・他ルート)', () => {
+  beforeEach(async () => {
+    await buildMcpApp();
+  });
+
+  it('パーセントエンコードしたパス(/%6dcp, /m%63p)もAuthorizationなしは401', async () => {
+    for (const url of ['/%6dcp', '/m%63p']) {
+      const res = await app.inject({
+        method: 'POST',
+        url,
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        payload: INITIALIZE_PAYLOAD,
+      });
+      expect(res.statusCode).toBe(401);
+    }
+  });
+
+  it('/api/healthはAuthorizationなしでも従来どおり200', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/health' });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
 describe('POST /mcp JSON-RPC', () => {
   beforeEach(async () => {
     await buildMcpApp();
@@ -1228,5 +1254,227 @@ describe('loadConfigのfail-secure検証', () => {
     } finally {
       await rm(tmpLib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
+  });
+});
+
+describe('loadConfig: MCP_AUTH', () => {
+  async function withLib(fn: (lib: string) => void): Promise<void> {
+    const tmpLib = await mkdtemp(join(tmpdir(), 'tsumiwiki-mcp-cfg-'));
+    try {
+      fn(tmpLib);
+    } finally {
+      await rm(tmpLib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }
+
+  it('MCP_AUTH=noneならMCP_TOKENなしでもthrowしない', async () => {
+    await withLib((tmpLib) => {
+      const config = loadConfig({ LIBRARY_PATH: tmpLib, MCP_ENABLED: 'true', MCP_AUTH: 'none' });
+      expect(config.mcpAuth).toBe('none');
+      expect(config.mcpToken).toBeNull();
+      expect(config.mcpTokenIgnored).toBe(false);
+    });
+  });
+
+  it('MCP_AUTH=noneでMCP_TOKENが短くてもthrowせず、無視された旨を保持する', async () => {
+    await withLib((tmpLib) => {
+      const config = loadConfig({
+        LIBRARY_PATH: tmpLib,
+        MCP_ENABLED: 'true',
+        MCP_AUTH: 'none',
+        MCP_TOKEN: 'short',
+      });
+      expect(config.mcpToken).toBeNull();
+      expect(config.mcpTokenIgnored).toBe(true);
+    });
+  });
+
+  it('MCP_AUTH不正値はthrow', async () => {
+    await withLib((tmpLib) => {
+      expect(() => loadConfig({ LIBRARY_PATH: tmpLib, MCP_ENABLED: 'true', MCP_AUTH: 'foo' })).toThrow(
+        /MCP_AUTH は token \/ none/,
+      );
+    });
+  });
+
+  it('MCP_AUTH未設定・空文字・tokenは従来どおりMCP_TOKEN必須', async () => {
+    await withLib((tmpLib) => {
+      for (const auth of [undefined, '', 'token']) {
+        expect(() =>
+          loadConfig({ LIBRARY_PATH: tmpLib, MCP_ENABLED: 'true', MCP_AUTH: auth }),
+        ).toThrow(/MCP_TOKEN/);
+      }
+      const config = loadConfig({
+        LIBRARY_PATH: tmpLib,
+        MCP_ENABLED: 'true',
+        MCP_TOKEN: TOKEN,
+      });
+      expect(config.mcpAuth).toBe('token');
+      expect(config.mcpToken).toBe(TOKEN);
+    });
+  });
+});
+
+describe('POST /mcp 認証なしモード(MCP_AUTH=none)', () => {
+  beforeEach(async () => {
+    await buildMcpApp({ MCP_AUTH: 'none', MCP_TOKEN: undefined });
+  });
+
+  function noAuthRequest(
+    body: unknown,
+    opts: { remoteAddress?: string; headers?: Record<string, string> } = {},
+  ) {
+    return app.inject({
+      method: 'POST',
+      url: '/mcp',
+      remoteAddress: opts.remoteAddress,
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        ...opts.headers,
+      },
+      payload: body as never,
+    });
+  }
+
+  const TOOLS_LIST = { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} };
+
+  it('ループバックからAuthorizationなしでinitializeできる', async () => {
+    const res = await noAuthRequest(INITIALIZE_PAYLOAD, { remoteAddress: '127.0.0.1' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('ループバックからAuthorizationなしでtools/listできる', async () => {
+    const res = await noAuthRequest(TOOLS_LIST, { remoteAddress: '127.0.0.1' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('search_notes');
+  });
+
+  it('Tailscale(100.64.0.0/10)からは200', async () => {
+    const res = await noAuthRequest(TOOLS_LIST, { remoteAddress: '100.100.1.1' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('LAN(192.168.x.x)からは200', async () => {
+    const res = await noAuthRequest(TOOLS_LIST, { remoteAddress: '192.168.1.20' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('グローバルIPからは403', async () => {
+    const res = await noAuthRequest(TOOLS_LIST, { remoteAddress: '8.8.8.8' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('FORBIDDEN');
+  });
+
+  it('ソケットがループバックでもX-Forwarded-Forが外部アドレスなら403', async () => {
+    const res = await noAuthRequest(TOOLS_LIST, {
+      remoteAddress: '127.0.0.1',
+      headers: { 'x-forwarded-for': '203.0.113.5' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('X-Forwarded-Forの一部でも外部アドレスがあれば403', async () => {
+    const res = await noAuthRequest(TOOLS_LIST, {
+      remoteAddress: '127.0.0.1',
+      headers: { 'x-forwarded-for': '100.101.1.1, 203.0.113.5' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('X-Forwarded-ForがTailscaleアドレスなら200(Tailscale Serve相当)', async () => {
+    const res = await noAuthRequest(TOOLS_LIST, {
+      remoteAddress: '127.0.0.1',
+      headers: { 'x-forwarded-for': '100.101.1.1' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('Forwardedヘッダーの外部アドレスは403', async () => {
+    const res = await noAuthRequest(TOOLS_LIST, {
+      remoteAddress: '127.0.0.1',
+      headers: { forwarded: 'for="[2001:db8::1]:1234"' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('CF-Connecting-IPの外部アドレスは403', async () => {
+    const res = await noAuthRequest(TOOLS_LIST, {
+      remoteAddress: '127.0.0.1',
+      headers: { 'cf-connecting-ip': '203.0.113.5' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('X-Real-IP / True-Client-IPの外部アドレスは403', async () => {
+    for (const name of ['x-real-ip', 'true-client-ip']) {
+      const res = await noAuthRequest(TOOLS_LIST, {
+        remoteAddress: '127.0.0.1',
+        headers: { [name]: '203.0.113.5' },
+      });
+      expect(res.statusCode).toBe(403);
+    }
+  });
+
+  it('Originヘッダ付き(ブラウザ発)は送信元がループバックでも403', async () => {
+    const res = await noAuthRequest(TOOLS_LIST, {
+      remoteAddress: '127.0.0.1',
+      headers: { origin: 'http://evil.example:3000' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.message).toContain('ブラウザ');
+  });
+
+  it('Sec-Fetch-Site/Mode/Destのいずれか単独でも403', async () => {
+    for (const [name, value] of [
+      ['sec-fetch-site', 'same-origin'],
+      ['sec-fetch-mode', 'cors'],
+      ['sec-fetch-dest', 'empty'],
+    ]) {
+      const res = await noAuthRequest(TOOLS_LIST, {
+        remoteAddress: '127.0.0.1',
+        headers: { [name]: value },
+      });
+      expect(res.statusCode).toBe(403);
+    }
+  });
+
+  it('GETでもSec-Fetch-Siteがあれば403', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/mcp',
+      remoteAddress: '127.0.0.1',
+      headers: { 'sec-fetch-site': 'same-origin' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('パーセントエンコードしたパス(/%6dcp, /m%63p)でも送信元制限が効く', async () => {
+    for (const url of ['/%6dcp', '/m%63p']) {
+      const res = await app.inject({
+        method: 'POST',
+        url,
+        remoteAddress: '8.8.8.8',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        payload: TOOLS_LIST as never,
+      });
+      expect(res.statusCode).toBe(403);
+    }
+  });
+
+  it('/api/healthはMCPの送信元制限の影響を受けない', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/health', remoteAddress: '8.8.8.8' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('Authorizationヘッダを付けても送信元制限は効く', async () => {
+    const res = await noAuthRequest(TOOLS_LIST, {
+      remoteAddress: '8.8.8.8',
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(403);
   });
 });
