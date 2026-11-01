@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DocResponse } from '@tsumiwiki/shared';
+import type { DocResponse, FrontmatterOp } from '@tsumiwiki/shared';
 import { BACKLINKS_QUERY_KEY, docQueryKey, fetchDoc, saveDoc, TAGS_QUERY_KEY, TREE_QUERY_KEY } from '../api/docs';
 import { ApiRequestError } from '../api/client';
 import { deleteDraft, getDraft, saveDraft } from '../api/drafts';
@@ -72,6 +72,8 @@ export interface UseEditingSessionResult {
   startEditing: (initialBody: string, initialTags: string[]) => Promise<void>;
   updateBody: (body: string) => void;
   updateTags: (tags: string[]) => void;
+  // #282: プロパティ操作の更新
+  updateFrontmatter: (ops: FrontmatterOp[], valid: boolean) => void;
   // dirty を変えずに保存対象の本文だけ差し替える。サーバー側で既にファイルが書き換わっている
   // 変更(添付リネームによる参照書き換え等)をエディタへ反映したときに使う
   syncBody: (body: string) => void;
@@ -146,7 +148,12 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
   const [lockedPath, setLockedPathLocal] = useState<string | null>(null);
   const [saveError, setSaveErrorLocal] = useState(false);
 
-  const contentRef = useRef<{ body: string; tags: string[] }>({ body: '', tags: [] });
+  const contentRef = useRef<{
+    body: string;
+    tags: string[];
+    frontmatterOps: FrontmatterOp[];
+    frontmatterValid: boolean;
+  }>({ body: '', tags: [], frontmatterOps: [], frontmatterValid: true });
   const optionsRef = useRef(options);
   optionsRef.current = options;
   const modeRef = useRef(mode);
@@ -236,6 +243,8 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     setConflict(false);
     setLockedPath(null);
     setSaveErrorLocal(false);
+    contentRef.current.frontmatterOps = [];
+    contentRef.current.frontmatterValid = true;
   }, [clearIdleTimer, setConflict, setLockedPath]);
 
   // ロックを確保する(#300)。持っていれば何もしない。取得中ならその完了を待つ。
@@ -371,7 +380,12 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
       lockRetryAfterRef.current = 0;
       lockFailureNotifiedRef.current = false;
       setSaveErrorLocal(false);
-      contentRef.current = { body: initialBody, tags: initialTags };
+      contentRef.current = {
+        body: initialBody,
+        tags: initialTags,
+        frontmatterOps: [],
+        frontmatterValid: true,
+      };
       setDirty(false);
       setDraftPrompt(null);
       setConflict(false);
@@ -414,6 +428,16 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     [markDirtyAndEnsureLock],
   );
 
+  const updateFrontmatter = useCallback(
+    (ops: FrontmatterOp[], valid: boolean) => {
+      contentRef.current.frontmatterOps = ops;
+      contentRef.current.frontmatterValid = valid;
+      markDirtyAndEnsureLock();
+      setLastDraftSavedAt(null);
+    },
+    [markDirtyAndEnsureLock],
+  );
+
   const restoreDraft = useCallback((): string => {
     const content = draftPrompt?.content ?? '';
     contentRef.current.body = content;
@@ -434,6 +458,13 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
   const save = useCallback(async (): Promise<boolean> => {
     if (savingRef.current) return false; // 多重送信は失敗扱い(呼び出し側でリトライ判断)
     if (!dirtyRef.current) return true; // 変更なしは既に保存済みと同義。閉じ確認等でそのまま先へ進める
+
+    // #282: プロパティに入力エラーがある場合は保存しない
+    if (!contentRef.current.frontmatterValid) {
+      showToast('error', 'プロパティに入力エラーがあります');
+      return false;
+    }
+
     const path = optionsRef.current.path;
     if (!path || !editBaseRef.current) return false;
 
@@ -452,10 +483,12 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
       // 編集を始めた時点(または最後に保存した時点)の updatedAt を送る。キャッシュの値は使わない
       const baseUpdatedAt = editBaseRef.current;
       if (!baseUpdatedAt) return false;
+      const sentOps = contentRef.current.frontmatterOps;
       const { updatedAt, frontmatter } = await saveDoc({
         path,
         body: contentRef.current.body,
         tags: contentRef.current.tags,
+        frontmatterOps: sentOps.length > 0 ? sentOps : undefined,
         baseUpdatedAt,
       });
       // React Query の refetch を待たず、送信した内容+returnされたupdatedAtでキャッシュを即更新する。
@@ -474,12 +507,17 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
           : old,
       );
       // 保存後も編集モードは継続する(シームレスUX。#51)。
-      // ロックはしばらく入力が無ければ手放す(#300)。次の比較の基準は、いま保存した updatedAt
       editBaseRef.current = updatedAt;
-      dirtyRef.current = false;
-      setDirty(false);
+      // #282: 送信中にプロパティが更新された場合は ops を残し、dirty=true のままアイドルタイマーを起動しない
+      if (contentRef.current.frontmatterOps === sentOps) {
+        contentRef.current.frontmatterOps = [];
+        dirtyRef.current = false;
+        setDirty(false);
+        scheduleIdleRelease();
+      } else {
+        dirtyRef.current = true;
+      }
       setLastDraftSavedAt(null);
-      scheduleIdleRelease();
       // tree/tags はタグ変化に追随させる
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
@@ -512,12 +550,18 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
   const resolveConflictOverwrite = useCallback(async () => {
     const path = optionsRef.current.path;
     if (!path) return;
+    if (!contentRef.current.frontmatterValid) {
+      showToast('error', 'プロパティに入力エラーがあります');
+      return;
+    }
     try {
       const latest = await fetchDoc(path);
+      const sentOps = contentRef.current.frontmatterOps;
       const { updatedAt, frontmatter } = await saveDoc({
         path,
         body: contentRef.current.body,
         tags: contentRef.current.tags,
+        frontmatterOps: sentOps.length > 0 ? sentOps : undefined,
         baseUpdatedAt: latest.updatedAt,
       });
       queryClient.setQueryData<DocResponse | undefined>(docQueryKey(path), (old) =>
@@ -533,6 +577,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
       );
       // 保存後も編集モードを継続(#51)。ロックはしばらく入力が無ければ手放す(#300)
       editBaseRef.current = updatedAt;
+      contentRef.current.frontmatterOps = [];
       dirtyRef.current = false;
       setDirty(false);
       setLastDraftSavedAt(null);
@@ -598,7 +643,12 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
       if (dirtyRef.current || lockedPathRef.current !== null || lockPromiseRef.current !== null) {
         return false;
       }
-      contentRef.current = { body: latest.body, tags: latest.tags };
+      contentRef.current = {
+        body: latest.body,
+        tags: latest.tags,
+        frontmatterOps: [],
+        frontmatterValid: true,
+      };
       editBaseRef.current = latest.updatedAt;
       return true;
     },
@@ -687,6 +737,7 @@ export function useEditingSession(options: UseEditingSessionOptions): UseEditing
     startEditing,
     updateBody,
     updateTags,
+    updateFrontmatter,
     syncBody,
     save,
     cancelEditing,

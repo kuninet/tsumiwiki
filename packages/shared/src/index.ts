@@ -89,6 +89,9 @@ export const docResponseSchema = z.object({
   path: z.string(),
   // フロントマター全体(未知キー含む)。エディタにはbodyのみ渡す(設計05章5.1)
   frontmatter: z.record(z.string(), z.unknown()),
+  // #282: none=フロントマターなし / ok=編集できる / invalid=壊れた YAML やルートがマップでない(編集不可)。
+  // 古いサーバー互換のため optional。未定義は 'ok' 扱い
+  frontmatterStatus: z.enum(['ok', 'none', 'invalid']).optional(),
   tags: z.array(z.string()),
   body: z.string(),
   updatedAt: z.string(),
@@ -103,10 +106,32 @@ export const createDocRequestSchema = z.object({
 });
 export type CreateDocRequest = z.infer<typeof createDocRequestSchema>;
 
+// プロパティ値として UI から送れる値(#282)。入れ子のマップ・オブジェクト入り配列は送らない
+export const frontmatterValueSchema = z.union([
+  z.string(),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+  z.array(z.union([z.string(), z.number().finite(), z.boolean()])).max(500),
+]);
+export type FrontmatterValue = z.infer<typeof frontmatterValueSchema>;
+
+const fmKey = z.string().min(1).max(200);
+
+// フロントマターの編集操作(#282)。変更したキーだけを送る
+export const frontmatterOpSchema = z.discriminatedUnion('op', [
+  z.object({ op: z.literal('set'), key: fmKey, value: frontmatterValueSchema }),
+  z.object({ op: z.literal('delete'), key: fmKey }),
+  z.object({ op: z.literal('rename'), from: fmKey, to: fmKey }),
+]);
+export type FrontmatterOp = z.infer<typeof frontmatterOpSchema>;
+
 export const saveDocRequestSchema = z.object({
   path: z.string().min(1),
   body: z.string(),
   tags: z.array(z.string()).optional(), // 省略時はタグ変更なし
+  // #282: プロパティの編集操作。省略または空配列ならプロパティは変えない
+  frontmatterOps: z.array(frontmatterOpSchema).max(200).optional(),
   baseUpdatedAt: z.string().min(1), // 競合検知用(取得時のupdatedAt)
 });
 export type SaveDocRequest = z.infer<typeof saveDocRequestSchema>;

@@ -36,6 +36,12 @@ import { dispatchAttachmentChanged } from '../lib/attachment-events';
 import { copyTextWithToast } from '../lib/clipboard';
 import { titleFromPath } from '../lib/doc-path';
 import { handleWikilinkClick } from '../lib/handle-wikilink-click';
+import {
+  buildFrontmatterOps,
+  rowsFromFrontmatter,
+  validateRows,
+  type PropertyRowsState,
+} from '../lib/frontmatter-edit';
 import { removeInlineTag, renameInlineTag } from '../lib/inline-tag-rewrite';
 import { isPdfFile, parseEmbedTarget, toFilesUrl } from '../lib/resolve-embed-src';
 import { saveBadge } from '../lib/save-badge';
@@ -179,6 +185,9 @@ export function DocView({
   // #51 Opus C1: タグの pending 状態を DocView 側に持ち、連続タグ操作でも
   // stale な doc.tags を参照しないようにする。閲覧モード遷移で doc.tags 側へ揃える
   const [pendingTags, setPendingTags] = useState<string[]>(doc.tags);
+  // #282: 編集中のプロパティ。pendingTags と同じく DocView が持ち、閲覧モードと保存後は doc.frontmatter に揃える
+  const [propertyRows, setPropertyRows] = useState(() => rowsFromFrontmatter(doc.frontmatter));
+  const propertyErrors = useMemo(() => validateRows(propertyRows), [propertyRows]);
   // #199 画像の管理メニュー: 右クリック/「⋯」ボタンで開く。resolveAttachment成功後にのみセットする
   // (未解決の間はメニューを出さずトーストのみ表示するため、resolvedは必須にしている)
   const [attachmentMenu, setAttachmentMenu] = useState<
@@ -497,6 +506,8 @@ export function DocView({
       // preventDefault するが stopPropagation しないので window まで届く。
       // #224: ソース編集中はリンクダイアログが隠れたエディタへ書き込んでしまうため無効化
       if (isMod && !e.shiftKey && e.key.toLowerCase() === 'k') {
+        // #282: プロパティ入力欄にフォーカスがあるときはリンクダイアログを開かない
+        if ((e.target as Element | null)?.closest?.('[data-testid="properties-panel"]')) return;
         if (sourceModeRef.current) return;
         e.preventDefault();
         showEditorChrome();
@@ -542,10 +553,28 @@ export function DocView({
     if (session.mode === 'view') setPendingTags(doc.tags);
   }, [session.mode, doc.tags]);
 
+  // #282: 閲覧モード、または未変更(保存直後・取り直し直後)なら doc.frontmatter を編集の起点にする。
+  // dirty の間は入力中の行を上書きしない
+  useEffect(() => {
+    if (session.mode === 'view' || !session.dirty) {
+      setPropertyRows(rowsFromFrontmatter(doc.frontmatter));
+    }
+  }, [session.mode, session.dirty, doc.frontmatter]);
+
+  function handlePropertyRowsChange(next: PropertyRowsState) {
+    setPropertyRows(next);
+    const errors = validateRows(next);
+    session.updateFrontmatter(
+      errors.size === 0 ? buildFrontmatterOps(next) : [],
+      errors.size === 0,
+    );
+  }
+
   function handleStartEdit() {
     // 手動で編集モードへ入り直すエントリ(閲覧モード落ち後のリトライ用)
     autoEditAttemptedRef.current = doc.path;
     setPendingTags(doc.tags);
+    setPropertyRows(rowsFromFrontmatter(doc.frontmatter));
     void session.startEditing(doc.body, doc.tags);
   }
 
@@ -905,6 +934,7 @@ export function DocView({
           if (sessionRef.current.reloadFromLatest(latest) && editor && !editor.isDestroyed) {
             editor.commands.setContent(latest.body, false);
             setPendingTags(latest.tags);
+            setPropertyRows(rowsFromFrontmatter(latest.frontmatter ?? doc.frontmatter));
           }
         } catch {
           // 取り直せなかったときは基準を進めない。次のロック取得か保存で競合として検知される
@@ -1144,8 +1174,15 @@ export function DocView({
           data-testid="doc-content-wrap"
           className={`mx-auto ${contentWidthMaxClass(contentWidth)} px-4 py-4 sm:px-6 lg:px-8`}
         >
-          {/* #281: フロントマターのプロパティ表示(初期は折りたたみ)。ソース編集中も見えるよう hidden の外に置く */}
-          <PropertiesPanel frontmatter={doc.frontmatter} />
+          {/* #281, #282: フロントマターのプロパティ表示・編集。ソース編集中も見えるよう hidden の外に置く */}
+          <PropertiesPanel
+            frontmatter={doc.frontmatter}
+            editable={session.mode === 'edit'}
+            frontmatterStatus={doc.frontmatterStatus}
+            rows={propertyRows}
+            errors={propertyErrors}
+            onRowsChange={handlePropertyRowsChange}
+          />
           {/* #224 ソース編集モード: editorインスタンスはunmountせず保持したままCSSで隠す
               (エディタ状態・NodeView等を保ったまま行き来できるようにするため) */}
           <div hidden={sourceMode}>
