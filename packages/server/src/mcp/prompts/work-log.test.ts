@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildWorkLogPrompt, type WorkLogRecipe } from './work-log.js';
+import type { Recipe } from './recipe.js';
+import { buildWorkLogPrompt } from './work-log.js';
 
-const MISSING: WorkLogRecipe = { path: '作業ログの書き方.md', missing: true };
-const FOUND: WorkLogRecipe = {
+const MISSING: Recipe = { path: '作業ログの書き方.md', missing: true };
+const FOUND: Recipe = {
   path: '作業ログの書き方.md',
   body: '# 作業ログの書き方\n\n保存先は 作業ログ/{プロジェクト}/ にする。',
 };
@@ -50,14 +51,18 @@ describe('buildWorkLogPrompt', () => {
     }
   });
 
-  it('project の指定の有無で対象プロジェクトの行だけが変わる', () => {
+  it('project の指定の有無で、対象プロジェクトの行と例の project 行だけが変わる', () => {
     const base = { today: '2026-11-01', recipe: MISSING };
     const without = buildWorkLogPrompt(base);
     const withProject = buildWorkLogPrompt({ ...base, project: 'tsumiwiki' });
     expect(without).toContain('対象プロジェクト: 指定なし(作業内容から特定する)');
     expect(withProject).toContain('対象プロジェクト: tsumiwiki');
     expect(withProject).not.toContain('指定なし(作業内容から特定する)');
-    expect(without.replace('指定なし(作業内容から特定する)', 'tsumiwiki')).toBe(withProject);
+    expect(
+      without
+        .replace('指定なし(作業内容から特定する)', 'tsumiwiki')
+        .replace('project: <プロジェクト名>', 'project: tsumiwiki'),
+    ).toBe(withProject);
   });
 
   it('手順に承認の範囲・パス重複時の確認・wikilink の形が書かれている', () => {
@@ -67,6 +72,18 @@ describe('buildWorkLogPrompt', () => {
     expect(text).toContain('承認の前には、どちらのノートにも書き込まない');
     expect(text).toContain('同じパスのノートがあってエラーになったら、別のファイル名を本人に確認する');
     expect(text).toContain('[[作ったノートのパスから .md を除いたもの]]');
+  });
+
+  it('手順4に作業ログのフロントマターの指示があり、今日の日付が入る', () => {
+    const text = buildWorkLogPrompt({ project: 'tsumiwiki', today: '2026-11-01', recipe: MISSING });
+    expect(text).toContain('type: work-log');
+    expect(text).toContain('date: 2026-11-01');
+    expect(text).toContain('project: tsumiwiki');
+    expect(text).not.toContain('<今日の日付>');
+    expect(text).not.toContain('<プロジェクト名>');
+    // project が無いときだけ、例は <プロジェクト名> になる
+    const noProject = buildWorkLogPrompt({ today: '2026-11-01', recipe: MISSING });
+    expect(noProject).toContain('project: <プロジェクト名>');
   });
 
   it('手順に create_note と append_to_daily_note が含まれる', () => {

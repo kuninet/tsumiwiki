@@ -4,7 +4,9 @@ import { registerReadTools } from './tools/read.js';
 import { registerWriteTools } from './tools/write.js';
 import { registerDailyTools } from './tools/daily.js';
 import { registerHistoryTools } from './tools/history.js';
+import { registerInstructionTools } from './tools/instructions.js';
 import { registerWorkLogPrompt } from './prompts/work-log.js';
+import { registerDailyJournalPrompt } from './prompts/daily-journal.js';
 
 // MCP経由の操作はコミットログでUI操作と判別できるよう固定のauthorを使う(issue #190)
 export const MCP_AUTHOR = { name: 'MCP Agent', email: 'mcp@tsumiwiki.local' } as const;
@@ -21,6 +23,8 @@ export function buildMcpServer(app: FastifyInstance): McpServer {
   registerWriteTools(mcp, app);
   registerDailyTools(mcp, app);
   registerHistoryTools(mcp, app);
+  registerInstructionTools(mcp, app);
   registerWorkLogPrompt(mcp, app);
+  registerDailyJournalPrompt(mcp, app);
   return mcp;
 }

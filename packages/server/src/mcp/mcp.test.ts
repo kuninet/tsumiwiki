@@ -138,7 +138,7 @@ describe('POST /mcp JSON-RPC', () => {
     expect(res.json().result.serverInfo.name).toBe('tsumiwiki');
   });
 
-  it('tools/listで期待する22個のツール名が全て含まれる', async () => {
+  it('tools/listで期待する23個のツール名が全て含まれる', async () => {
     const res = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(res.statusCode).toBe(200);
     const names = res.json().result.tools.map((t: { name: string }) => t.name);
@@ -165,12 +165,13 @@ describe('POST /mcp JSON-RPC', () => {
       'move_folder',
       'find_notes_by_property',
       'list_properties',
+      'get_record_instructions',
     ];
     for (const name of expected) {
       expect(names).toContain(name);
     }
-    expect(expected).toHaveLength(22);
-    expect(names).toHaveLength(22);
+    expect(expected).toHaveLength(23);
+    expect(names).toHaveLength(23);
   });
 
   it('search_notesを何もない状態で呼ぶと空配列が返る', async () => {
@@ -2170,13 +2171,14 @@ describe('プロンプト work_log(issue #296)', () => {
     expect(res.json().result.capabilities.tools).toBeDefined();
   });
 
-  it('prompts/list に work_log が1件あり、引数 project は任意', async () => {
+  it('prompts/list に work_log が1件あり、引数 project は任意(全体で2件)', async () => {
     const res = await mcpRequest({ jsonrpc: '2.0', id: ++seq, method: 'prompts/list', params: {} });
     expect(res.statusCode).toBe(200);
     const prompts = res.json().result.prompts as {
       name: string;
       arguments: { name: string; required?: boolean }[];
     }[];
+    expect(prompts).toHaveLength(2);
     expect(prompts.filter((p) => p.name === 'work_log')).toHaveLength(1);
     const args = prompts.find((p) => p.name === 'work_log')!.arguments;
     expect(args).toHaveLength(1);
@@ -2262,5 +2264,118 @@ describe('プロンプト work_log(issue #296)', () => {
     await buildMcpApp({ MCP_WORK_LOG_RECIPE: '../outside.md' });
     const text = (await getPrompt()).result.messages[0].content.text as string;
     expect(text).toContain('レシピノート ../outside.md が見つからない');
+  });
+});
+
+describe('プロンプト daily_journal / ツール get_record_instructions(issue #298)', () => {
+  const RECIPE_PATH = '作業ログの書き方.md';
+  let seq = 800;
+
+  beforeEach(async () => {
+    await buildMcpApp();
+  });
+
+  function request(method: string, params: unknown) {
+    return mcpRequest({ jsonrpc: '2.0', id: ++seq, method, params });
+  }
+
+  async function callTool(name: string, args: Record<string, unknown>) {
+    const res = await request('tools/call', { name, arguments: args });
+    expect(res.statusCode).toBe(200);
+    return res.json().result;
+  }
+
+  const today = () => {
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+
+  it('prompts/list に daily_journal が1件あり、引数は持たない', async () => {
+    const res = await request('prompts/list', {});
+    const prompts = res.json().result.prompts as { name: string; title?: string; arguments?: unknown[] }[];
+    const found = prompts.filter((p) => p.name === 'daily_journal');
+    expect(found).toHaveLength(1);
+    expect(found[0].title).toBe('今日の振り返りを書く');
+    expect(found[0].arguments ?? []).toHaveLength(0);
+  });
+
+  it('prompts/get daily_journal は arguments を省略・{} のどちらでも成功する', async () => {
+    for (const params of [{ name: 'daily_journal' }, { name: 'daily_journal', arguments: {} }]) {
+      const res = await request('prompts/get', params);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().error).toBeUndefined();
+      const msg = res.json().result.messages[0];
+      expect(msg.role).toBe('user');
+      expect(msg.content.text).toContain('`find_notes_by_property`');
+      expect(msg.content.text).toContain(`今日の日付: ${today()}`);
+      expect(msg.content.text).not.toContain('{{');
+    }
+  });
+
+  it('prompts/get daily_journal にレシピノートの本文が差し込まれる', async () => {
+    await callTool('create_note', { path: RECIPE_PATH, content: '振り返りの見出しは ## 今日のまとめ にする。' });
+    const res = await request('prompts/get', { name: 'daily_journal' });
+    const text = res.json().result.messages[0].content.text as string;
+    expect(text).toContain(`## レシピ(${RECIPE_PATH})`);
+    expect(text).toContain('振り返りの見出しは ## 今日のまとめ にする。');
+  });
+
+  it('work_log のプロンプトにフロントマターの指示と今日の日付が入る', async () => {
+    const res = await request('prompts/get', { name: 'work_log', arguments: { project: 'X' } });
+    const text = res.json().result.messages[0].content.text as string;
+    expect(text).toContain('type: work-log');
+    expect(text).toContain(`date: ${today()}`);
+    expect(text).toContain('project: X');
+  });
+
+  it('get_record_instructions: kind work_log + project で本文に project が入る', async () => {
+    const r = await callTool('get_record_instructions', { kind: 'work_log', project: 'X' });
+    expect(r.isError).toBeFalsy();
+    const text = r.content[0].text as string;
+    expect(text).toContain('対象プロジェクト: X');
+    expect(text).toContain('`create_note`');
+    expect(text).toContain(`date: ${today()}`);
+    expect(r.structuredContent).toBeUndefined();
+  });
+
+  it('get_record_instructions: kind daily_journal で振り返りの本文が返る(project は無視)', async () => {
+    const r = await callTool('get_record_instructions', { kind: 'daily_journal', project: 'X' });
+    expect(r.isError).toBeFalsy();
+    const text = r.content[0].text as string;
+    expect(text).toContain('今日1日の作業を振り返り');
+    expect(text).toContain('`## 振り返り`');
+    expect(text).not.toContain('対象プロジェクト');
+  });
+
+  it('get_record_instructions: 本文はプロンプトと一致する', async () => {
+    const r = await callTool('get_record_instructions', { kind: 'daily_journal' });
+    const res = await request('prompts/get', { name: 'daily_journal' });
+    expect(r.content[0].text).toBe(res.json().result.messages[0].content.text);
+  });
+
+  it('get_record_instructions: 不正な kind はエラーになる', async () => {
+    const res = await request('tools/call', {
+      name: 'get_record_instructions',
+      arguments: { kind: 'weekly' },
+    });
+    expect(res.statusCode).toBe(200);
+    const json = res.json();
+    expect(json.error !== undefined || json.result?.isError === true).toBe(true);
+  });
+
+  it('フロントマター付きで create_note した作業ログが find_notes_by_property(date, 今日) で見つかる', async () => {
+    const d = today();
+    await callTool('create_note', {
+      path: '作業ログ/X/作業.md',
+      content: `---\ntype: work-log\ndate: ${d}\nproject: X\n---\n本文`,
+    });
+    await callTool('create_note', {
+      path: '作業ログ/X/別日.md',
+      content: '---\ntype: work-log\ndate: 2000-01-01\nproject: X\n---\n本文',
+    });
+    const r = await callTool('find_notes_by_property', { key: 'date', value: d });
+    const items = r.structuredContent.items as { path: string; values: unknown }[];
+    expect(items.map((i) => i.path)).toEqual(['作業ログ/X/作業.md']);
   });
 });
