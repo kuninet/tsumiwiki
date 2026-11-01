@@ -17,6 +17,9 @@ interface ContextMenuProps {
 
 const VIEWPORT_MARGIN = 4;
 
+// 今開いているメニューの閉じる関数(開けるメニューは1つ)
+let openMenuClose: (() => void) | null = null;
+
 export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ x, y });
@@ -34,14 +37,41 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
     setPosition({ x: clampedX, y: clampedY });
   }, [x, y]);
 
+  // 呼び出し元は onClose を毎レンダー作り直すので、最新の関数を ref で持つ
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  // 開けるメニューは常に1つ(#301)。新しく開いたら、ほかのメニューを閉じる。
+  // 開く側が stopPropagation していても(FolderTree の行・DocView の表など)閉じられるよう、
+  // イベントの伝播に頼らずモジュール単位で「今開いているメニュー」を持つ
   useEffect(() => {
-    window.addEventListener('click', onClose);
-    window.addEventListener('contextmenu', onClose);
+    const close = () => onCloseRef.current();
+    if (openMenuClose && openMenuClose !== close) openMenuClose();
+    openMenuClose = close;
     return () => {
-      window.removeEventListener('click', onClose);
-      window.removeEventListener('contextmenu', onClose);
+      if (openMenuClose === close) openMenuClose = null;
     };
-  }, [onClose]);
+  }, []);
+
+  useEffect(() => {
+    const handleClick = () => onCloseRef.current();
+    // 右クリックは window の capture で受ける(#301)。
+    // - メニューを開いた右クリックそのものでは閉じない: このリスナは開いた後に登録されるので、
+    //   そのイベントの window の capture はもう過ぎている(bubble で受けると、React の
+    //   描画と effect がリスナの間に走り、同じイベントが window に届いて即閉じしていた)
+    // - 別の場所の右クリックは、そこで stopPropagation されても capture なので必ず届く。
+    //   同じコンポーネントが別の対象でメニューを開き直すときも、閉じてから開く順になる
+    const handleContextMenu = (e: MouseEvent) => {
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
+      onCloseRef.current();
+    };
+    window.addEventListener('click', handleClick);
+    window.addEventListener('contextmenu', handleContextMenu, true);
+    return () => {
+      window.removeEventListener('click', handleClick);
+      window.removeEventListener('contextmenu', handleContextMenu, true);
+    };
+  }, []);
 
   return (
     <div

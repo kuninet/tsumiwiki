@@ -19,6 +19,7 @@ import {
 } from '../api/docs';
 import { ApiRequestError } from '../api/client';
 import { buildTree, parentOf, type TreeNode } from '../lib/build-tree';
+import { copyTextWithToast } from '../lib/clipboard';
 import { docUrl } from '../lib/doc-path';
 import { confirmNavigationIfDirty } from '../lib/navigation-guard';
 import { useTabsStore } from '../stores/tabs';
@@ -56,6 +57,19 @@ interface FlatEntry {
   node: TreeNode;
   depth: number;
   parentPath: string | null;
+}
+
+// #301: wikilink 形式 `[[パスから .md を除いたもの]]`(MCP の work_log と同じ書式)。
+// パスの完全一致で解決される。titleFromPath はフォルダを落とすので使わない
+function wikilinkFor(path: string): string {
+  return `[[${path.replace(/\.md$/i, '')}]]`;
+}
+
+// `#` はアンカー、`|` は別名の区切り、`[` `]` は記法の括弧として解釈され、
+// そのパスへのリンクにならない(@tsumiwiki/shared の parseWikilinkTarget)。
+// そういう文書には「wikilink形式でコピー」を出さない
+function canCopyAsWikilink(path: string): boolean {
+  return !/[#|[\]]/.test(path);
 }
 
 function flattenVisible(
@@ -171,6 +185,8 @@ export function FolderTree() {
 
   function openMenu(e: MouseEvent, target: MenuTarget) {
     e.preventDefault();
+    // 行の右クリックが外側(ルートの空白部分)の onContextMenu に届くと、
+    // root のメニューに置き換わるので止める
     e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY, target });
   }
@@ -214,6 +230,11 @@ export function FolderTree() {
           onSelect: () => startInlineRename(target.path),
         },
         {
+          // #301: MCP の create_note / move_folder に渡すライブラリ相対パス
+          label: 'パスをコピー',
+          onSelect: () => copyTextWithToast(target.path, showToast),
+        },
+        {
           label: '削除',
           danger: true,
           onSelect: () => setConfirm({ kind: 'deleteFolder', path: target.path, name: target.name }),
@@ -226,6 +247,29 @@ export function FolderTree() {
         // #152: モーダルではなく inline 編集を発火
         label: 'リネーム',
         onSelect: () => startInlineRename(target.path),
+      },
+      {
+        // #301: MCP の read_note / save_note などに渡すライブラリ相対パス(.md 付き)
+        label: 'パスをコピー',
+        onSelect: () => copyTextWithToast(target.path, showToast),
+      },
+      ...(canCopyAsWikilink(target.path)
+        ? [
+            {
+              label: 'wikilink形式でコピー',
+              onSelect: () =>
+                copyTextWithToast(wikilinkFor(target.path), showToast, 'wikilinkをコピーしました'),
+            },
+          ]
+        : []),
+      {
+        label: 'URLをコピー',
+        onSelect: () =>
+          copyTextWithToast(
+            `${window.location.origin}${docUrl(target.path)}`,
+            showToast,
+            'URLをコピーしました',
+          ),
       },
       {
         label: '削除',
@@ -344,7 +388,7 @@ export function FolderTree() {
       const { commonParent: parent, selection } = dialog;
       // #82 fix-forward: 入力値を trim + `/`/`\`/制御文字拒否
       const trimmed = value.trim();
-      if (!trimmed || /[\\/ -]/.test(trimmed)) {
+      if (!trimmed || /[\\/\x00-\x1f]/.test(trimmed)) {
         showToast('error', 'フォルダ名に / や制御文字は使えません');
         return; // ダイアログは閉じず再入力できる
       }

@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getActivePaneActiveIdFromState, getActivePaneTabsFromState, useTabsStore } from '../stores/tabs';
+import { useToastStore } from '../stores/toast';
 import { TabBar } from './TabBar';
 
 function LocationProbe() {
@@ -22,7 +23,12 @@ describe('TabBar', () => {
   beforeEach(() => {
     useTabsStore.getState().reset();
   });
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    delete (document as unknown as { execCommand?: unknown }).execCommand;
+    useToastStore.setState({ toast: null });
+  });
 
   it('タブが無ければ何も描画しない', () => {
     const { container } = renderTabBar();
@@ -195,5 +201,21 @@ describe('TabBar', () => {
       fireEvent.click(screen.getByRole('menuitem', { name: '他をすべて閉じる' }));
       expect(getActivePaneTabsFromState(useTabsStore.getState()).map((t) => t.path)).toEqual(['b.md']);
     });
+
+    it.each(['a.md', 'フォルダA/子文書.md'])(
+      '「パスをコピー」でタブのパス %s を書き込む(#301)',
+      async (path) => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+        useTabsStore.getState().openDoc(path);
+        renderTabBar();
+        fireEvent.contextMenu(screen.getByTestId(`tab-${path}`));
+        fireEvent.click(screen.getByRole('menuitem', { name: 'パスをコピー' }));
+        expect(writeText).toHaveBeenCalledWith(path);
+        await waitFor(() =>
+          expect(useToastStore.getState().toast?.message).toBe('パスをコピーしました'),
+        );
+      },
+    );
   });
 });

@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import type { TreeResponse } from '@tsumiwiki/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { docUrl } from '../lib/doc-path';
 import { useEditStore } from '../stores/edit';
+import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
 import { FolderTree } from './FolderTree';
 
@@ -16,10 +18,10 @@ const TREE = {
   ],
 };
 
-function renderFolderTree(initialPath = '/') {
+function renderFolderTree(initialPath = '/', tree: TreeResponse = TREE) {
   vi.stubGlobal(
     'fetch',
-    vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(TREE) }),
+    vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(tree) }),
   );
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -40,6 +42,9 @@ describe('FolderTree', () => {
     cleanup();
     useUIStore.setState({ expandedFolders: new Set() });
     useEditStore.setState({ dirty: false });
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    delete (document as unknown as { execCommand?: unknown }).execCommand;
+    useToastStore.setState({ toast: null });
   });
 
   it('ルート直下の文書とフォルダを表示し、フォルダは初期状態で折りたたまれている', async () => {
@@ -1092,6 +1097,117 @@ describe('FolderTree', () => {
         const targets = new Set(moves.map((m) => (m.body as { newFolder: string }).newFolder));
         expect(targets).toEqual(new Set(['フォルダA']));
       });
+    });
+  });
+
+  describe('右クリックメニューのコピー(#301)', () => {
+    const toastMessage = () => useToastStore.getState().toast?.message;
+
+    async function setup(
+      writeText: unknown = vi.fn().mockResolvedValue(undefined),
+      tree?: TreeResponse,
+    ) {
+      if (writeText) {
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      }
+      renderFolderTree('/', tree);
+      await screen.findByText('フォルダA');
+      return writeText as ReturnType<typeof vi.fn>;
+    }
+    async function openChildDocMenu() {
+      fireEvent.click(screen.getByText('フォルダA'));
+      fireEvent.contextMenu(await screen.findByTestId('doc-フォルダA/子文書.md'));
+    }
+    const clickItem = (name: string) => fireEvent.click(screen.getByRole('menuitem', { name }));
+
+    it('フォルダ内の文書の「パスをコピー」', async () => {
+      const writeText = await setup();
+      await openChildDocMenu();
+      clickItem('パスをコピー');
+      expect(writeText).toHaveBeenCalledWith('フォルダA/子文書.md');
+      await waitFor(() => expect(toastMessage()).toBe('パスをコピーしました'));
+      expect(screen.queryByRole('menu')).toBeNull();
+    });
+
+    it('フォルダの「パスをコピー」', async () => {
+      const writeText = await setup();
+      fireEvent.contextMenu(screen.getByText('フォルダA'));
+      clickItem('パスをコピー');
+      expect(writeText).toHaveBeenCalledWith('フォルダA');
+    });
+
+    it('入れ子フォルダのパス', async () => {
+      const writeText = await setup(undefined, {
+        folders: ['フォルダA', 'フォルダA/子フォルダ'],
+        docs: [],
+      });
+      fireEvent.click(screen.getByText('フォルダA'));
+      fireEvent.contextMenu(await screen.findByText('子フォルダ'));
+      clickItem('パスをコピー');
+      expect(writeText).toHaveBeenCalledWith('フォルダA/子フォルダ');
+    });
+
+    it('「wikilink形式でコピー」', async () => {
+      const writeText = await setup();
+      await openChildDocMenu();
+      clickItem('wikilink形式でコピー');
+      expect(writeText).toHaveBeenCalledWith('[[フォルダA/子文書]]');
+      await waitFor(() => expect(toastMessage()).toBe('wikilinkをコピーしました'));
+    });
+
+    it('`#` を含む文書には wikilink 項目が出ない', async () => {
+      await setup();
+      fireEvent.contextMenu(await screen.findByTestId('doc-見出し#1.md'));
+      expect(screen.queryByRole('menuitem', { name: 'wikilink形式でコピー' })).toBeNull();
+      expect(screen.getByRole('menuitem', { name: 'パスをコピー' })).toBeTruthy();
+    });
+
+    it('「URLをコピー」', async () => {
+      const writeText = await setup();
+      await openChildDocMenu();
+      clickItem('URLをコピー');
+      expect(writeText).toHaveBeenCalledWith(
+        `${window.location.origin}${docUrl('フォルダA/子文書.md')}`,
+      );
+      await waitFor(() => expect(toastMessage()).toBe('URLをコピーしました'));
+    });
+
+    it('フォルダのメニューに wikilink・URL は出ない', async () => {
+      await setup();
+      fireEvent.contextMenu(screen.getByText('フォルダA'));
+      expect(screen.queryByRole('menuitem', { name: 'wikilink形式でコピー' })).toBeNull();
+      expect(screen.queryByRole('menuitem', { name: 'URLをコピー' })).toBeNull();
+    });
+
+    it('書き込み失敗でエラートースト', async () => {
+      await setup(vi.fn().mockRejectedValue(new Error('denied')));
+      fireEvent.contextMenu(screen.getByText('フォルダA'));
+      clickItem('パスをコピー');
+      await waitFor(() => expect(toastMessage()).toBe('コピーに失敗しました'));
+      expect(useToastStore.getState().toast?.kind).toBe('error');
+    });
+
+    it('navigator.clipboard が無い環境(非セキュアコンテキスト相当)で失敗トースト', async () => {
+      await setup(null);
+      fireEvent.contextMenu(screen.getByText('フォルダA'));
+      clickItem('パスをコピー');
+      await waitFor(() => expect(toastMessage()).toBe('コピーに失敗しました'));
+    });
+
+    it('同期経路(execCommand)がクリックの中で走る', async () => {
+      const writeText = await setup();
+      const setData = vi.fn();
+      (document as unknown as { execCommand: () => boolean }).execCommand = () => {
+        const ev = new Event('copy');
+        (ev as unknown as { clipboardData: unknown }).clipboardData = { setData };
+        document.dispatchEvent(ev);
+        return true;
+      };
+      fireEvent.contextMenu(await screen.findByTestId('doc-ルート文書.md'));
+      clickItem('パスをコピー');
+      expect(setData).toHaveBeenCalledWith('text/plain', 'ルート文書.md');
+      expect(writeText).not.toHaveBeenCalled();
+      await waitFor(() => expect(toastMessage()).toBe('パスをコピーしました'));
     });
   });
 });

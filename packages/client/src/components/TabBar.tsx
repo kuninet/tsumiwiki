@@ -6,6 +6,7 @@ import {
   useState,
 } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { copyTextWithToast } from '../lib/clipboard';
 import { docUrl, titleFromPath } from '../lib/doc-path';
 import { isMac } from '../lib/platform';
 import { useDragStore } from '../stores/drag';
@@ -16,6 +17,7 @@ import {
   type LeafPane,
   type PaneId,
 } from '../stores/tabs';
+import { useToastStore } from '../stores/toast';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 
 // 編集/閲覧ペインのタブバー(Epic #133 / Phase A-1 + A-2 + B2)。
@@ -49,6 +51,7 @@ export function TabBar({ paneId }: Props = {}) {
   const tabs = pane?.tabs ?? EMPTY_TABS;
   const activeId = pane?.activeId ?? null;
 
+  const showToast = useToastStore((s) => s.show);
   const setActive = useTabsStore((s) => s.setActive);
   const setActivePane = useTabsStore((s) => s.setActivePane);
   const promoteToPinned = useTabsStore((s) => s.promoteToPinned);
@@ -143,6 +146,11 @@ export function TabBar({ paneId }: Props = {}) {
       tab?.kind === 'pinned'
         ? { label: 'ピン留め解除', onSelect: () => unpin(path) }
         : { label: 'ピン留め', onSelect: () => promoteToPinned(path) },
+      {
+        // #301: 開いている文書のパスを、ツリーで探さずに取る
+        label: 'パスをコピー',
+        onSelect: () => copyTextWithToast(path, showToast),
+      },
       {
         label: '閉じる',
         onSelect: () => requestOrClose(path),
