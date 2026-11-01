@@ -5,9 +5,11 @@ import matter from 'gray-matter';
 import type { Logger } from 'pino';
 import {
   isAlias,
+  isMap,
   isNode,
   isScalar,
   isSeq,
+  Pair,
   parseDocument as parseYamlDocument,
   stringify as yamlStringify,
   YAMLSeq,
@@ -17,6 +19,7 @@ import type {
   BacklinksResponse,
   DocResponse,
   DocSummary,
+  FrontmatterOp,
   RenameAttachmentResponse,
   SaveDocResponse,
   TrashEntry,
@@ -353,6 +356,189 @@ export function validateFrontmatterPatch(
   return normalized;
 }
 
+// UI のプロパティ編集で触れないキー(#282)。tag は TagChipEditor が tags の代わりに読むため含める
+const RESERVED_PROPERTY_OP_KEYS = new Set(['tags', 'tag', 'updated']);
+
+// 操作のキー名を正規化・検証する。NFC 化と前後空白の除去を行い、空・予約・危険・制御文字を拒否する
+function normalizeOpKey(raw: string): string {
+  const key = raw.normalize('NFC').trim();
+  if (!key) {
+    throw new FrontmatterUpdateError('プロパティ名を空にすることはできません');
+  }
+  if (RESERVED_PROPERTY_OP_KEYS.has(key)) {
+    throw new FrontmatterUpdateError(`プロパティ '${key}' はここでは変更できません`);
+  }
+  if (DANGEROUS_FM_KEYS.has(key)) {
+    throw new FrontmatterUpdateError(`フロントマターに危険なキー名 '${key}' は指定できません`);
+  }
+  if (/[\u0000-\u001f\u007f]/.test(key)) {
+    throw new FrontmatterUpdateError('プロパティ名に改行や制御文字は使えません');
+  }
+  return key;
+}
+
+// キー文字列に一致する Pair を探す(#282)。スカラーのキーだけを対象に String(value) で比べる
+// (gray-matter 経由のクライアントには 123: や true: のキーも文字列で届くため)
+function findPair(doc: YamlDoc, key: string): Pair<unknown, unknown> | undefined {
+  if (!isMap(doc.contents)) return undefined;
+  return doc.contents.items.find(
+    (p) => isScalar(p.key) && p.key.value !== null && String(p.key.value).normalize('NFC') === key,
+  );
+}
+
+// 純関数: フロントマターの編集操作を適用する(#282)。YAML Document の既存ノードを外科的に書き換える
+export function applyFrontmatterOps(doc: YamlDoc, ops: FrontmatterOp[]): void {
+  if (!ops || ops.length === 0) return;
+
+  // 1. 正規化・検証 (不正なキー名は即座にエラー)
+  const normalizedOps = ops.map((op) => {
+    if (op.op === 'set') {
+      return { op: 'set' as const, key: normalizeOpKey(op.key), value: op.value };
+    }
+    if (op.op === 'delete') {
+      return { op: 'delete' as const, key: normalizeOpKey(op.key) };
+    }
+    return {
+      op: 'rename' as const,
+      from: normalizeOpKey(op.from),
+      to: normalizeOpKey(op.to),
+    };
+  });
+
+  // 2. delete
+  for (const op of normalizedOps) {
+    if (op.op !== 'delete') continue;
+    const pair = findPair(doc, op.key);
+    if (!pair) continue;
+    if (isNode(pair.value) && pair.value.anchor) {
+      throw new FrontmatterUpdateError(
+        `プロパティ '${op.key}' は他の場所から参照(&アンカー)されているため削除できません`,
+      );
+    }
+    if (isMap(doc.contents)) {
+      const idx = doc.contents.items.indexOf(pair);
+      if (idx !== -1) {
+        if (idx === 0 && isScalar(pair.key) && pair.key.commentBefore) {
+          const moved = pair.key.commentBefore;
+          if (doc.contents.items.length > 1) {
+            const next = doc.contents.items[1];
+            if (isNode(next.key)) {
+              next.key.commentBefore = [moved, next.key.commentBefore].filter(Boolean).join('\n');
+            }
+          } else {
+            doc.commentBefore = [moved, doc.commentBefore].filter(Boolean).join('\n');
+          }
+        }
+        doc.contents.items.splice(idx, 1);
+      }
+    }
+  }
+
+  // 3. rename
+  if (isMap(doc.contents)) {
+    const renameOps = normalizedOps.filter(
+      (op): op is { op: 'rename'; from: string; to: string } => op.op === 'rename',
+    );
+    const adopted: { pair: Pair<unknown, unknown>; from: string; to: string }[] = [];
+    for (const rop of renameOps) {
+      if (rop.from === rop.to) continue;
+      const pair = findPair(doc, rop.from);
+      if (!pair) continue;
+      adopted.push({ pair, from: rop.from, to: rop.to });
+    }
+
+    if (adopted.length > 0) {
+      const fromSet = new Set<string>();
+      const toSet = new Set<string>();
+      for (const item of adopted) {
+        if (fromSet.has(item.from) || toSet.has(item.to)) {
+          throw new FrontmatterUpdateError('プロパティ名が重複しています');
+        }
+        fromSet.add(item.from);
+        toSet.add(item.to);
+      }
+
+      const currentKeys = doc.contents.items
+        .map((p) =>
+          isScalar(p.key) && p.key.value !== null ? String(p.key.value).normalize('NFC') : '',
+        )
+        .filter(Boolean);
+      const remainingKeySet = new Set(currentKeys.filter((k) => !fromSet.has(k)));
+      for (const item of adopted) {
+        if (remainingKeySet.has(item.to)) {
+          throw new FrontmatterUpdateError(`プロパティ '${item.to}' は既にあります`);
+        }
+        remainingKeySet.add(item.to);
+      }
+
+      for (const item of adopted) {
+        if (isScalar(item.pair.key)) {
+          item.pair.key.value = item.to;
+        }
+      }
+    }
+  }
+
+  // 4. set
+  for (const op of normalizedOps) {
+    if (op.op !== 'set') continue;
+    const pair = findPair(doc, op.key);
+    if (!pair) {
+      doc.set(op.key, op.value);
+    } else {
+      const node = pair.value;
+      if (isNode(node) && node.anchor) {
+        throw new FrontmatterUpdateError(
+          `プロパティ '${op.key}' は他の場所から参照(&アンカー)されているため変更できません`,
+        );
+      }
+      if (isAlias(node)) {
+        pair.value = doc.createNode(op.value);
+      } else if (Array.isArray(op.value) && isSeq(node)) {
+        node.items = op.value.map((v) => doc.createNode(v));
+      } else if (isScalar(node) && !Array.isArray(op.value)) {
+        node.value = op.value;
+      } else {
+        pair.value = doc.createNode(op.value);
+      }
+    }
+  }
+}
+
+// フロントマターの状態(#282)。書き込み側(composeContent)と同じ FM_BLOCK_RE と yaml で判定する
+export function frontmatterStatusOf(content: string): 'ok' | 'none' | 'invalid' {
+  // 先に空ブロックを判定する: /^---\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/
+  if (/^---\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.test(content)) {
+    return 'none';
+  }
+  const m = FM_BLOCK_RE.exec(content);
+  if (!m) {
+    return /^---\r?\n/.test(content) ? 'invalid' : 'none';
+  }
+  const parsed = parseYamlDocument(m[1]);
+  if (parsed.errors.length > 0) {
+    return 'invalid';
+  }
+  const json = parsed.toJSON();
+  if (json === null || json === undefined) {
+    return 'ok';
+  }
+  if (typeof json === 'object' && !Array.isArray(json)) {
+    // マップのキーが空や null 等の不正なキーを持たないか確認
+    if (isMap(parsed.contents)) {
+      const hasInvalidKey = parsed.contents.items.some(
+        (p) =>
+          !isScalar(p.key) ||
+          p.key.value === null ||
+          !String(p.key.value).normalize('NFC').trim(),
+      );
+      if (hasInvalidKey) return 'invalid';
+    }
+    return 'ok';
+  }
+  return 'invalid';
+}
+
 // 本文先頭の YAML フロントマターを抽出し、ヘッダーを除去した本文とプロパティを分離する(issue #286)
 export function extractLeadingFrontmatter(body: string): {
   body: string;
@@ -597,6 +783,7 @@ export class DocService {
     }
 
     const frontmatter = this.parseFrontmatterData(content);
+    const frontmatterStatus = frontmatterStatusOf(content);
     let body = content;
     try {
       body = matter(content).content;
@@ -608,6 +795,7 @@ export class DocService {
     return {
       path: normalized,
       frontmatter,
+      frontmatterStatus,
       tags: meta.frontmatterTags,
       body,
       updatedAt: mtime.toISOString(),
@@ -685,6 +873,7 @@ export class DocService {
     baseUpdatedAt: string,
     userId: number,
     author: GitAuthor,
+    frontmatterOps?: FrontmatterOp[],
   ): Promise<SaveDocResponse> {
     const normalized = this.validateDocPath(relPath);
     const abs = resolveInLibrary(this.libraryPath, normalized);
@@ -707,7 +896,9 @@ export class DocService {
     }
 
     // 保存はLFに統一する(NFR-COMP-03。CRLF文書も保存時にLF化する)
-    const content = this.composeContent(current, body, tags).replace(/\r\n/g, '\n');
+    const content = this.composeContent(current, body, tags, undefined, undefined, {
+      ops: frontmatterOps,
+    }).replace(/\r\n/g, '\n');
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `edit: ${normalized}`, author);
     await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
@@ -906,24 +1097,28 @@ export class DocService {
     tags: TagsUpdate | undefined,
     frontmatter?: Record<string, unknown>,
     bodyFrontmatter?: Record<string, unknown>,
-    options: { strict?: boolean } = {},
+    options: { strict?: boolean; ops?: FrontmatterOp[] } = {},
   ): string {
     const patch = validateFrontmatterPatch(frontmatter);
     const bodyPatch = validateFrontmatterPatch(bodyFrontmatter);
+    const ops = options.ops ?? [];
+    const hasOps = ops.length > 0;
     const tagsUpdater = typeof tags === 'function' ? tags : undefined;
     const normalizedTags = Array.isArray(tags)
       ? tags.map(normalizeTagName).filter(Boolean)
       : undefined;
     // strict(update_frontmatter)では、タグの指定だけでも壊れたフロントマターを拒否する
+    // #282: ops がある場合も壊れたフロントマターを拒否する
     const rejectBroken =
       (patch !== undefined && Object.keys(patch).length > 0) ||
       (bodyPatch !== undefined && Object.keys(bodyPatch).length > 0) ||
-      (options.strict === true && tags !== undefined);
+      (options.strict === true && tags !== undefined) ||
+      hasOps;
 
     const fmMatch = FM_BLOCK_RE.exec(current);
     if (!fmMatch) {
       // 元々フロントマターがない文書
-      if (options.strict && /^---\r?\n/.test(body)) {
+      if ((options.strict || hasOps) && /^---\r?\n/.test(body)) {
         // 未終端フロントマター等、解釈の割れる文書には何も書かない(タグだけの指定でも拒否)
         throw new FrontmatterUpdateError(
           'フロントマターの解析に失敗しました(未終端または不正な形式)',
@@ -944,6 +1139,15 @@ export class DocService {
           } else {
             fmObj[k] = v;
           }
+        }
+      }
+      // #282: ops を適用 (set は null も値として残す)
+      if (hasOps) {
+        for (const op of ops) {
+          if (op.op === 'set') {
+            fmObj[normalizeOpKey(op.key)] = op.value;
+          }
+          // delete / rename は FM なし文書では対象がないため何もしない
         }
       }
 
@@ -973,7 +1177,17 @@ export class DocService {
     }
 
     const doc = parseYamlDocument(fmMatch[1]);
-    if (doc.errors.length > 0) {
+    const hasSyntaxError =
+      doc.errors.length > 0 ||
+      (hasOps &&
+        isMap(doc.contents) &&
+        doc.contents.items.some(
+          (p) =>
+            !isScalar(p.key) ||
+            p.key.value === null ||
+            !String(p.key.value).normalize('NFC').trim(),
+        ));
+    if (hasSyntaxError) {
       // 壊れたフロントマター
       if (rejectBroken) {
         throw new FrontmatterUpdateError('フロントマターの解析に失敗しました(構文エラー)');
@@ -992,6 +1206,7 @@ export class DocService {
       if (
         (patch !== undefined && Object.keys(patch).length > 0) ||
         (bodyPatch !== undefined && Object.keys(bodyPatch).length > 0) ||
+        hasOps ||
         // strict でも、中身が空のフロントマター(json が null)にはタグを足せるようにする
         (options.strict === true && tags !== undefined && json !== null && json !== undefined)
       ) {
@@ -1024,6 +1239,11 @@ export class DocService {
           doc.set(key, value);
         }
       }
+    }
+
+    // 3. #282: ops を適用
+    if (hasOps) {
+      applyFrontmatterOps(doc, ops);
     }
 
     if (normalizedTags !== undefined) {

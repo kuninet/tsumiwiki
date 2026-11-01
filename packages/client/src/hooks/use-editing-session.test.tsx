@@ -1438,4 +1438,232 @@ describe('useEditingSession', () => {
       expect(put?.body).toMatchObject({ baseUpdatedAt: LATEST, tags: ['新タグ'] });
     });
   });
+
+  describe('フロントマター編集連携 (#282)', () => {
+    it('① updateFrontmatter で dirty=true になりロックを取得する', async () => {
+      const calls = stubFetch({
+        'GET /api/drafts': { draft: null },
+        'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+        'GET /api/docs': docResponse(BASE),
+      });
+      const { result } = renderHook(() => useEditingSession({ path: 'a.md', baseUpdatedAt: BASE }), {
+        wrapper,
+      });
+      await act(async () => {
+        await result.current.startEditing('本文', []);
+      });
+      expect(result.current.dirty).toBe(false);
+      expect(countCalls(calls, 'POST', '/api/locks')).toBe(0);
+
+      act(() => {
+        result.current.updateFrontmatter([{ op: 'set', key: 'title', value: '新' }], true);
+      });
+      await flush();
+      expect(result.current.dirty).toBe(true);
+      expect(countCalls(calls, 'POST', '/api/locks')).toBe(1);
+    });
+
+    it('② valid=false のとき save は PUT を行わず false を返しトーストを表示する', async () => {
+      const calls = stubFetch({
+        'GET /api/drafts': { draft: null },
+        'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+        'GET /api/docs': docResponse(BASE),
+      });
+      const { result } = renderHook(() => useEditingSession({ path: 'a.md', baseUpdatedAt: BASE }), {
+        wrapper,
+      });
+      await act(async () => {
+        await result.current.startEditing('本文', []);
+      });
+      act(() => {
+        result.current.updateFrontmatter([], false);
+      });
+      await flush();
+
+      let saveResult = true;
+      await act(async () => {
+        saveResult = await result.current.save();
+      });
+      expect(saveResult).toBe(false);
+      expect(countCalls(calls, 'PUT', '/api/docs')).toBe(0);
+      expect(useToastStore.getState().toast?.message).toBe('プロパティに入力エラーがあります');
+    });
+
+    it('③ 送信した ops が PUT body の frontmatterOps に載る', async () => {
+      const calls = stubFetch({
+        'GET /api/drafts': { draft: null },
+        'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+        'GET /api/docs': docResponse(BASE),
+        'PUT /api/docs': { updatedAt: '2026-07-02T00:00:00+09:00', frontmatter: { title: '新' } },
+      });
+      const { result } = renderHook(() => useEditingSession({ path: 'a.md', baseUpdatedAt: BASE }), {
+        wrapper,
+      });
+      await act(async () => {
+        await result.current.startEditing('本文', []);
+      });
+      act(() => {
+        result.current.updateFrontmatter([{ op: 'set', key: 'title', value: '新' }], true);
+      });
+      await flush();
+
+      await act(async () => {
+        await result.current.save();
+      });
+      const put = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs');
+      expect(put?.body).toMatchObject({
+        frontmatterOps: [{ op: 'set', key: 'title', value: '新' }],
+      });
+    });
+
+    it('④ 成功後に ops が空になり、続けて本文のみ変更した保存では frontmatterOps が再送されない', async () => {
+      const calls = stubFetch({
+        'GET /api/drafts': { draft: null },
+        'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+        'GET /api/docs': docResponse(BASE),
+        'PUT /api/docs': { updatedAt: '2026-07-02T00:00:00+09:00', frontmatter: { title: '新' } },
+      });
+      const { result } = renderHook(() => useEditingSession({ path: 'a.md', baseUpdatedAt: BASE }), {
+        wrapper,
+      });
+      await act(async () => {
+        await result.current.startEditing('本文', []);
+      });
+      act(() => {
+        result.current.updateFrontmatter([{ op: 'set', key: 'title', value: '新' }], true);
+      });
+      await flush();
+      await act(async () => {
+        await result.current.save();
+      });
+      expect(result.current.dirty).toBe(false);
+
+      // 続けて本文のみ変更して保存
+      act(() => {
+        result.current.updateBody('本文2');
+      });
+      await flush();
+      await act(async () => {
+        await result.current.save();
+      });
+      const putCalls = calls.filter((c) => c.method === 'PUT' && c.path === '/api/docs');
+      expect(putCalls.length).toBe(2);
+      expect((putCalls[1].body as Record<string, unknown>).frontmatterOps).toBeUndefined();
+    });
+
+    it('⑤ 送信中に updateFrontmatter されたら、成功後も ops が残り dirty=true のまま(アイドル解放タイマーも起動しない)', async () => {
+      let resolvePut: (val: unknown) => void;
+      const putPromise = new Promise((res) => {
+        resolvePut = res;
+      });
+      const calls = stubFetch({
+        'GET /api/drafts': { draft: null },
+        'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+        'GET /api/docs': docResponse(BASE),
+        'PUT /api/docs': () => putPromise,
+      });
+      const { result } = renderHook(() => useEditingSession({ path: 'a.md', baseUpdatedAt: BASE }), {
+        wrapper,
+      });
+      await act(async () => {
+        await result.current.startEditing('本文', []);
+      });
+      act(() => {
+        result.current.updateFrontmatter([{ op: 'set', key: 'title', value: '1' }], true);
+      });
+      await flush();
+
+      // 保存開始 (未解決)
+      let savePromise!: Promise<boolean>;
+      act(() => {
+        savePromise = result.current.save();
+      });
+      await flush(); // PUT /api/docs の送信開始まで待つ
+
+      // 送信中にプロパティを変更
+      act(() => {
+        result.current.updateFrontmatter([{ op: 'set', key: 'title', value: '2' }], true);
+      });
+
+      // PUT を解決
+      await act(async () => {
+        resolvePut!({ updatedAt: '2026-07-02T00:00:00+09:00', frontmatter: { title: '1' } });
+        await savePromise!;
+      });
+
+      // dirty=true が維持されていること
+      expect(result.current.dirty).toBe(true);
+      // アイドル解放タイマー時間を進めてもロック解放されないこと
+      act(() => vi.advanceTimersByTime(120_000));
+      expect(countCalls(calls, 'DELETE', '/api/locks')).toBe(0);
+    });
+
+    it('⑥ 上書き保存 (resolveConflictOverwrite) でも ops が載る', async () => {
+      const LATEST = '2026-07-01T02:00:00+09:00';
+      const calls = stubFetch({
+        'GET /api/drafts': { draft: null },
+        'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+        'GET /api/docs': docResponse(LATEST),
+        'PUT /api/docs': { updatedAt: '2026-07-02T00:00:00+09:00', frontmatter: { k: 'v' } },
+      });
+      const { result } = renderHook(() => useEditingSession({ path: 'a.md', baseUpdatedAt: BASE }), {
+        wrapper,
+      });
+      await act(async () => {
+        await result.current.startEditing('本文', []);
+      });
+      act(() => {
+        result.current.updateFrontmatter([{ op: 'set', key: 'k', value: 'v' }], true);
+      });
+      await flush();
+
+      await act(async () => {
+        await result.current.resolveConflictOverwrite();
+      });
+      const put = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs');
+      expect(put?.body).toMatchObject({
+        baseUpdatedAt: LATEST,
+        frontmatterOps: [{ op: 'set', key: 'k', value: 'v' }],
+      });
+    });
+
+    it('⑦ startEditing で ops が空に戻る', async () => {
+      stubFetch({
+        'GET /api/drafts': { draft: null },
+        'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+        'GET /api/docs': docResponse(BASE),
+        'PUT /api/docs': { updatedAt: '2026-07-02T00:00:00+09:00' },
+      });
+      const { result } = renderHook(() => useEditingSession({ path: 'a.md', baseUpdatedAt: BASE }), {
+        wrapper,
+      });
+      await act(async () => {
+        await result.current.startEditing('本文', []);
+      });
+      act(() => {
+        result.current.updateFrontmatter([{ op: 'set', key: 'k', value: 'v' }], true);
+      });
+      await flush();
+
+      // 再度 startEditing
+      await act(async () => {
+        await result.current.startEditing('新しい本文', []);
+      });
+      expect(result.current.dirty).toBe(false);
+      // 本文を編集して保存したときに ops が送られないこと
+      act(() => {
+        result.current.updateBody('編集後本文');
+      });
+      await flush();
+      const calls2 = stubFetch({
+        'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+        'PUT /api/docs': { updatedAt: '2026-07-02T00:00:00+09:00' },
+      });
+      await act(async () => {
+        await result.current.save();
+      });
+      const put = calls2.find((c) => c.method === 'PUT' && c.path === '/api/docs');
+      expect((put?.body as Record<string, unknown> | undefined)?.frontmatterOps).toBeUndefined();
+    });
+  });
 });

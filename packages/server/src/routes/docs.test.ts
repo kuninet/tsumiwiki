@@ -192,6 +192,285 @@ describe('文書CRUD', () => {
     expect(saved.json().frontmatter).toEqual({});
   }, 20_000);
 
+  it('S4: 値の変更でコメントと行順が外科的に保全される(#282)', async () => {
+    const src =
+      '---\n# コメント\ntitle: 旧 # 行末\nprice: 980\ncreated: 2024-01-15\nupdated: 2024-01-01T00:00:00+09:00\n---\n\n本文\n';
+    await writeFile(join(lib, 'S4.md'), src, 'utf8');
+    await app.indexerService.indexFile('S4.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('S4.md')}`);
+    const saved = await saveDoc({
+      path: 'S4.md',
+      body: '本文\n',
+      frontmatterOps: [{ op: 'set', key: 'title', value: '新' }],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().frontmatter.title).toBe('新');
+
+    const raw = await readFile(join(lib, 'S4.md'), 'utf8');
+    const lines = raw.split('\n');
+    expect(lines[0]).toBe('---');
+    expect(lines[1]).toBe('# コメント');
+    expect(lines[2]).toBe('title: 新 # 行末');
+    expect(lines[3]).toBe('price: 980');
+    expect(lines[4]).toBe('created: 2024-01-15');
+    expect(lines[5]).toMatch(/^updated: /);
+  }, 20_000);
+
+  it('S5: rename で位置が保持され GET の frontmatter に反映される(#282)', async () => {
+    const src =
+      '---\n# コメント\ntitle: 旧\nprice: 980\ncreated: 2024-01-15\nupdated: 2024-01-01T00:00:00+09:00\n---\n\n本文\n';
+    await writeFile(join(lib, 'S5.md'), src, 'utf8');
+    await app.indexerService.indexFile('S5.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('S5.md')}`);
+    const saved = await saveDoc({
+      path: 'S5.md',
+      body: '本文\n',
+      frontmatterOps: [{ op: 'rename', from: 'price', to: 'cost' }],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+
+    const raw = await readFile(join(lib, 'S5.md'), 'utf8');
+    expect(raw).toContain('cost: 980');
+    expect(raw).not.toContain('price:');
+    const titleIdx = raw.indexOf('title: 旧');
+    const costIdx = raw.indexOf('cost: 980');
+    const createdIdx = raw.indexOf('created: 2024-01-15');
+    expect(titleIdx).toBeLessThan(costIdx);
+    expect(costIdx).toBeLessThan(createdIdx);
+
+    const after = await api('GET', `/api/docs?path=${encodeURIComponent('S5.md')}`);
+    expect(after.json().frontmatter.price).toBeUndefined();
+    expect(after.json().frontmatter.cost).toBe(980);
+  }, 20_000);
+
+  it('S6: delete でキー行が削除され他が保全される(#282)', async () => {
+    const src =
+      '---\n# コメント\ntitle: 旧\nprice: 980\ncreated: 2024-01-15\nupdated: 2024-01-01T00:00:00+09:00\n---\n\n本文\n';
+    await writeFile(join(lib, 'S6.md'), src, 'utf8');
+    await app.indexerService.indexFile('S6.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('S6.md')}`);
+    const saved = await saveDoc({
+      path: 'S6.md',
+      body: '本文\n',
+      frontmatterOps: [{ op: 'delete', key: 'price' }],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+
+    const raw = await readFile(join(lib, 'S6.md'), 'utf8');
+    expect(raw).not.toContain('price');
+    expect(raw).toContain('# コメント');
+    expect(raw).toContain('title: 旧');
+    expect(raw).toContain('created: 2024-01-15');
+  }, 20_000);
+
+  it('S7: 追加と型の往復(text, number, boolean, date, datetime, list, null)(#282)', async () => {
+    const src = '---\ntitle: テスト\nupdated: 2024-01-01T00:00:00+09:00\n---\n\n本文\n';
+    await writeFile(join(lib, 'S7.md'), src, 'utf8');
+    await app.indexerService.indexFile('S7.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('S7.md')}`);
+    const saved = await saveDoc({
+      path: 'S7.md',
+      body: '本文\n',
+      frontmatterOps: [
+        { op: 'set', key: 's', value: '123' },
+        { op: 'set', key: 'n', value: 1.5 },
+        { op: 'set', key: 'b', value: true },
+        { op: 'set', key: 'd', value: '2024-02-03' },
+        { op: 'set', key: 'dt', value: '2026-10-17T10:00:00+09:00' },
+        { op: 'set', key: 'l', value: ['x', 'y'] },
+        { op: 'set', key: 'e', value: null },
+      ],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+
+    const after = await api('GET', `/api/docs?path=${encodeURIComponent('S7.md')}`);
+    const fm = after.json().frontmatter;
+    expect(fm.s).toBe('123');
+    expect(typeof fm.s).toBe('string');
+    expect(fm.n).toBe(1.5);
+    expect(typeof fm.n).toBe('number');
+    expect(fm.b).toBe(true);
+    expect(typeof fm.b).toBe('boolean');
+    expect(fm.d).toBe('2024-02-03T00:00:00.000Z');
+    expect(fm.dt).toBe('2026-10-17T01:00:00.000Z');
+    expect(fm.l).toEqual(['x', 'y']);
+    expect(fm.e).toBeNull();
+  }, 20_000);
+
+  it('S8: 未編集の日付が ISO に展開されず原文表記のまま保持される(#282)', async () => {
+    const src =
+      '---\ntitle: 旧\ncreated: 2024-01-15\nupdated: 2024-01-01T00:00:00+09:00\n---\n\n本文\n';
+    await writeFile(join(lib, 'S8.md'), src, 'utf8');
+    await app.indexerService.indexFile('S8.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('S8.md')}`);
+    const saved = await saveDoc({
+      path: 'S8.md',
+      body: '本文\n',
+      frontmatterOps: [{ op: 'set', key: 'title', value: '新' }],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+
+    const raw = await readFile(join(lib, 'S8.md'), 'utf8');
+    expect(raw).toContain('created: 2024-01-15\n');
+    expect(raw).not.toContain('2024-01-15T');
+  }, 20_000);
+
+  it('S9: 予約キーへの操作は 400 FRONTMATTER_INVALID でファイル不変(#282)', async () => {
+    const src = '---\ntitle: 元\nupdated: 2024-01-01T00:00:00+09:00\n---\n\n本文\n';
+    await writeFile(join(lib, 'S9.md'), src, 'utf8');
+    await app.indexerService.indexFile('S9.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('S9.md')}`);
+    const commitsBefore = (await app.gitService.history('S9.md')).length;
+
+    const saved = await saveDoc({
+      path: 'S9.md',
+      body: '本文\n',
+      frontmatterOps: [{ op: 'set', key: 'updated', value: '2026-10-01' }],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(400);
+    expect(saved.json().error.code).toBe('FRONTMATTER_INVALID');
+
+    const raw = await readFile(join(lib, 'S9.md'), 'utf8');
+    expect(raw).toBe(src);
+    const commitsAfter = (await app.gitService.history('S9.md')).length;
+    expect(commitsAfter).toBe(commitsBefore);
+  }, 20_000);
+
+  it('S10: 壊れた YAML + ops は 400 FRONTMATTER_INVALID でファイル不変、ops なしは 200(#282)', async () => {
+    const src = '---\n: 不正\n---\n\n本文\n';
+    await writeFile(join(lib, 'S10.md'), src, 'utf8');
+    await app.indexerService.indexFile('S10.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('S10.md')}`);
+    const savedFail = await saveDoc({
+      path: 'S10.md',
+      body: '更新本文\n',
+      frontmatterOps: [{ op: 'set', key: 'a', value: 1 }],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(savedFail.statusCode).toBe(400);
+    expect(savedFail.json().error.code).toBe('FRONTMATTER_INVALID');
+
+    const raw = await readFile(join(lib, 'S10.md'), 'utf8');
+    expect(raw).toBe(src);
+
+    const savedOk = await saveDoc({
+      path: 'S10.md',
+      body: '更新本文\n',
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(savedOk.statusCode).toBe(200);
+  }, 20_000);
+
+  it('S11: フロントマターなし文書にプロパティを追加して保存できる(#282)', async () => {
+    const src = '素の本文\n';
+    await writeFile(join(lib, 'S11.md'), src, 'utf8');
+    await app.indexerService.indexFile('S11.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('S11.md')}`);
+    const saved = await saveDoc({
+      path: 'S11.md',
+      body: '素の本文\n',
+      frontmatterOps: [{ op: 'set', key: 'category', value: 'メモ' }],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().frontmatter.category).toBe('メモ');
+
+    const raw = await readFile(join(lib, 'S11.md'), 'utf8');
+    expect(raw).toMatch(/^---\ncategory: メモ\nupdated: .*\n---\n\n素の本文\n$/);
+  }, 20_000);
+
+  it('S12: 不正な op 形式は 400 VALIDATION_ERROR になる(#282)', async () => {
+    const src = '---\ntitle: テスト\n---\n\n本文\n';
+    await writeFile(join(lib, 'S12.md'), src, 'utf8');
+    await app.indexerService.indexFile('S12.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('S12.md')}`);
+    // 入れ子オブジェクトの値
+    const res1 = await saveDoc({
+      path: 'S12.md',
+      body: '本文\n',
+      frontmatterOps: [{ op: 'set', key: 'a', value: { x: 1 } }],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(res1.statusCode).toBe(400);
+    expect(res1.json().error.code).toBe('VALIDATION_ERROR');
+
+    // 未知の op
+    const res2 = await saveDoc({
+      path: 'S12.md',
+      body: '本文\n',
+      frontmatterOps: [{ op: 'move', key: 'a' }],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(res2.statusCode).toBe(400);
+    expect(res2.json().error.code).toBe('VALIDATION_ERROR');
+
+    // 文字列 'NaN' は許可される
+    const res3 = await saveDoc({
+      path: 'S12.md',
+      body: '本文\n',
+      frontmatterOps: [{ op: 'set', key: 'a', value: 'NaN' }],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(res3.statusCode).toBe(200);
+  }, 20_000);
+
+  it('S13: タグ変更とフロントマター操作を同時に保存できる(#282)', async () => {
+    const src = '---\ntags: [旧]\nprice: 100\nupdated: 2024-01-01T00:00:00+09:00\n---\n\n本文\n';
+    await writeFile(join(lib, 'S13.md'), src, 'utf8');
+    await app.indexerService.indexFile('S13.md');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('S13.md')}`);
+    const saved = await saveDoc({
+      path: 'S13.md',
+      body: '本文\n',
+      tags: ['新'],
+      frontmatterOps: [{ op: 'set', key: 'a', value: 1 }],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+    expect(saved.statusCode).toBe(200);
+
+    const after = await api('GET', `/api/docs?path=${encodeURIComponent('S13.md')}`);
+    expect(after.json().tags).toEqual(['新']);
+    expect(after.json().frontmatter.a).toBe(1);
+    expect(after.json().frontmatter.price).toBe(100);
+  }, 20_000);
+
+  it('S14: GET /api/docs で frontmatterStatus (none/ok/invalid) が正しく返る(#282)', async () => {
+    await writeFile(join(lib, 'none.md'), '素の本文\n', 'utf8');
+    await writeFile(join(lib, 'ok.md'), '---\na: 1\n---\n\n本文\n', 'utf8');
+    await writeFile(join(lib, 'invalid.md'), '---\n: 不正\n---\n\n本文\n', 'utf8');
+    await app.indexerService.indexFile('none.md');
+    await app.indexerService.indexFile('ok.md');
+    await app.indexerService.indexFile('invalid.md');
+
+    const resNone = await api('GET', `/api/docs?path=${encodeURIComponent('none.md')}`);
+    expect(resNone.statusCode).toBe(200);
+    expect(resNone.json().frontmatterStatus).toBe('none');
+
+    const resOk = await api('GET', `/api/docs?path=${encodeURIComponent('ok.md')}`);
+    expect(resOk.statusCode).toBe(200);
+    expect(resOk.json().frontmatterStatus).toBe('ok');
+
+    const resInvalid = await api('GET', `/api/docs?path=${encodeURIComponent('invalid.md')}`);
+    expect(resInvalid.statusCode).toBe(200);
+    expect(resInvalid.json().frontmatterStatus).toBe('invalid');
+  }, 20_000);
+
   it('取得後に変更された文書への保存は409(競合検知)', async () => {
     const created = await api('POST', '/api/docs', { folder: '', title: '競合テスト' });
     const docPath = created.json().path;

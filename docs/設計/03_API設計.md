@@ -12,7 +12,7 @@
 { "error": { "code": "DOC_LOCKED", "message": "この文書は山田さんが編集中です" } }
 ```
 
-主なエラーコード: `UNAUTHORIZED` `FORBIDDEN` `NOT_FOUND` `DOC_LOCKED` `LOCK_EXPIRED` `CONFLICT` `INVALID_PATH` `VALIDATION_ERROR` `INVALID_SETTINGS`
+主なエラーコード: `UNAUTHORIZED` `FORBIDDEN` `NOT_FOUND` `DOC_LOCKED` `LOCK_EXPIRED` `CONFLICT` `INVALID_PATH` `VALIDATION_ERROR` `INVALID_SETTINGS` `FRONTMATTER_INVALID`
 
 ### ヘルスチェック(NFR-OPS-02)
 
@@ -35,9 +35,9 @@
 | メソッド | パス | 内容 |
 |---|---|---|
 | GET | `/api/tree` | フォルダ階層と文書一覧(ドットフォルダ除外)。`{folders:[...], docs:[{path,title,folder,updatedAt}]}` |
-| GET | `/api/docs?path=` | 文書取得。`{path, frontmatter, body, updatedAt, lock: {userId, displayName} \| null}` |
+| GET | `/api/docs?path=` | 文書取得。`{path, frontmatter, frontmatterStatus, body, updatedAt, lock: {userId, displayName} \| null}`。`frontmatterStatus` は `'ok' \| 'none' \| 'invalid'`(#282) |
 | POST | `/api/docs` | 新規作成 `{folder, title}` → 空文書作成+コミット。作成後パスを返す |
-| PUT | `/api/docs` | 保存 `{path, body, frontmatter, baseUpdatedAt}`。ロック保持者のみ。保存+コミット(06章)。`baseUpdatedAt` 不一致は `CONFLICT`(外部変更との衝突検知) |
+| PUT | `/api/docs` | 保存 `{path, body, tags?, frontmatterOps?, baseUpdatedAt}`。ロック保持者のみ。保存+コミット(06章)。`frontmatterOps`（set/delete/renameの操作列）をYAML ASTに外科的保全適用し、応答に `{updatedAt, frontmatter}` を返す(#282)。キー名不正や解釈不能な場合は `FRONTMATTER_INVALID`(400)。`baseUpdatedAt` 不一致は `CONFLICT`(外部変更との衝突検知) |
 | DELETE | `/api/docs?path=` | ごみ箱(`.trash/`)へ移動+コミット(FR-DOC-07) |
 | POST | `/api/docs/move` | `{path, newFolder, newTitle}` リネーム/移動+コミット。ロック中は不可 |
 | GET | `/api/docs/backlinks?path=` | 指定文書へのバックリンク一覧取得(#267)。`{backlinks:[{sourcePath, sourceTitle, sourceFolder, sourceUpdatedAt, links:[{line, context, anchor, alias}]}], truncated}`。自己リンク除外、更新日時降順・パス昇順。上限200件 |

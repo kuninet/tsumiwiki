@@ -8,7 +8,11 @@ import {
 } from '@tsumiwiki/shared';
 import { InvalidPathError } from '../lib/paths.js';
 import { sendError } from '../plugins/auth.js';
-import { DocConflictError, DocNotFoundError } from '../services/doc-service.js';
+import {
+  DocConflictError,
+  DocNotFoundError,
+  FrontmatterUpdateError,
+} from '../services/doc-service.js';
 import type { GitAuthor } from '../services/git-service.js';
 import { DocLockedError, LockExpiredError } from '../services/lock-service.js';
 
@@ -44,6 +48,9 @@ export async function handling<T>(
     }
     if (e instanceof LockExpiredError) {
       return sendError(reply, 409, 'LOCK_EXPIRED', e.message);
+    }
+    if (e instanceof FrontmatterUpdateError) {
+      return sendError(reply, 400, 'FRONTMATTER_INVALID', e.message);
     }
     throw e;
   }
@@ -91,9 +98,17 @@ export function registerDocRoutes(app: FastifyInstance): void {
     if (!parsed.success) {
       return sendError(reply, 400, 'VALIDATION_ERROR', '保存内容が不正です');
     }
-    const { path: docPath, body, tags, baseUpdatedAt } = parsed.data;
+    const { path: docPath, body, tags, frontmatterOps, baseUpdatedAt } = parsed.data;
     return handling(reply, () =>
-      app.docService.saveDoc(docPath, body, tags, baseUpdatedAt, req.user!.id, authorOf(req)),
+      app.docService.saveDoc(
+        docPath,
+        body,
+        tags,
+        baseUpdatedAt,
+        req.user!.id,
+        authorOf(req),
+        frontmatterOps,
+      ),
     );
   });
 
