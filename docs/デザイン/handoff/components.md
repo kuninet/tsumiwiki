@@ -59,7 +59,7 @@ Tailwind クラスは `handoff/tailwind.config.js` のトークンを前提と�
 - ツリー行の高さ `30px`、`px-2`、深さ 1 段 = `pl-4` 追加。
 - 行構造: `[twisty ▾/▸] [icon 📂/📄] [label] [count?]`
 - 現在文書の行: `bg-active`、`text-accent font-semibold`
-- 右クリック: `<TreeContextMenu>` — 新規文書 / 新規フォルダ / リネーム / 移動 / 削除
+- 右クリック: `<TreeContextMenu>` — 新規文書 / 新規フォルダ / リネーム / 移動 / 削除 / パスをコピー / wikilink形式でコピー(文書) / URLをコピー(文書)
 - キーボード: `↑/↓` 移動、`→` 展開、`←` 折りたたみ、`Enter` 開く、`F2` リネーム、`Delete` ごみ箱へ
 
 ### TagPane (タグタブ)

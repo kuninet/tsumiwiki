@@ -202,15 +202,20 @@ describe('TabBar', () => {
       expect(getActivePaneTabsFromState(useTabsStore.getState()).map((t) => t.path)).toEqual(['b.md']);
     });
 
-    it.each(['a.md', 'フォルダA/子文書.md'])('「パスをコピー」でタブのパス %s を書き込む(#301)', async (path) => {
-      const writeText = vi.fn().mockResolvedValue(undefined);
-      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
-      useTabsStore.getState().openDoc(path);
-      renderTabBar();
-      fireEvent.contextMenu(screen.getByTestId(`tab-${path}`));
-      fireEvent.click(screen.getByRole('menuitem', { name: 'パスをコピー' }));
-      expect(writeText).toHaveBeenCalledWith(path);
-      await waitFor(() => expect(useToastStore.getState().toast?.message).toBe('パスをコピーしました'));
-    });
+    it.each(['a.md', 'フォルダA/子文書.md'])(
+      '「パスをコピー」でタブのパス %s を書き込む(#301)',
+      async (path) => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+        useTabsStore.getState().openDoc(path);
+        renderTabBar();
+        fireEvent.contextMenu(screen.getByTestId(`tab-${path}`));
+        fireEvent.click(screen.getByRole('menuitem', { name: 'パスをコピー' }));
+        expect(writeText).toHaveBeenCalledWith(path);
+        await waitFor(() =>
+          expect(useToastStore.getState().toast?.message).toBe('パスをコピーしました'),
+        );
+      },
+    );
   });
 });

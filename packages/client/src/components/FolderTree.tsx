@@ -185,6 +185,8 @@ export function FolderTree() {
 
   function openMenu(e: MouseEvent, target: MenuTarget) {
     e.preventDefault();
+    // 行の右クリックが外側(ルートの空白部分)の onContextMenu に届くと、
+    // root のメニューに置き換わるので止める
     e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY, target });
   }

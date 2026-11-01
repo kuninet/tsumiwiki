@@ -263,8 +263,6 @@ export function TabBar({ paneId }: Props = {}) {
               onMouseDown={(e) => handleTabMouseDown(e, tab.path)}
               onContextMenu={(e) => {
                 e.preventDefault();
-                // window の contextmenu リスナ(ContextMenu の onClose)に届くと開いた直後に閉じる
-                e.stopPropagation();
                 setCtxMenu({ x: e.clientX, y: e.clientY, path: tab.path });
               }}
               className={`flex min-w-0 max-w-[220px] cursor-pointer select-none items-center gap-1 px-3 py-1.5 text-sm ${italic} ${activeCls}`}

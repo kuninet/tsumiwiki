@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import type { TreeResponse } from '@tsumiwiki/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { docUrl } from '../lib/doc-path';
 import { useEditStore } from '../stores/edit';
@@ -17,7 +18,7 @@ const TREE = {
   ],
 };
 
-function renderFolderTree(initialPath = '/', tree: typeof TREE | { folders: string[]; docs: never[] } = TREE) {
+function renderFolderTree(initialPath = '/', tree: TreeResponse = TREE) {
   vi.stubGlobal(
     'fetch',
     vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(tree) }),
@@ -1102,7 +1103,10 @@ describe('FolderTree', () => {
   describe('右クリックメニューのコピー(#301)', () => {
     const toastMessage = () => useToastStore.getState().toast?.message;
 
-    async function setup(writeText: unknown = vi.fn().mockResolvedValue(undefined), tree?: Parameters<typeof renderFolderTree>[1]) {
+    async function setup(
+      writeText: unknown = vi.fn().mockResolvedValue(undefined),
+      tree?: TreeResponse,
+    ) {
       if (writeText) {
         Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
       }
@@ -1133,7 +1137,10 @@ describe('FolderTree', () => {
     });
 
     it('入れ子フォルダのパス', async () => {
-      const writeText = await setup(undefined, { folders: ['フォルダA', 'フォルダA/子フォルダ'], docs: [] });
+      const writeText = await setup(undefined, {
+        folders: ['フォルダA', 'フォルダA/子フォルダ'],
+        docs: [],
+      });
       fireEvent.click(screen.getByText('フォルダA'));
       fireEvent.contextMenu(await screen.findByText('子フォルダ'));
       clickItem('パスをコピー');
@@ -1159,7 +1166,9 @@ describe('FolderTree', () => {
       const writeText = await setup();
       await openChildDocMenu();
       clickItem('URLをコピー');
-      expect(writeText).toHaveBeenCalledWith(`${window.location.origin}${docUrl('フォルダA/子文書.md')}`);
+      expect(writeText).toHaveBeenCalledWith(
+        `${window.location.origin}${docUrl('フォルダA/子文書.md')}`,
+      );
       await waitFor(() => expect(toastMessage()).toBe('URLをコピーしました'));
     });
 
