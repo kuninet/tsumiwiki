@@ -199,10 +199,43 @@ describe('下書き(自動保存)', () => {
     expect(after.json().draft).toBeNull();
   }, 20_000);
 
-  it('ロックなしの下書き保存はLOCK_EXPIRED', async () => {
+  // #300: ロックは書き換え始めたときに取るので、ロック取得前の下書き保存も受け付ける
+  it('ロックを持っていなくても下書きを保存できる', async () => {
+    const res = await apiAs(yamada, 'PUT', '/api/drafts', { path: docPath, content: 'ロックなしの書きかけ' });
+    expect(res.statusCode).toBe(200);
+
+    const got = await apiAs(yamada, 'GET', `/api/drafts?path=${encodeURIComponent(docPath)}`);
+    expect(got.json().draft.content).toBe('ロックなしの書きかけ');
+    // 下書きを保存しただけではロックは取られない
+    const doc = await apiAs(suzuki, 'GET', `/api/docs?path=${encodeURIComponent(docPath)}`);
+    expect(doc.json().lock).toBeNull();
+  }, 20_000);
+
+  it('ほかのユーザーが有効なロックを持っている間は下書きを保存できない', async () => {
+    await apiAs(suzuki, 'POST', '/api/locks', { path: docPath });
     const res = await apiAs(yamada, 'PUT', '/api/drafts', { path: docPath, content: 'x' });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.code).toBe('LOCK_EXPIRED');
+    expect(res.json().error.code).toBe('DOC_LOCKED');
+
+    const got = await apiAs(yamada, 'GET', `/api/drafts?path=${encodeURIComponent(docPath)}`);
+    expect(got.json().draft).toBeNull();
+  }, 20_000);
+
+  it('存在しない文書・.md 以外・保護パスには下書きを保存できない(ロックの取得と同じ検証)', async () => {
+    for (const path of ['存在しない.md', 'メモ.txt', '.obsidian/workspace.md']) {
+      const res = await apiAs(yamada, 'PUT', '/api/drafts', { path, content: 'x' });
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('NOT_FOUND');
+    }
+  }, 20_000);
+
+  it('ほかのユーザーのロックが失効していれば下書きを保存できる', async () => {
+    await apiAs(suzuki, 'POST', '/api/locks', { path: docPath });
+    app.db
+      .prepare('UPDATE locks SET refreshed_at = ?')
+      .run(new Date(Date.now() - 31 * 60_000).toISOString());
+    const res = await apiAs(yamada, 'PUT', '/api/drafts', { path: docPath, content: '失効後の書きかけ' });
+    expect(res.statusCode).toBe(200);
   }, 20_000);
 });
 

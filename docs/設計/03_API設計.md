@@ -76,7 +76,7 @@
 |---|---|---|
 | POST | `/api/locks` | `{path}` ロック取得。取得済みなら `DOC_LOCKED` |
 | PUT | `/api/locks/refresh` | `{path}` ハートビート(編集画面が60秒間隔で送信。`refreshed_at` 更新) |
-| DELETE | `/api/locks?path=` | ロック解放(保存完了時・編集破棄時) |
+| DELETE | `/api/locks?path=` | ロック解放(保存後に一定時間入力が無いとき・編集破棄時・離脱時) |
 | DELETE | `/api/locks/force?path=` | **admin** 強制解放(FR-LOCK-04) |
 
 - 自動解放: サーバーが定期ジョブで `refreshed_at` が `LOCK_TIMEOUT_MINUTES` を超えた行を削除(FR-LOCK-03)。
@@ -85,7 +85,7 @@
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| PUT | `/api/drafts` | `{path, content}` 自動保存(ロック保持者のみ。コミットしない) |
+| PUT | `/api/drafts` | `{path, content}` 自動保存(コミットしない)。下書きは人ごとに分かれるのでロックは不要。ほかのユーザーが有効なロックを持つ間は `DOC_LOCKED`(#300)。ロック取得と同じく、存在する `.md` 文書(保護パス以外)でなければ `NOT_FOUND` |
 | GET | `/api/drafts?path=` | 下書き取得(編集再開時。クラッシュ復帰用) |
 | DELETE | `/api/drafts?path=` | 破棄(保存完了時にも自動削除) |
 
@@ -184,11 +184,14 @@ tsumiwiki reindex                                              # フルリイン
 
 ```
 クライアント                サーバー
+  │ (文書を開く: ロックは取らない)│
+  │ (最初の書き換え)            │
   │ POST /api/locks {path}     │ ロック取得(locks INSERT)
   │ ──────────────────────────▶│
-  │ (編集中… 60秒ごと)          │
+  │ GET /api/docs              │ 開いた時点の updatedAt と比べる(ずれていれば競合ダイアログ)
+  │ (ロック保持中… 60秒ごと)    │
   │ PUT /api/locks/refresh     │ refreshed_at更新
-  │ (30秒ごと)                 │
+  │ (30秒ごと・dirty時)         │
   │ PUT /api/drafts            │ 下書きUPSERT
   │ (Ctrl+S / 保存ボタン)       │
   │ PUT /api/docs              │ 1. ロック・baseUpdatedAt検証
@@ -196,5 +199,5 @@ tsumiwiki reindex                                              # フルリイン
   │                            │ 3. git add + commit(author=ユーザー)
   │                            │ 4. インデックス更新・下書き削除
   │ ◀──────────────────────────│ 5. {updatedAt} 返却
-  │ DELETE /api/locks(編集終了時)│ ロック解放
+  │ DELETE /api/locks          │ ロック解放(保存後2分間入力が無いとき・編集終了時)
 ```

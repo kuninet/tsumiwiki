@@ -104,6 +104,12 @@ describe('DocView の画像管理メニュー(#199)', () => {
           },
         ],
       },
+      // #300: ロックを持たず未変更のときは、書き換え後の文書を取り直してエディタに反映する
+      'GET /api/docs': {
+        ...DOC,
+        body: '![[new.png|300]]\n\n![](sub/old.png)\n',
+        updatedAt: '2026-08-23T00:00:00+09:00',
+      },
     });
     renderDocView();
 
@@ -171,6 +177,11 @@ describe('DocView の画像管理メニュー(#199)', () => {
           },
         ],
       },
+      'GET /api/docs': {
+        ...docWithLinks,
+        body: '![[new.png]]\n\n[[new.png]]\n\n[説明](new.png)\n',
+        updatedAt: '2026-08-23T00:00:00+09:00',
+      },
       'PUT /api/docs': { updatedAt: '2026-08-23T00:10:00+09:00' },
     });
     renderDocView(docWithLinks);
@@ -210,7 +221,8 @@ describe('DocView の画像管理メニュー(#199)', () => {
       const saveCall = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs');
       expect(saveCall).toBeTruthy();
       expect(saveCall!.body).toMatchObject({
-        body: '![[new.png]]\n\n[[new.png]]\n\n[説明](new.png)',
+        // #300: ロックなし・未変更のリネームは取り直した最新の本文(サーバーの原文)が保存対象になる
+        body: '![[new.png]]\n\n[[new.png]]\n\n[説明](new.png)\n',
       });
     });
   });
@@ -269,6 +281,11 @@ describe('DocView の画像管理メニュー(#199)', () => {
           },
         ],
       },
+      'GET /api/docs': {
+        ...DOC,
+        body: '![[new.png|300]]\n\n![](sub/old.png)\n',
+        updatedAt: '2026-08-23T00:00:00+09:00',
+      },
       'PUT /api/docs': { updatedAt: '2026-08-23T00:10:00+09:00' },
     });
     renderDocView();
@@ -301,7 +318,60 @@ describe('DocView の画像管理メニュー(#199)', () => {
     await waitFor(() => {
       const saveCall = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs');
       expect(saveCall).toBeTruthy();
-      expect(saveCall!.body).toMatchObject({ body: '![[new.png|300]]\n\n![](sub/old.png)' });
+      // #300: ロックなし・未変更のリネームは取り直した最新の本文(サーバーの原文)が保存対象になる
+      expect(saveCall!.body).toMatchObject({ body: '![[new.png|300]]\n\n![](sub/old.png)\n' });
+    });
+  });
+
+  // #300: ロックを持っている間の添付リネームは自分の書き込みとして扱い、競合検知の基準を進める
+  it('ロック保持中のリネームはエディタの参照を書き換え、次の保存の baseUpdatedAt を書き換え後の値にする(#300)', async () => {
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      // ロック取得時の比較用。開いた時点から更新されていない
+      'GET /api/docs': DOC,
+      'GET /api/attachments/resolve': { path: 'old.png', name: 'old.png' },
+      'POST /api/attachments/rename': {
+        path: 'new.png',
+        name: 'new.png',
+        rewrittenDocs: [
+          {
+            path: 'メモ.md',
+            updatedAt: '2026-08-23T00:00:00+09:00',
+            replacements: [{ from: 'old.png', to: 'new.png' }],
+          },
+        ],
+      },
+      'PUT /api/docs': { updatedAt: '2026-08-23T00:10:00+09:00' },
+    });
+    renderDocView();
+
+    // 先に書き換えてロックを取る
+    await screen.findByRole('button', { name: /保存/ });
+    fireEvent.click(screen.getByRole('button', { name: 'タグ #設計 を削除' }));
+    await waitFor(() => {
+      expect(calls.some((c) => c.method === 'POST' && c.path === '/api/locks')).toBe(true);
+      expect(useEditStore.getState().lockedPath).toBe('メモ.md');
+    });
+
+    await openEmbedMenuAndClick('名前を変更');
+    const input = await screen.findByLabelText('新しいファイル名');
+    fireEvent.change(input, { target: { value: 'new.png' } });
+    fireEvent.click(screen.getByRole('button', { name: '変更' }));
+    await waitFor(() => {
+      const img = document.querySelector('.obsidian-embed-image img') as HTMLImageElement | null;
+      expect(img?.getAttribute('src')).toContain(encodeURIComponent('new.png'));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+    await waitFor(() => {
+      const saveCall = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs');
+      expect(saveCall).toBeTruthy();
+      expect(saveCall!.body).toMatchObject({
+        body: '![[new.png|300]]\n\n![](sub/old.png)',
+        baseUpdatedAt: '2026-08-23T00:00:00+09:00',
+        tags: [],
+      });
     });
   });
 

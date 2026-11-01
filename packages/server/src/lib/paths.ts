@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 // パス検証の共通関数(NFR-SEC-04 / NFR-COMP-04 / NFR-OPS-04)。
@@ -52,4 +53,15 @@ export function resolveInLibrary(libraryRoot: string, relPath: string): string {
     throw new InvalidPathError(relPath);
   }
   return abs;
+}
+
+// ロック・下書きの対象にできる文書か(存在する .md で、保護パスでない)。
+// 存在しない文書への孤児ロック・孤児下書きを防ぐ(移動時のPK衝突源にもなる)。
+// 前提: normalizeRelPath 済みの入力を渡すこと。ルート外は resolveInLibrary が InvalidPathError を投げる
+export function isEditableDocPath(libraryRoot: string, relPath: string): boolean {
+  return (
+    !isProtectedPath(relPath) &&
+    relPath.toLowerCase().endsWith('.md') &&
+    existsSync(resolveInLibrary(libraryRoot, relPath))
+  );
 }

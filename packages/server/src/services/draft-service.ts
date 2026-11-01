@@ -2,7 +2,8 @@ import type { AppDatabase } from '../db/index.js';
 import { normalizeRelPath } from '../lib/paths.js';
 
 // 自動保存の下書き(FR-EDIT-08)
-// - 編集ロック保持者のみ書き込める(ルート層で検証)
+// - ロックが無くても書き込める。ただし、ほかのユーザーが有効なロックを持つ文書には書き込めない
+//   (ルート層で検証。#300)
 // - (doc_path, user_id)ごとに1件。ロック失効後に別ユーザーが編集しても
 //   元ユーザーの下書き(クラッシュ復帰用)は上書きされない
 // - Git履歴には残さない。明示保存(PUT /api/docs)成功時に本人の下書きを削除

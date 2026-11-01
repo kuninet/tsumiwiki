@@ -2,11 +2,12 @@ import { useParams } from 'react-router-dom';
 import { useEditStore } from '../stores/edit';
 
 // ステータスバー(components.md仕様)。高さ28px・bg-panel・border-t
-// 左=状態(閲覧モード/編集中・ロック取得済み(あなた)/他者編集中/保存エラー)、
+// 左=状態(閲覧モード/編集中/編集中・ロック取得済み(あなた)/他者編集中/保存エラー)、
 // 右=font-monoで文書パス。他者ロック名・保存エラーはDocViewがeditストアへ書き込む
 
 export function StatusBar() {
   const mode = useEditStore((s) => s.mode);
+  const lockedPath = useEditStore((s) => s.lockedPath);
   const lockedByOtherName = useEditStore((s) => s.lockedByOtherName);
   const saveError = useEditStore((s) => s.saveError);
   const params = useParams();
@@ -21,7 +22,10 @@ export function StatusBar() {
     : lockedByOtherName
       ? `他者編集中(${lockedByOtherName}さん)`
       : mode === 'edit'
-        ? '編集中 ・ ロック取得済み(あなた)'
+        ? // #300: ロックは書き換え始めたときに取るので、編集モードでもロックが無いことがある
+          lockedPath
+          ? '編集中 ・ ロック取得済み(あなた)'
+          : '編集中'
         : '閲覧モード';
 
   return (

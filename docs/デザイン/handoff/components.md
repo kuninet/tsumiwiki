@@ -112,7 +112,7 @@ Tailwind クラスは `handoff/tailwind.config.js` のトークンを前提と�
 ### StatusBar
 
 - 高さ `28px`、`bg: panel`、`border-t border-line`、`text-xs text-ink-faint`
-- 左: 状態 (`閲覧モード` / `編集中 · ロック取得済み（あなた）` / `他者編集中` / `保存エラー`)
+- 左: 状態 (`閲覧モード` / `編集中`(ロック取得前。#300) / `編集中 · ロック取得済み（あなた）` / `他者編集中` / `保存エラー`)
 - 右: `font-mono` で文書パス
 
 ---
