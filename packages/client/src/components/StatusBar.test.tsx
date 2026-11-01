@@ -33,10 +33,17 @@ describe('StatusBar', () => {
     expect(screen.getByTestId('status-bar').textContent).toBe('閲覧モード');
   });
 
-  it('編集中はロック取得済み(あなた)を表示する', () => {
-    useEditStore.setState({ mode: 'edit' });
+  it('編集中でロックを持っていればロック取得済み(あなた)を表示する', () => {
+    useEditStore.setState({ mode: 'edit', lockedPath: 'メモ.md' });
     renderStatusBar();
-    expect(screen.getByTestId('status-bar').textContent).toContain('編集中');
+    expect(screen.getByTestId('status-bar').textContent).toBe('編集中 ・ ロック取得済み(あなた)');
+  });
+
+  // #300: 書き換え始めるまではロックを取らないので、ロック取得済みとは表示しない
+  it('編集中でもロックを持っていなければ「編集中」だけを表示する', () => {
+    useEditStore.setState({ mode: 'edit', lockedPath: null });
+    renderStatusBar();
+    expect(screen.getByTestId('status-bar').textContent).toBe('編集中');
   });
 
   it('他者がロック中のときは他者編集中を表示する', () => {

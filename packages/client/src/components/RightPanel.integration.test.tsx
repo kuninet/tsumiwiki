@@ -699,7 +699,7 @@ describe('RightPanel Integration (C-6, C-7)', () => {
       expect(panel.contains(dialog)).toBe(false);
     });
 
-    it('C-7-12: 復元実行時の順序保証(DELETE /api/locks → POST /api/history/restore)と復元後の選択解除', async () => {
+    it('C-7-12: 復元実行時の順序保証(編集セッションの片付け → POST /api/history/restore)と復元後の選択解除', async () => {
       renderIntegration();
       await screen.findByRole('heading', { name: 'A文書' });
 
@@ -725,12 +725,13 @@ describe('RightPanel Integration (C-6, C-7)', () => {
       });
       expect(historyRestoreCalls[0]).toEqual({ path: 'A文書.md', rev: 'abc1234' });
 
-      // 順序保証: beforeRestore による DELETE /api/locks が POST /api/history/restore より前に実行されていること
-      const deleteLockIdx = apiCalls.findIndex((c) => c.method === 'DELETE' && c.path === '/api/locks');
+      // 順序保証: beforeRestore(cancelEditing)による DELETE /api/drafts が POST /api/history/restore より前に実行されていること。
+      // #300: 開いただけではロックを取らないので、片付けはロックの解放ではなく下書きの破棄を目印にする
+      const deleteDraftIdx = apiCalls.findIndex((c) => c.method === 'DELETE' && c.path === '/api/drafts');
       const restoreIdx = apiCalls.findIndex((c) => c.method === 'POST' && c.path === '/api/history/restore');
-      expect(deleteLockIdx).toBeGreaterThanOrEqual(0);
+      expect(deleteDraftIdx).toBeGreaterThanOrEqual(0);
       expect(restoreIdx).toBeGreaterThanOrEqual(0);
-      expect(deleteLockIdx).toBeLessThan(restoreIdx);
+      expect(deleteDraftIdx).toBeLessThan(restoreIdx);
 
       // 復元完了後、選択解除され「この版に戻す」が disabled になること
       await waitFor(() => {

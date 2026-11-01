@@ -21,7 +21,7 @@ import {
 } from '../api/attachments';
 import { ApiRequestError } from '../api/client';
 import { isAllowedLinkUrl } from '../lib/allowed-link';
-import { docQueryKey, useTree } from '../api/docs';
+import { docQueryKey, fetchDoc, useTree } from '../api/docs';
 import { useExpandTemplate } from '../api/templates';
 import type { AttachmentLightboxRequest, AttachmentMenuRequest } from '../editor/doc-storage';
 import { createEditorExtensions } from '../editor/markdown';
@@ -517,6 +517,7 @@ export function DocView({
   }, [active, lockedByOther?.displayName, setLockedByOtherName]);
 
   // #51: 文書を開いた瞬間に編集モードに入る。他者ロック中は閲覧モードにフォールバック。
+  // #300: 編集モードに入るだけではロックを取らない(最初に書き換えたときに取る)。
   // 1つの doc.path に対しては1度だけ試行する(startEditing 失敗時のトースト連発を避ける)
   const autoEditAttemptedRef = useRef<string | null>(null);
   const docBodyRef = useRef(doc.body);
@@ -525,7 +526,7 @@ export function DocView({
   docTagsRef.current = doc.tags;
   useEffect(() => {
     if (!editor) return;
-    // 非アクティブなタブは自動編集を試みない(バックグラウンドで不要なロックを取らない)。
+    // 非アクティブなタブは自動編集を試みない(バックグラウンドで下書きの確認などを走らせない)。
     // アクティブに切り替わったタイミングでこの効果が再実行され、初めて startEditing が走る
     if (!active) return;
     if (lockedByOther) return;
@@ -870,21 +871,47 @@ export function DocView({
     // 現在文書がrewrittenDocsに含まれないときはエディタに一切触らない(Opusレビュー重大1)
     const own = result.rewrittenDocs.find((d) => d.path === doc.path);
     if (own) {
-      const changed = applyAttachmentReplacementsToEditor(own.replacements);
-      // React Queryキャッシュの更新(use-editing-session.tsの保存後の更新と同じやり方)。
-      // updatedAtはeditorの有無・置換有無に関わらず更新する(次の保存で競合にならないように)。
-      // bodyは実際に置換した場合だけ最新のMarkdownで更新する(軽微14)
-      queryClient.setQueryData<DocResponse | undefined>(docQueryKey(doc.path), (old) => {
-        if (!old) return old;
-        if (changed && editor && !editor.isDestroyed) {
-          return {
-            ...old,
-            updatedAt: own.updatedAt,
-            body: editor.storage.markdown.getMarkdown() as string,
-          };
+      // #300: 添付リネームはロックを確かめないので、ロックの有無で扱いを分ける
+      const rewrite = session.noteServerRewrite(own.updatedAt);
+      if (rewrite === 'advanced') {
+        // ロック保持中: ほかからの書き込みは入っていないので、エディタの参照を書き換え、
+        // 競合検知の基準(セッション側で更新済み)とキャッシュの updatedAt を進める
+        const changed = applyAttachmentReplacementsToEditor(own.replacements);
+        // React Queryキャッシュの更新(use-editing-session.tsの保存後の更新と同じやり方)。
+        // bodyは実際に置換した場合だけ最新のMarkdownで更新する(軽微14)
+        queryClient.setQueryData<DocResponse | undefined>(docQueryKey(doc.path), (old) => {
+          if (!old) return old;
+          if (changed && editor && !editor.isDestroyed) {
+            return {
+              ...old,
+              updatedAt: own.updatedAt,
+              body: editor.storage.markdown.getMarkdown() as string,
+            };
+          }
+          return { ...old, updatedAt: own.updatedAt };
+        });
+      } else if (rewrite === 'dirty') {
+        // ロックが無いまま書き換え中: 入力中の内容は残し、参照だけ書き換える。基準は進めないので、
+        // 次にロックを取ったときに(開いたあとの更新として)競合ダイアログで確かめてもらう
+        applyAttachmentReplacementsToEditor(own.replacements);
+        void queryClient.invalidateQueries({ queryKey: docQueryKey(doc.path) });
+      } else {
+        // 閲覧中、またはロックが無く未変更: 基準は進めずに最新を取り直し、エディタもそれに合わせる。
+        // 開いたあとのほかからの更新を、自分の書き込みとして取り込んでしまわないため
+        try {
+          const latest = await queryClient.fetchQuery({
+            queryKey: docQueryKey(doc.path),
+            queryFn: () => fetchDoc(doc.path),
+            staleTime: 0,
+          });
+          if (sessionRef.current.reloadFromLatest(latest) && editor && !editor.isDestroyed) {
+            editor.commands.setContent(latest.body, false);
+            setPendingTags(latest.tags);
+          }
+        } catch {
+          // 取り直せなかったときは基準を進めない。次のロック取得か保存で競合として検知される
         }
-        return { ...old, updatedAt: own.updatedAt };
-      });
+      }
     }
     // 他の開いているタブの文書は無効化して次回表示時に再取得させる
     for (const rewritten of result.rewrittenDocs) {
@@ -1024,7 +1051,8 @@ export function DocView({
             <span className="font-mono">{formatUpdatedAt(doc.updatedAt).time}</span>
             <span className={`font-medium ${badge.className}`}>{badge.label}</span>
             {/* #51: 即編集モードが基本のため、閲覧モードのときは明示バッジを出す。
-                 他者ロック中(lockedByOther)か、なんらかの理由でロック取得できていない場合に該当 */}
+                 他者ロック中(lockedByOther)か、書き換え時のロック取得が他者ロックで拒否された・
+                 ロックが失効した場合に該当 */}
             {session.mode === 'view' && (
               <span className="rounded bg-panel-2 px-1.5 py-0.5 text-ink-faint">閲覧モード</span>
             )}
@@ -1183,8 +1211,13 @@ export function DocView({
 
       {session.conflict && (
         <ConfirmDialog
-          title="保存の競合"
-          message="保存先が取得後に変更されています。"
+          // #300: ロックを取ったときに、開いたあとの更新を検知した場合は文言を分ける
+          title={session.conflict === 'acquire' ? '更新の競合' : '保存の競合'}
+          message={
+            session.conflict === 'acquire'
+              ? '開いたあとで、ほかから更新されています。'
+              : '保存先が取得後に変更されています。'
+          }
           confirmLabel="自分の内容で上書き保存"
           cancelLabel="破棄して最新を読み込む"
           onConfirm={() => void session.resolveConflictOverwrite()}

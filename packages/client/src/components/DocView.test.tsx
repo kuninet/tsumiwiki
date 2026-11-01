@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { Editor } from '@tiptap/core';
 import type { DocResponse, User } from '@tsumiwiki/shared';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -182,11 +183,13 @@ describe('DocView', () => {
     expect(screen.queryByRole('button', { name: '履歴' })).toBeNull();
   });
 
-  it('自動編集モード中に右パネル履歴→この版に戻す を実行すると、DELETE /api/locks が POST /api/history/restore より先に飛ぶ(#106, #271)', async () => {
+  it('自動編集モード中に右パネル履歴→この版に戻す を実行すると、編集セッションの片付け(DELETE /api/drafts)が復元より先に走る(#106, #271, #300)', async () => {
     // #106: 編集中に復元されると、dirty な内容で上書き保存される事故が起きる。
     // DocView 側の beforeRestore={session.cancelEditing} 配線が壊れると、
-    // 「先に自分のロックを解放して閲覧モードへ落とす」経路が失われるため、
-    // API 順序で配線の存在を固定する
+    // 「先に編集セッションを片付けて閲覧モードへ落とす」経路が失われるため、
+    // API 順序で配線の存在を固定する。
+    // #300: 開いただけ(入力なし)ではロックを取らないので、cancelEditing はロックの解放を送らない。
+    // 配線の目印には、cancelEditing が必ず送る下書きの破棄(DELETE /api/drafts)を使う
     const calls = stubFetch({
       'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
       'GET /api/drafts': { draft: null },
@@ -223,16 +226,22 @@ describe('DocView', () => {
         expect(calls.some((c) => c.method === 'POST' && c.path === '/api/history/restore')).toBe(true);
       });
 
-      // 順序: cancelEditing の DELETE (=自分のロック解放) → 復元用の acquireLock (POST) → restore
+      // 順序: cancelEditing の DELETE /api/drafts → 復元用の acquireLock (POST) → restore
       // beforeRestore 配線が抜けると DELETE が先行しなくなる
       const relevant = calls
-        .filter((c) => c.path === '/api/locks' || c.path === '/api/history/restore')
+        .filter(
+          (c) => c.path === '/api/locks' || c.path === '/api/drafts' || c.path === '/api/history/restore',
+        )
         .map((c) => `${c.method} ${c.path}`);
-      const firstDelete = relevant.indexOf('DELETE /api/locks');
+      const firstDelete = relevant.indexOf('DELETE /api/drafts');
+      const firstAcquire = relevant.indexOf('POST /api/locks');
       const firstRestore = relevant.indexOf('POST /api/history/restore');
       expect(firstDelete).toBeGreaterThanOrEqual(0);
       expect(firstRestore).toBeGreaterThanOrEqual(0);
-      expect(firstDelete).toBeLessThan(firstRestore);
+      expect(firstDelete).toBeLessThan(firstAcquire);
+      expect(firstAcquire).toBeLessThan(firstRestore);
+      // ロックを持っていないセッションなので、片付けでロックの解放は送らない
+      expect(relevant.slice(0, firstAcquire)).not.toContain('DELETE /api/locks');
     } finally {
       slot.remove();
       useUIStore.setState({ rightPanelSlot: null });
@@ -271,6 +280,68 @@ describe('DocView', () => {
       path: 'メモ.md',
       baseUpdatedAt: '2026-07-01T00:00:00+09:00',
       tags: [],
+    });
+  });
+
+  // #300: 開いただけではロックを取らず、最初に書き換えたときに取る。取ったときに開いたあとの更新が
+  // 見つかれば、保存時の競合とは別の文言で競合ダイアログを出す
+  it('開いただけではロックを取らず、最初の書き換えでロックを取る。開いたあとの更新があれば更新の競合ダイアログを出す(#300)', async () => {
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/docs': { ...DOC, body: 'ほかから書き換えた本文', updatedAt: '2026-07-01T05:00:00+09:00' },
+    });
+    renderDocView();
+
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: /保存/ }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
+    expect(calls.some((c) => c.method === 'POST' && c.path === '/api/locks')).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'タグ #設計 を削除' }));
+
+    expect(await screen.findByText('開いたあとで、ほかから更新されています。')).toBeTruthy();
+    expect(screen.getByText('更新の競合')).toBeTruthy();
+    expect(calls.filter((c) => c.method === 'POST' && c.path === '/api/locks')).toHaveLength(1);
+    expect(calls.some((c) => c.method === 'PUT' && c.path === '/api/docs')).toBe(false);
+  });
+
+  // #300: エディタへの入力が onUpdate → updateBody → ロック確保 まで届くことを、実際の Tiptap で確かめる
+  it('エディタに入力すると、そのとき初めてロックを1回だけ取る(Tiptap の onUpdate 経由。#300)', async () => {
+    const calls = stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/docs': DOC,
+      'PUT /api/docs': { updatedAt: '2026-07-02T00:00:00+09:00' },
+    });
+    const { container } = renderDocView();
+
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: /保存/ }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
+    const pm = container.querySelector('.ProseMirror') as (HTMLElement & { editor?: Editor }) | null;
+    expect(pm?.getAttribute('contenteditable')).toBe('true');
+    const editor = pm!.editor!;
+    // 編集モードに入っただけではロックを取らない
+    expect(calls.some((c) => c.method === 'POST' && c.path === '/api/locks')).toBe(false);
+
+    act(() => {
+      editor.commands.insertContentAt(editor.state.doc.content.size, '追記1');
+      editor.commands.insertContentAt(editor.state.doc.content.size, '追記2');
+    });
+
+    await waitFor(() => {
+      expect(useEditStore.getState().lockedPath).toBe('メモ.md');
+    });
+    expect(calls.filter((c) => c.method === 'POST' && c.path === '/api/locks')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => {
+      const put = calls.find((c) => c.method === 'PUT' && c.path === '/api/docs');
+      expect(put?.body).toMatchObject({ baseUpdatedAt: DOC.updatedAt });
+      expect((put?.body as { body: string }).body).toContain('追記2');
     });
   });
 
