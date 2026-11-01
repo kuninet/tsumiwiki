@@ -33,6 +33,7 @@ import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
 import { useVirtualKeyboard } from '../hooks/use-virtual-keyboard';
 import { dispatchAttachmentChanged } from '../lib/attachment-events';
+import { copyTextWithToast } from '../lib/clipboard';
 import { titleFromPath } from '../lib/doc-path';
 import { handleWikilinkClick } from '../lib/handle-wikilink-click';
 import { removeInlineTag, renameInlineTag } from '../lib/inline-tag-rewrite';
@@ -721,10 +722,7 @@ export function DocView({
 
   function handleCopyAttachmentPath() {
     if (!attachmentMenu) return;
-    navigator.clipboard
-      .writeText(attachmentMenu.resolved.path)
-      .then(() => showToast('success', 'パスをコピーしました'))
-      .catch(() => showToast('error', 'コピーに失敗しました'));
+    copyTextWithToast(attachmentMenu.resolved.path, showToast);
   }
 
   // 中#7: ダイアログを先に表示し(「参照を確認しています…」)、参照一覧が届いたら
@@ -986,10 +984,7 @@ export function DocView({
       const href = anchorEl.getAttribute('href') ?? '';
       if (href.startsWith('file:') || href.startsWith('\\\\')) {
         e.preventDefault();
-        navigator.clipboard
-          .writeText(href)
-          .then(() => showToast('success', 'パスをコピーしました'))
-          .catch(() => showToast('error', 'コピーに失敗しました'));
+        copyTextWithToast(href, showToast);
         return;
       }
       if (/^https?:/i.test(href)) {
