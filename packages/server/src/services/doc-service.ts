@@ -244,6 +244,12 @@ function bodyAfterFrontmatter(content: string): string {
 // (update_frontmatter の addTags / removeTags。#292)
 export type TagsUpdate = string[] | ((current: string[]) => string[]);
 
+export interface TreeOptions {
+  folder?: string;
+  recursive?: boolean;
+  foldersOnly?: boolean;
+}
+
 type YamlDoc = ReturnType<typeof parseYamlDocument>;
 
 // tags 列の要素1個をタグとして読む。スカラーは原文の表記(`2026-01-01`・`true`・`1.0` 等)を
@@ -723,25 +729,16 @@ export class DocService {
 
   // ---- ツリー ----
 
-  async getTree(): Promise<TreeResponse> {
+  async getTree(options: TreeOptions = {}): Promise<TreeResponse & { folder: string }> {
+    const recursive = options.recursive ?? true;
+    const folder = await this.resolveTreeFolder(options.folder ?? '');
     const folders: string[] = [];
-    await this.walkFolders('', folders);
-    const docs = this.db
-      .prepare('SELECT doc_path, title, folder, updated_at FROM doc_index ORDER BY folder, title')
-      .all()
-      .map((r) => {
-        const row = r as { doc_path: string; title: string; folder: string; updated_at: string };
-        return {
-          path: row.doc_path,
-          title: row.title,
-          folder: row.folder,
-          updatedAt: row.updated_at,
-        } satisfies DocSummary;
-      });
-    return { folders: folders.sort(), docs };
+    await this.walkFolders(folder, folders, recursive);
+    const docs = options.foldersOnly ? [] : this.queryTreeDocs(folder, recursive);
+    return { folder, folders: folders.sort(), docs };
   }
 
-  private async walkFolders(relDir: string, out: string[]): Promise<void> {
+  private async walkFolders(relDir: string, out: string[], recursive = true): Promise<void> {
     const absDir = relDir ? resolveInLibrary(this.libraryPath, relDir) : this.libraryPath;
     const entries = await readdir(absDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -750,8 +747,85 @@ export class DocService {
       const rel = relDir ? `${relDir}/${name}` : name;
       if (isProtectedPath(rel) || name === '.trash') continue;
       out.push(rel);
-      await this.walkFolders(rel, out);
+      if (recursive) {
+        await this.walkFolders(rel, out, recursive);
+      }
     }
+  }
+
+  private async resolveTreeFolder(input: string): Promise<string> {
+    const normalized = normalizeRelPath(input);
+    if (!normalized) {
+      return '';
+    }
+    // ルート以外: 保護パス(.で始まるセグメント)や .trash は拒否
+    const parts = normalized.split('/');
+    if (isProtectedPath(normalized) || parts.some((p) => p === '.trash' || p.startsWith('.'))) {
+      throw new InvalidPathError(input);
+    }
+
+    // ディレクトリ存在確認
+    const abs = resolveInLibrary(this.libraryPath, normalized);
+    let s;
+    try {
+      s = await stat(abs);
+    } catch {
+      throw new DocNotFoundError(input);
+    }
+    if (!s.isDirectory()) {
+      throw new DocNotFoundError(input);
+    }
+
+    // 大文字小文字の厳密一致確認（macOS対策）: 階層ごとに readdir して NFC 厳密一致を確認
+    let currentRel = '';
+    for (const seg of parts) {
+      const currentAbs = currentRel ? resolveInLibrary(this.libraryPath, currentRel) : this.libraryPath;
+      const dirEntries = await readdir(currentAbs);
+      const matched = dirEntries.some((e) => e.normalize('NFC') === seg);
+      if (!matched) {
+        throw new DocNotFoundError(input);
+      }
+      currentRel = currentRel ? `${currentRel}/${seg}` : seg;
+    }
+
+    return normalized;
+  }
+
+  private queryTreeDocs(folder: string, recursive: boolean): DocSummary[] {
+    let rows: unknown[];
+    if (folder === '') {
+      if (recursive) {
+        rows = this.db
+          .prepare('SELECT doc_path, title, folder, updated_at FROM doc_index ORDER BY folder, title')
+          .all();
+      } else {
+        rows = this.db
+          .prepare("SELECT doc_path, title, folder, updated_at FROM doc_index WHERE folder = '' ORDER BY folder, title")
+          .all();
+      }
+    } else {
+      if (recursive) {
+        rows = this.db
+          .prepare(
+            'SELECT doc_path, title, folder, updated_at FROM doc_index WHERE folder = @f OR substr(folder, 1, length(@p)) = @p ORDER BY folder, title',
+          )
+          .all({ f: folder, p: `${folder}/` });
+      } else {
+        rows = this.db
+          .prepare('SELECT doc_path, title, folder, updated_at FROM doc_index WHERE folder = ? ORDER BY folder, title')
+          .all(folder);
+      }
+    }
+
+    return rows.map((r) => {
+      const row = r as { doc_path: string; title: string; folder: string; updated_at: string };
+      return {
+        path: row.doc_path,
+        title: row.title,
+        folder: row.folder,
+        updatedAt: row.updated_at,
+      } satisfies DocSummary;
+    });
   }
 
   // ---- 文書 ----

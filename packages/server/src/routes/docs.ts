@@ -58,7 +58,8 @@ export async function handling<T>(
 
 export function registerDocRoutes(app: FastifyInstance): void {
   app.get('/api/tree', async () => {
-    return app.docService.getTree();
+    const { folders, docs } = await app.docService.getTree();
+    return { folders, docs };
   });
 
   app.get('/api/docs', async (req, reply) => {
