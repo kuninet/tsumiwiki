@@ -2,10 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { REV_PATTERN } from '@tsumiwiki/shared';
-import { toolResult as asResult } from '../tool-result.js';
+import { MCP_AUTHOR } from '../server.js';
+import { docError, toolResult as asResult } from '../tool-result.js';
 
-// 履歴閲覧ツール(issue #292)。REST の /api/history と同じ docService を呼ぶ読み取り専用ラッパー。
-// 復元(restore)は編集ロック前提の操作のため提供しない
+// 履歴ツール(閲覧と復元。issue #292 / #312)。REST の /api/history と同じ docService を呼ぶ。
 
 const rev = z.string().regex(REV_PATTERN, 'リビジョン指定が不正です');
 
@@ -64,5 +64,29 @@ export function registerHistoryTools(mcp: McpServer, app: FastifyInstance): void
       },
     },
     async ({ limit }) => asResult({ history: await app.docService.historyAll(limit) }),
+  );
+
+  mcp.registerTool(
+    'restore_history',
+    {
+      title: '過去版への復元',
+      description:
+        '指定ノートを過去の版(rev)の内容に戻す。履歴は書き換えず、新しいコミット(restore: <path> @<rev7>)として記録する。' +
+        '内容はその版のまま(フロントマター含む)書き戻す。rev は get_history で得たものを使い、事前に get_history_diff で差分を確かめるとよい。' +
+        'baseUpdatedAt を渡すと、read_note 以降に変更されていれば CONFLICT になる。' +
+        'UIで編集中のノートは DOC_LOCKED。ごみ箱にあるノートは先に restore_from_trash で戻す',
+      inputSchema: {
+        path: z.string().min(1).describe('ノートの相対パス'),
+        rev: rev.describe('get_history で得たリビジョン'),
+        baseUpdatedAt: z.string().optional().describe('指定時のみ競合検知する'),
+      },
+    },
+    async ({ path: docPath, rev: r, baseUpdatedAt }) => {
+      try {
+        return asResult(await app.docService.restoreDocMcp(docPath, r, MCP_AUTHOR, baseUpdatedAt));
+      } catch (e) {
+        return docError(e);
+      }
+    },
   );
 }

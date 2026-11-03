@@ -57,7 +57,7 @@ curl -i -X POST http://localhost:3000/mcp
 # WWW-Authenticate: Bearer realm="tsumiwiki-mcp"
 ```
 
-正しいトークンで `tools/list` を叩き、29 個のツールが返ることを確認:
+正しいトークンで `tools/list` を叩き、30 個のツールが返ることを確認:
 
 ```bash
 export MCP_TOKEN=<設定したトークン>
@@ -192,7 +192,7 @@ Claude Desktop は `headers` を省く:
 
 ## 5. 公開ツール一覧
 
-Read 9 種 + 履歴 4 種 + Write 10 種 + 添付 1 種 + ごみ箱 2 種 + 記録の手順 1 種 + ライブラリ運用 2 種の計 29 個。文書操作は全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。ライブラリ運用ツールは REST の `/api/library/*` と同じ処理を呼ぶ。
+Read 9 種 + 履歴 5 種 + Write 10 種 + 添付 1 種 + ごみ箱 2 種 + 記録の手順 1 種 + ライブラリ運用 2 種の計 30 個。文書操作は全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。ライブラリ運用ツールは REST の `/api/library/*` と同じ処理を呼ぶ。
 
 ### Read
 
@@ -210,14 +210,13 @@ Read 9 種 + 履歴 4 種 + Write 10 種 + 添付 1 種 + ごみ箱 2 種 + 記�
 
 ### 履歴
 
-読み取り専用。復元(restore)は編集ロックが前提のため MCP には提供しない。
-
 | ツール | 引数 | 用途 |
 |---|---|---|
 | `get_history` | `path: string` | ノートの変更履歴(新しい順)。各エントリの `rev` を下の 2 つに渡せる |
 | `get_history_content` | `path: string`, `rev: string` | 過去の版の全文(フロントマター含む) |
 | `get_history_diff` | `path: string`, `rev: string`, `against?: string` | `rev` と `against` の差分(unified diff)。`against` 省略時は現行版(HEAD)との差分 |
 | `list_library_history` | `limit?: number (1-1000)` | ライブラリ全体の変更履歴。`.trash` や添付ファイルなど文書以外のパスも含む |
+| `restore_history` | `path: string`, `rev: string`, `baseUpdatedAt?: string` | 指定ノートを過去の版(rev)の内容に戻す。履歴は改変せず新しいコミット(`restore: <path> @<rev7>`)として記録する。内容はその版のまま(フロントマター含む)書き戻す。`baseUpdatedAt` 指定時のみ競合検知する。UI で編集中のノートには書けず `DOC_LOCKED`。ごみ箱にあるノートは先に `restore_from_trash` で戻してから使う。戻り値は `path` / `updatedAt` |
 
 `rev` / `against` は 4〜40 桁の 16 進数(コミットハッシュ)。それ以外は拒否される。
 
@@ -285,7 +284,7 @@ Read 9 種 + 履歴 4 種 + Write 10 種 + 添付 1 種 + ごみ箱 2 種 + 記�
   - `addTags` / `removeTags` は、今のタグを原文の表記のまま残す(`2026-01-01`・`true`・`1.0` などのタグも消えない)。`tags` の中にある入れ子の配列など、タグとして読めない要素は追加・削除の対象外とし、そのまま残す。ただし `null` や空文字の要素は削除される
   - `tags` がなく単数形の `tag` だけがあるノートでは、`tag` を残したまま、そのタグを含めた `tags` を新しく書く
   - フロントマターが壊れている(YAML の構文エラー、閉じフェンスがない、ルートがマップでない)ノートは、タグだけの指定でもエラーにして何も書き込まない
-- **`update_frontmatter` と `save_note` の同時実行**: `update_frontmatter` は `append_to_daily_note` や `append_to_note` とは順番に処理されますが、`save_note` とは同時に走りえます。その場合は後から書いたほうが残ります(先に書いた変更は消える)。`read_note` で得た `updatedAt` を `baseUpdatedAt` に渡すと、途中で変更されていれば競合エラーになるので安全です。
+- **`update_frontmatter` と `save_note` の同時実行**: `update_frontmatter` は `append_to_daily_note` や `append_to_note`、`restore_history` とは順番に処理されますが、`save_note` とは同時に走りえます。その場合は後から書いたほうが残ります(先に書いた変更は消える)。`read_note` で得た `updatedAt` を `baseUpdatedAt` に渡すと、途中で変更されていれば競合エラーになるので安全です。
 - **`save_note` のフロントマター自動抽出**: `body` の先頭に YAML ヘッダー(`---`)が含まれる場合、二重化を防ぐため自動抽出されてフロントマターにマージされます。本文ヘッダー由来の空キー(`aliases:` など)はキー削除されず保持されます(明示的な `frontmatter` 引数で `key: null` を渡した場合はキー削除されます)。
 
 ---

@@ -335,6 +335,10 @@ interface McpEditPlan {
   tags?: TagsUpdate;
   frontmatter?: Record<string, unknown>;
   strictFrontmatter?: boolean;
+  // 指定時は composeContent と LF 統一を通さず、この内容をそのまま書く(履歴の復元用)
+  rawContent?: string;
+  // 指定時はこのメッセージでコミットする(既定は `edit: <path>`)
+  commitMessage?: string;
 }
 
 const RESERVED_FM_KEYS = new Set(['tags', 'updated']);
@@ -1151,13 +1155,15 @@ export class DocService {
       );
     }
 
-    const { body, tags, frontmatter, strictFrontmatter } = plan(current);
-    // 保存はLFに統一する(NFR-COMP-03。CRLF文書も保存時にLF化する)
-    const content = this.composeContent(current, body, tags, frontmatter, undefined, {
-      strict: strictFrontmatter,
-    }).replace(/\r\n/g, '\n');
+    const plan_ = plan(current);
+    const content =
+      plan_.rawContent !== undefined
+        ? plan_.rawContent
+        : this.composeContent(current, plan_.body, plan_.tags, plan_.frontmatter, undefined, {
+            strict: plan_.strictFrontmatter,
+          }).replace(/\r\n/g, '\n');
     await this.writeAtomic(abs, content);
-    await this.tryCommit([normalized], `edit: ${normalized}`, author);
+    await this.tryCommit([normalized], plan_.commitMessage ?? `edit: ${normalized}`, author);
     await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
     const after = await stat(abs);
     return { updatedAt: after.mtime.toISOString(), content };
@@ -2080,6 +2086,31 @@ export class DocService {
     this.drafts.removeOwn(normalized, userId);
     const after = await stat(abs);
     return { updatedAt: after.mtime.toISOString() };
+  }
+
+  // MCP経由の履歴復元(#312)。UI編集ロックの保持は要求しない代わりに、誰かが保持中なら拒否する
+  // (saveDocMcp と同じ)。過去版はコミット済みで変わらないため列の外で先に取得し、
+  // 書き込みは追記・部分置換と同じ列で行う。restoreDoc と同じく内容はバイト単位でそのまま書き戻す
+  // (LF統一・updated更新なし)。下書きは触らない(MCPには呼び出しユーザーがいないため)
+  async restoreDocMcp(
+    relPath: string,
+    rev: string,
+    author: GitAuthor,
+    baseUpdatedAt?: string,
+  ): Promise<{ path: string; updatedAt: string }> {
+    const normalized = this.validateDocPath(relPath);
+    const content = await this.contentAt(normalized, rev);
+    const { updatedAt } = await this.serializedMcpEdit(
+      normalized,
+      author,
+      baseUpdatedAt,
+      () => ({
+        body: '',
+        rawContent: content,
+        commitMessage: `restore: ${normalized} @${rev.slice(0, 7).toLowerCase()}`,
+      }),
+    );
+    return { path: normalized, updatedAt };
   }
 
   // ---- フォルダ ----
