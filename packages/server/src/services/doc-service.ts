@@ -975,12 +975,13 @@ export class DocService {
     relPath: string,
     transform: (body: string) => string,
     author: GitAuthor,
-  ): Promise<{ updatedAt: string }> {
+    baseUpdatedAt?: string,
+  ): Promise<{ path: string; updatedAt: string }> {
     const normalized = this.validateDocPath(relPath);
-    const { updatedAt } = await this.serializedMcpEdit(normalized, author, undefined, (current) => ({
+    const { updatedAt } = await this.serializedMcpEdit(normalized, author, baseUpdatedAt, (current) => ({
       body: transform(bodyAfterFrontmatter(current)),
     }));
-    return { updatedAt };
+    return { path: normalized, updatedAt };
   }
 
   // MCP経由のフロントマターのみの更新(#292)。本文は一切変えず、プロパティとタグだけを書き換える。

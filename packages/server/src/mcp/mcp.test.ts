@@ -162,7 +162,7 @@ describe('POST /mcp JSON-RPC', () => {
     expect(res.json().result.serverInfo.name).toBe('tsumiwiki');
   });
 
-  it('tools/listで期待する28個のツール名が全て含まれる', async () => {
+  it('tools/listで期待する29個のツール名が全て含まれる', async () => {
     const res = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(res.statusCode).toBe(200);
     const names = res.json().result.tools.map((t: { name: string }) => t.name);
@@ -179,6 +179,7 @@ describe('POST /mcp JSON-RPC', () => {
       'delete_note',
       'create_daily_note',
       'append_to_daily_note',
+      'append_to_note',
       'get_backlinks',
       'get_history',
       'get_history_content',
@@ -199,8 +200,8 @@ describe('POST /mcp JSON-RPC', () => {
     for (const name of expected) {
       expect(names).toContain(name);
     }
-    expect(expected).toHaveLength(28);
-    expect(names).toHaveLength(28);
+    expect(expected).toHaveLength(29);
+    expect(names).toHaveLength(29);
   });
 
   it('search_notesを何もない状態で呼ぶと空配列が返る', async () => {
@@ -1214,6 +1215,255 @@ describe('append_to_daily_note', () => {
     expect(first.structuredContent).toEqual({ path: NOTE, created: true });
     const second = await callTool('create_daily_note', {});
     expect(second.structuredContent).toEqual({ path: NOTE, created: false });
+  });
+});
+
+describe('append_to_note (issue #309)', () => {
+  const NOW = new Date(2026, 6, 5, 14, 30, 0);
+  let seq = 3000;
+
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+    await buildMcpApp();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function callTool(name: string, args: Record<string, unknown>) {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: seq++,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().result;
+  }
+
+  describe('末尾追記 (heading 省略)', () => {
+    it('段落の追記: 末尾に空行1つ挟んで追記される', async () => {
+      await callTool('create_note', { path: 'memo.md', content: '既存の本文\n' });
+      const res = await callTool('append_to_note', { path: 'memo.md', text: '新しい段落' });
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.path).toBe('memo.md');
+      expect(typeof res.structuredContent.updatedAt).toBe('string');
+      const content = await readFile(join(lib, 'memo.md'), 'utf8');
+      expect(content).toContain('既存の本文\n\n新しい段落\n');
+    });
+
+    it('リスト接続: 末尾がリスト記号で追記もリスト記号なら空行なしで接続される', async () => {
+      await callTool('create_note', { path: 'todo.md', content: '- タスク1\n- タスク2\n' });
+      const res = await callTool('append_to_note', { path: 'todo.md', text: '- タスク3' });
+      expect(res.isError).toBeFalsy();
+      const content = await readFile(join(lib, 'todo.md'), 'utf8');
+      expect(content).toContain('- タスク1\n- タスク2\n- タスク3\n');
+    });
+
+    it('改行なしノートや複数空行のノートでも末尾が正規化されて追記される', async () => {
+      await callTool('create_note', { path: 'no-newline.md', content: '改行なし' });
+      await callTool('append_to_note', { path: 'no-newline.md', text: '追記' });
+      const c1 = await readFile(join(lib, 'no-newline.md'), 'utf8');
+      expect(c1).toContain('改行なし\n\n追記\n');
+
+      await callTool('create_note', { path: 'multi-blank.md', content: '本文\n\n\n' });
+      await callTool('append_to_note', { path: 'multi-blank.md', text: '追記' });
+      const c2 = await readFile(join(lib, 'multi-blank.md'), 'utf8');
+      expect(c2).toContain('本文\n\n追記\n');
+    });
+
+    it('最後の内容行の行末スペース(Markdown改行)を保持する', async () => {
+      await callTool('create_note', { path: 'spaces.md', content: '行末スペース保持  \n\n' });
+      await callTool('append_to_note', { path: 'spaces.md', text: '追記' });
+      const c = await readFile(join(lib, 'spaces.md'), 'utf8');
+      expect(c).toContain('行末スペース保持  \n\n追記\n');
+    });
+
+    it('フロントマターを保全し、本文のみ更新される', async () => {
+      const orig = '---\ntitle: テスト\ntags:\n  - a\n---\n本文\n';
+      await callTool('create_note', { path: 'fm.md', content: orig });
+      await callTool('append_to_note', { path: 'fm.md', text: '追記' });
+      const c = await readFile(join(lib, 'fm.md'), 'utf8');
+      expect(c).toContain('title: テスト');
+      expect(c).toContain('本文\n\n追記\n');
+    });
+  });
+
+  describe('見出し追記 (heading 指定)', () => {
+    it('既存節の末尾に追記される', async () => {
+      const orig = '# ノート\n\n## メモ\n\n- 項目1\n\n## 連絡\n\n特になし\n';
+      await callTool('create_note', { path: 'doc.md', content: orig });
+      await callTool('append_to_note', { path: 'doc.md', heading: '## メモ', text: '- 項目2' });
+      const c = await readFile(join(lib, 'doc.md'), 'utf8');
+      expect(c).toContain('## メモ\n\n- 項目1\n- 項目2\n\n## 連絡');
+    });
+
+    it('中身のない節に見出し直後に追記される', async () => {
+      const orig = '# ノート\n\n## メモ\n\n## 連絡\n';
+      await callTool('create_note', { path: 'empty-sec.md', content: orig });
+      await callTool('append_to_note', { path: 'empty-sec.md', heading: '## メモ', text: '最初の項目' });
+      const c = await readFile(join(lib, 'empty-sec.md'), 'utf8');
+      expect(c).toContain('## メモ\n\n最初の項目\n\n## 連絡');
+    });
+
+    it('存在しない見出しの場合は本文末尾に見出し新設して追記される', async () => {
+      await callTool('create_note', { path: 'new-sec.md', content: '既存本文\n' });
+      await callTool('append_to_note', { path: 'new-sec.md', heading: '## 追記見出し', text: '内容' });
+      const c = await readFile(join(lib, 'new-sec.md'), 'utf8');
+      expect(c).toContain('既存本文\n\n## 追記見出し\n\n内容\n');
+    });
+
+    it('コードフェンス内の見出しを無視して正しい位置に追記または新設される', async () => {
+      const orig = '```md\n## メモ\n```\n本文\n';
+      await callTool('create_note', { path: 'fence-h.md', content: orig });
+      await callTool('append_to_note', { path: 'fence-h.md', heading: '## メモ', text: 'フェンス外' });
+      const c = await readFile(join(lib, 'fence-h.md'), 'utf8');
+      expect(c).toContain('```md\n## メモ\n```\n本文\n\n## メモ\n\nフェンス外\n');
+    });
+
+    it('閉じていないフェンスがある場合に閉じ行を補完してから追記される', async () => {
+      const orig = '# ノート\n\n```ts\nconst x = 1;\n';
+      await callTool('create_note', { path: 'unclosed.md', content: orig });
+      await callTool('append_to_note', { path: 'unclosed.md', heading: '## 次', text: '追記' });
+      const c = await readFile(join(lib, 'unclosed.md'), 'utf8');
+      expect(c).toContain('const x = 1;\n```\n\n## 次\n\n追記\n');
+    });
+
+    it('子見出し(###)を含む節の末尾に追記される', async () => {
+      const orig = '## メモ\n\n親本文\n\n### 詳細\n\n子本文\n\n## 次節\n';
+      await callTool('create_note', { path: 'sub-sec.md', content: orig });
+      await callTool('append_to_note', { path: 'sub-sec.md', heading: '## メモ', text: '親節の末尾' });
+      const c = await readFile(join(lib, 'sub-sec.md'), 'utf8');
+      expect(c).toContain('### 詳細\n\n子本文\n\n親節の末尾\n\n## 次節');
+    });
+
+    it('不正な見出し(#なし、改行入り等)は INVALID_HEADING エラーになる', async () => {
+      await callTool('create_note', { path: 'memo.md', content: '本文\n' });
+      const bad1 = await callTool('append_to_note', { path: 'memo.md', heading: '見出し', text: '追記' });
+      expect(bad1.isError).toBe(true);
+      expect(bad1.structuredContent.code).toBe('INVALID_HEADING');
+
+      const bad2 = await callTool('append_to_note', { path: 'memo.md', heading: '## 見出し\n不正', text: '追記' });
+      expect(bad2.isError).toBe(true);
+      expect(bad2.structuredContent.code).toBe('INVALID_HEADING');
+    });
+  });
+
+  describe('timestamp と source', () => {
+    it('timestamp: true で先頭に HH:MM が付与される', async () => {
+      await callTool('create_note', { path: 'time.md', content: '本文\n' });
+      await callTool('append_to_note', { path: 'time.md', text: 'ログ', timestamp: true, source: 'テスト' });
+      const c = await readFile(join(lib, 'time.md'), 'utf8');
+      expect(c).toContain('14:30 [テスト] ログ\n');
+    });
+
+    it('timestamp: true かつリスト記号で始まる場合、記号の直後に時刻が付く', async () => {
+      await callTool('create_note', { path: 'time-list.md', content: '本文\n' });
+      await callTool('append_to_note', { path: 'time-list.md', text: '- [ ] タスク', timestamp: true });
+      const c = await readFile(join(lib, 'time-list.md'), 'utf8');
+      expect(c).toContain('- [ ] 14:30 タスク\n');
+    });
+
+    it('source に改行が含まれる場合はバリデーションエラーになる', async () => {
+      await callTool('create_note', { path: 'memo.md', content: '本文\n' });
+      const res = await callTool('append_to_note', { path: 'memo.md', text: '内容', source: 'bad\nsource' });
+      expect(res.isError).toBe(true);
+    });
+
+    it('追記内容が空(空白のみ)の場合はバリデーションエラーになる', async () => {
+      await callTool('create_note', { path: 'memo.md', content: '本文\n' });
+      const res = await callTool('append_to_note', { path: 'memo.md', text: '   \n  ' });
+      expect(res.isError).toBe(true);
+    });
+  });
+
+  describe('存在・ロック判定', () => {
+    it('存在しないノートは NOT_FOUND になる', async () => {
+      const res = await callTool('append_to_note', { path: 'non-existent.md', text: '追記' });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+    });
+
+    it('不正なパスは INVALID_PATH になる', async () => {
+      const res = await callTool('append_to_note', { path: '../escape.md', text: '追記' });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('INVALID_PATH');
+    });
+
+    it('UI編集中(ロック保持中)のノートは DOC_LOCKED になる', async () => {
+      await callTool('create_note', { path: 'locked.md', content: '本文\n' });
+      const user = app.userService.create({
+        username: 'yamada',
+        displayName: '山田太郎',
+        password: 'p',
+        role: 'user',
+      });
+      app.lockService.acquire('locked.md', user.id);
+      const res = await callTool('append_to_note', { path: 'locked.md', text: '追記' });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('DOC_LOCKED');
+      expect(res.structuredContent.holder).toEqual({ displayName: '山田太郎' });
+    });
+  });
+
+  describe('並列直列化と競合検知', () => {
+    it('同時に2件追記しても直列化され、両方の変更が残る', async () => {
+      await callTool('create_note', { path: 'parallel.md', content: '- 初期\n' });
+      await Promise.all([
+        callTool('append_to_note', { path: 'parallel.md', text: '- 追記1' }),
+        callTool('append_to_note', { path: 'parallel.md', text: '- 追記2' }),
+      ]);
+      const c = await readFile(join(lib, 'parallel.md'), 'utf8');
+      expect(c).toContain('- 初期\n- 追記1\n- 追記2\n');
+    });
+
+    it('baseUpdatedAt が一致していれば追記成功する', async () => {
+      await callTool('create_note', { path: 'conflict.md', content: '本文\n' });
+      const read = await callTool('read_note', { path: 'conflict.md' });
+      const baseUpdatedAt = read.structuredContent.updatedAt;
+
+      const res = await callTool('append_to_note', {
+        path: 'conflict.md',
+        text: '追記',
+        baseUpdatedAt,
+      });
+      expect(res.isError).toBeFalsy();
+    });
+
+    it('baseUpdatedAt が古い(途中で更新された)場合は CONFLICT になる', async () => {
+      await callTool('create_note', { path: 'conflict.md', content: '本文\n' });
+      const read = await callTool('read_note', { path: 'conflict.md' });
+      const oldUpdatedAt = read.structuredContent.updatedAt;
+
+      await callTool('append_to_note', { path: 'conflict.md', text: '別の更新' });
+
+      const res = await callTool('append_to_note', {
+        path: 'conflict.md',
+        text: '衝突する追記',
+        baseUpdatedAt: oldUpdatedAt,
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('CONFLICT');
+    });
+  });
+
+  describe('索引更新とコミットログ', () => {
+    it('追記によってコミットログが記録され、タグ索引・全文検索に即時反映される', async () => {
+      await callTool('create_note', { path: 'indexed.md', content: '# 初期タイトル\n' });
+      await callTool('append_to_note', { path: 'indexed.md', text: 'キーワードXYZ #新着タグ' });
+
+      const log = execSync('git log -1 --pretty=%B', { cwd: lib }).toString();
+      expect(log).toContain('edit: indexed.md');
+
+      const tagsRes = await callTool('list_tags', {});
+      const tags = (tagsRes.structuredContent.items as { tag: string }[]).map((t) => t.tag);
+      expect(tags).toContain('新着タグ');
+
+      const searchRes = await callTool('search_notes', { query: 'キーワードXYZ' });
+      const items = searchRes.structuredContent.items as { path: string }[];
+      expect(items.some((i) => i.path === 'indexed.md')).toBe(true);
+    });
   });
 });
 

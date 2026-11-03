@@ -3,7 +3,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { MCP_AUTHOR, MCP_SENTINEL_USER_ID } from '../server.js';
 import { DocLockedError } from '../../services/lock-service.js';
-import { lockedError, toolError, toolResult as asResult } from '../tool-result.js';
+import {
+  appendToEnd,
+  formatEntry,
+  hhmm,
+  insertIntoSection,
+  isValidHeading,
+  normalizeEntryText,
+} from '../daily-append.js';
+import { docError, lockedError, toolError, toolResult as asResult } from '../tool-result.js';
 
 // 書き込み系ツール(issue #190)。docServiceを経由し生fsは使わない
 
@@ -145,6 +153,56 @@ export function registerWriteTools(mcp: McpServer, app: FastifyInstance): void {
       } catch (e) {
         if (e instanceof DocLockedError) return lockedError(e);
         throw e;
+      }
+    },
+  );
+
+  mcp.registerTool(
+    'append_to_note',
+    {
+      title: 'ノート追記',
+      description:
+        '既存ノートの末尾または指定見出しの節末尾にテキストを追記する。本文全体の読み書きは不要。UIで編集ロック保持中のノートには追記できない',
+      inputSchema: {
+        path: z.string().min(1).describe('追記先ノートの相対パス(既存ノートのみ)'),
+        text: z.string().refine((v) => v.trim().length > 0, '追記する内容が空です'),
+        heading: z.string().optional().describe('追記先の見出し(ATX形式)。省略時は本文末尾に追記'),
+        timestamp: z
+          .boolean()
+          .optional()
+          .describe('true なら先頭に「HH:MM [source] 」を付ける(既定 false)'),
+        source: z
+          .string()
+          .refine((v) => !/[\r\n]/.test(v), 'source に改行を含めることはできません')
+          .optional()
+          .describe('追記元(timestamp が true のとき HH:MM [source] として付与される)'),
+        baseUpdatedAt: z.string().optional().describe('指定時のみ競合検知する'),
+      },
+    },
+    async ({ path: docPath, text, heading, timestamp, source, baseUpdatedAt }) => {
+      if (heading !== undefined && !isValidHeading(heading)) {
+        return toolError({
+          code: 'INVALID_HEADING',
+          message: '見出しは ATX 形式(# で始まる行)で指定してください',
+        });
+      }
+      const entry = timestamp
+        ? formatEntry(text, { time: hhmm(new Date()), source: source?.trim() || undefined })
+        : normalizeEntryText(text);
+
+      try {
+        const saved = await app.docService.appendDocMcp(
+          docPath,
+          (body) =>
+            heading === undefined
+              ? appendToEnd(body, entry)
+              : insertIntoSection(body, heading, entry),
+          MCP_AUTHOR,
+          baseUpdatedAt,
+        );
+        return asResult({ path: saved.path, updatedAt: saved.updatedAt });
+      } catch (e) {
+        return docError(e);
       }
     },
   );

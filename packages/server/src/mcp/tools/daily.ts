@@ -7,17 +7,13 @@ import {
   parseLocalDate,
 } from '../../services/daily-note.js';
 import { DocLockedError } from '../../services/lock-service.js';
-import { formatEntry, insertIntoSection, isValidHeading } from '../daily-append.js';
+import { formatEntry, hhmm, insertIntoSection, isValidHeading } from '../daily-append.js';
 import { MCP_AUTHOR } from '../server.js';
 import { lockedError, toolError, toolResult as asResult } from '../tool-result.js';
 
 // デイリーノート系ツール(issue #190 / #288)。作成処理は REST と共通の ensureDailyNote を使う。
 // req.user が無いため、テンプレ変数の user は固定文字列を使う
 const MCP_USER = 'MCP Agent';
-
-function hhmm(date: Date): string {
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-}
 
 export function registerDailyTools(mcp: McpServer, app: FastifyInstance): void {
   mcp.registerTool(

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { formatEntry, insertIntoSection, isValidHeading } from './daily-append.js';
+import {
+  appendToEnd,
+  formatEntry,
+  insertIntoSection,
+  isValidHeading,
+  normalizeEntryText,
+  openFenceCloser,
+  scanFences,
+} from './daily-append.js';
 
 describe('formatEntry', () => {
   it('接頭辞は HH:MM [source] の形で1行目の先頭に付く', () => {
@@ -216,5 +224,80 @@ describe('insertIntoSection', () => {
     expect(insertIntoSection('## メモ\n\n- a\n#タグ\n', '## メモ', '- x')).toBe(
       '## メモ\n\n- a\n#タグ\n\n- x\n',
     );
+  });
+
+  it('見出しなし分岐で開いたフェンスがあれば閉じ行を補完し、最後の行末スペースを保持する', () => {
+    const body = '# ノート  \n\n```ts\nconst a = 1;\n';
+    expect(insertIntoSection(body, '## メモ', '追記')).toBe(
+      '# ノート  \n\n```ts\nconst a = 1;\n```\n\n## メモ\n\n追記\n',
+    );
+  });
+
+  it('節が未閉じフェンスで終わる場合に閉じ行を補完する', () => {
+    const body = '## メモ\n\n```ts\nconst x = 1;\n';
+    expect(insertIntoSection(body, '## メモ', '追記')).toBe(
+      '## メモ\n\n```ts\nconst x = 1;\n```\n\n追記\n',
+    );
+  });
+});
+
+describe('normalizeEntryText', () => {
+  it('CRLF を LF に変換し、末尾の余計な改行を除去する', () => {
+    expect(normalizeEntryText('a\r\nb\r\n\r\n')).toBe('a\nb');
+    expect(normalizeEntryText('hello\n\n\n')).toBe('hello');
+    expect(normalizeEntryText('')).toBe('');
+  });
+});
+
+describe('scanFences / openFenceCloser', () => {
+  it('フェンスが正常に閉じられていれば null を返す', () => {
+    expect(openFenceCloser(['```ts', 'const a = 1;', '```'])).toBeNull();
+    expect(openFenceCloser(['~~~', 'hello', '~~~'])).toBeNull();
+    expect(openFenceCloser(['   ````', 'code', '   ````'])).toBeNull();
+  });
+
+  it('フェンスが開いたままの場合、インデント・文字・長さを一致させた閉じ行を返す', () => {
+    expect(openFenceCloser(['```ts', 'const a = 1;'])).toBe('```');
+    expect(openFenceCloser(['  ~~~python', 'print(1)'])).toBe('  ~~~');
+    expect(openFenceCloser([' ````sh', 'echo 1'])).toBe(' ````');
+  });
+
+  it('バッククォートのフェンスで info 文字列に ` を含むものはフェンスではない', () => {
+    expect(scanFences(['``` `ts'])).toBeNull();
+  });
+});
+
+describe('appendToEnd', () => {
+  it('空の body なら entry\\n を返す', () => {
+    expect(appendToEnd('', '追記')).toBe('追記\n');
+    expect(appendToEnd('\n\n', '追記')).toBe('追記\n');
+  });
+
+  it('末尾の空行のみ除去し、最後の内容行の行末スペースは保持する', () => {
+    const body = '# タイトル  \n\n';
+    expect(appendToEnd(body, '追記')).toBe('# タイトル  \n\n追記\n');
+  });
+
+  it('段落どうしは空行1つ挟んで結合する', () => {
+    expect(appendToEnd('本文', '追記')).toBe('本文\n\n追記\n');
+    expect(appendToEnd('本文\n', '追記')).toBe('本文\n\n追記\n');
+  });
+
+  it('リストどうしは空行なしで結合する', () => {
+    expect(appendToEnd('- 項目1\n- 項目2', '- 項目3')).toBe('- 項目1\n- 項目2\n- 項目3\n');
+    expect(appendToEnd('* a', '* b')).toBe('* a\n* b\n');
+    expect(appendToEnd('1. a', '2. b')).toBe('1. a\n2. b\n');
+  });
+
+  it('リストと段落の組み合わせは空行1つ挟む', () => {
+    expect(appendToEnd('- 項目1', '段落')).toBe('- 項目1\n\n段落\n');
+    expect(appendToEnd('段落', '- 項目1')).toBe('段落\n\n- 項目1\n');
+  });
+
+  it('開いたフェンスがあれば閉じ行を補完してから結合する', () => {
+    expect(appendToEnd('```ts\nconsole.log(1);', '追記')).toBe(
+      '```ts\nconsole.log(1);\n```\n\n追記\n',
+    );
+    expect(appendToEnd('   ~~~', '追記')).toBe('   ~~~\n   ~~~\n\n追記\n');
   });
 });
