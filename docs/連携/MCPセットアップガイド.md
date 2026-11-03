@@ -57,7 +57,7 @@ curl -i -X POST http://localhost:3000/mcp
 # WWW-Authenticate: Bearer realm="tsumiwiki-mcp"
 ```
 
-正しいトークンで `tools/list` を叩き、23 個のツールが返ることを確認:
+正しいトークンで `tools/list` を叩き、25 個のツールが返ることを確認:
 
 ```bash
 export MCP_TOKEN=<設定したトークン>
@@ -192,7 +192,7 @@ Claude Desktop は `headers` を省く:
 
 ## 5. 公開ツール一覧
 
-Read 9 種 + 履歴 4 種 + Write 9 種 + 記録の手順 1 種の計 23 個。全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。
+Read 9 種 + 履歴 4 種 + Write 9 種 + ごみ箱 2 種 + 記録の手順 1 種の計 25 個。全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。
 
 ### Read
 
@@ -235,13 +235,20 @@ Read 9 種 + 履歴 4 種 + Write 9 種 + 記録の手順 1 種の計 23 個。�
 | `create_daily_note` | `date?: string (YYYY-MM-DD)` | ライブラリ設定 `dailyNotes.folder` / `template` / `filenamePattern` に基づき指定日(省略時は今日)の Daily Note を生成 or 既存を返す。実在しない日付・形式不正は `isError` かつ `structuredContent.code` が `INVALID_DATE` |
 | `append_to_daily_note` | `text: string`, `heading?: string`(既定 `## メモ`), `source?: string` | 今日のデイリーノートの指定見出しの節末尾に `HH:MM [source] text` を1件追記(なければノート・見出しごと作成)。本文全体の読み書きは不要。戻り値は `path` / `created` / `updatedAt`。箇条書きにしたいときは `text` を `- ` で始める。日付と時刻はサーバーのローカル時刻(`TZ` 環境変数)で決まる。UI で編集中のノートには書けず、`isError` かつ `structuredContent.code` が `DOC_LOCKED` になる |
 
+### ごみ箱
+
+| ツール | 引数 | 用途 |
+|---|---|---|
+| `list_trash` | (なし) | ごみ箱(`.trash`)内のノート・フォルダ一覧を取得(削除日時の新しい順) |
+| `restore_from_trash` | `trashPath: string` | ごみ箱内のノートまたはフォルダを元のパスへ復元する。元のパスに同名が存在する場合は自動で連番(例: `ノート (2).md`)が付与される。ロック不要 |
+
 ### 記録の手順
 
 | ツール | 引数 | 用途 |
 |---|---|---|
 | `get_record_instructions` | `kind: 'work_log' \| 'daily_journal'`, `project?: string` | 作業ログ・日誌・振り返りを書くときの手順を返す。本文は §6 のプロンプトと同じ(同じ関数で作る)。`project` は `work_log` のときだけ使い、`daily_journal` では無視される。戻り値は手順の本文をそのまま入れたテキストだけ(JSON にはしない) |
 
-パスは常に **リポジトリルート相対の POSIX 形式**(`Projects/foo.md` など)。`..` / `.git/*` / `.trash/*` / 非 `.md` 拡張子は全て拒否される。
+パスは常に **リポジトリルート相対の POSIX 形式**(`Projects/foo.md` など)。`..` / `.git/*` / `.trash/*` / 非 `.md` 拡張子は全て拒否される(restore_from_trash の trashPath は例外で、.trash/ 直下の項目のみ受け付ける)。
 
 - **`update_frontmatter` で本文やフロントマターの書式が変わる場合**: 本文は送り直さずにそのまま残しますが、次の場合はファイルの見た目が変わります。
   - フロントマターがないノートにフロントマターを新設すると、閉じフェンス(`---`)と本文の間に空行が1行入る

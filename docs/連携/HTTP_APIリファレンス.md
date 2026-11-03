@@ -182,7 +182,7 @@ Cookie を無効化。
 
 ### DELETE /api/docs?path=<path>
 
-`.trash/日付/` へ移動(復元可能)。ロック必須。
+`.trash/<名前>` へ移動(復元可能)。ロック必須。
 
 ### POST /api/docs/move — 移動・リネーム
 
@@ -248,7 +248,7 @@ AIが一気に大量の文書を書き換える用途で、いちいちロック
 
 ### DELETE /api/folders?path=<path>
 
-`.trash/日付/` へ移動(配下の文書ごと)。
+`.trash/<名前>` へ移動(配下の文書ごと)。
 
 ---
 
@@ -340,12 +340,12 @@ SQLite FTS5 trigram インデックスによる全文検索。
 ### POST /api/trash/restore
 
 ```json
-{ "trashPath": ".trash/2026-07-05/12-34-56/日記/2026-07-05.md" }
+{ "trashPath": ".trash/2026-07-05.md" }
 ```
 
 元パス(または元パス直近)に戻す。ロック不要(削除済みの復元なので競合しない)。
 
-### DELETE /api/trash?trashPath=<...>
+### DELETE /api/trash?path=<...>
 
 物理削除(`purge:` コミット)。復元不可。
 
