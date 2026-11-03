@@ -101,7 +101,7 @@ export function isBrowserRequest(headers: Record<string, string | string[] | und
 export const mcpNetworkPlugin = fp(async (app) => {
   // このプラグインは/mcpだけを持つカプセル化コンテキストに張られるため無条件で検査する。
   // 生URLの文字列比較によるパス判定はパーセントエンコード(/%6dcp等)で素通りするので行わない
-  app.addHook('preHandler', async (req: FastifyRequest, reply: FastifyReply) => {
+  app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     if (isBrowserRequest(req.headers)) {
       req.log.warn(
         { origin: req.headers.origin, secFetchSite: req.headers['sec-fetch-site'] },

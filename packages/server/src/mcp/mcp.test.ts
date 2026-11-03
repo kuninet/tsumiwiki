@@ -2,11 +2,13 @@ import { execSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import sharp from 'sharp';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
 import { openDatabase } from '../db/index.js';
 import { InvalidPathError } from '../lib/paths.js';
+import { decodeBase64Strict } from './tools/attachments.js';
 import {
   DocNotFoundError,
   DocConflictError,
@@ -84,6 +86,20 @@ describe('POST /mcp 認証', () => {
     expect(res.headers['www-authenticate']).toContain('Bearer');
   });
 
+  it('Authorizationヘッダなしは壊れたJSONや巨大ボディでもonRequestフックでパース前に401を返す', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      payload: '{"broken_json": '.repeat(1000),
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.headers['www-authenticate']).toContain('Bearer');
+  });
+
   it('誤ったトークンは401でinvalid_tokenを返す', async () => {
     const res = await mcpRequest(INITIALIZE_PAYLOAD, 'wrong-token-wrong-token-wrong-token');
     expect(res.statusCode).toBe(401);
@@ -146,7 +162,7 @@ describe('POST /mcp JSON-RPC', () => {
     expect(res.json().result.serverInfo.name).toBe('tsumiwiki');
   });
 
-  it('tools/listで期待する27個のツール名が全て含まれる', async () => {
+  it('tools/listで期待する28個のツール名が全て含まれる', async () => {
     const res = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(res.statusCode).toBe(200);
     const names = res.json().result.tools.map((t: { name: string }) => t.name);
@@ -178,12 +194,13 @@ describe('POST /mcp JSON-RPC', () => {
       'restore_from_trash',
       'get_library_status',
       'rescan_library',
+      'upload_attachment',
     ];
     for (const name of expected) {
       expect(names).toContain(name);
     }
-    expect(expected).toHaveLength(27);
-    expect(names).toHaveLength(27);
+    expect(expected).toHaveLength(28);
+    expect(names).toHaveLength(28);
   });
 
   it('search_notesを何もない状態で呼ぶと空配列が返る', async () => {
@@ -2562,6 +2579,235 @@ describe('ライブラリ運用(get_library_status / rescan_library)', () => {
     const readRes = await callTool('read_note', { path: '外部ノート.md' });
     expect(readRes.isError).toBeFalsy();
     expect(readRes.structuredContent.body.trim()).toBe('外部で作成したコンテンツ');
+  });
+});
+
+describe('添付ファイルアップロード(upload_attachment)', () => {
+  let seq = 2700;
+
+  beforeEach(async () => {
+    await buildMcpApp();
+  });
+
+  async function callTool(name: string, args: Record<string, unknown> = {}) {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: seq++,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().result;
+  }
+
+  const TINY_PNG_BASE64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+  it('正常系: 小さな PNG をアップロードし、fileName, path, embed が返り、Git に attach: コミットが記録される', async () => {
+    await callTool('create_note', { path: 'memo.md', content: '# メモ\n' });
+
+    const res = await callTool('upload_attachment', {
+      docPath: 'memo.md',
+      fileName: 'screenshot.png',
+      dataBase64: TINY_PNG_BASE64,
+    });
+
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent.fileName).toMatch(/^image-\d{14}\.png$/);
+    expect(res.structuredContent.path).toBe(res.structuredContent.fileName);
+    expect(res.structuredContent.embed).toBe(`![[${res.structuredContent.fileName}]]`);
+
+    const saved = await readFile(join(lib, res.structuredContent.path));
+    expect(saved.length).toBeGreaterThan(0);
+
+    const log = execSync('git log -1 --pretty=%B', { cwd: lib }).toString();
+    expect(log).toContain(`attach: ${res.structuredContent.path}`);
+  });
+
+  it('長辺超過縮小: 2048px 超の画像をアップロードした場合に長辺 2048px に縮小されていること', async () => {
+    await callTool('create_note', { path: 'memo.md', content: '# メモ\n' });
+
+    const bigImage = await sharp({
+      create: { width: 3000, height: 2000, channels: 3, background: { r: 10, g: 20, b: 30 } },
+    })
+      .png()
+      .toBuffer();
+
+    const res = await callTool('upload_attachment', {
+      docPath: 'memo.md',
+      fileName: 'diagram.png',
+      dataBase64: bigImage.toString('base64'),
+    });
+
+    expect(res.isError).toBeFalsy();
+    const saved = await readFile(join(lib, res.structuredContent.path));
+    const meta = await sharp(saved).metadata();
+    expect(meta.width).toBe(2048);
+    expect(meta.height).toBe(Math.round((2000 * 2048) / 3000));
+  });
+
+  it('異常系: 非許可拡張子で UNSUPPORTED_FILE_TYPE', async () => {
+    await callTool('create_note', { path: 'memo.md', content: '# メモ\n' });
+
+    for (const badExt of ['test.exe', 'test.txt', 'test.sh', 'test.md']) {
+      const res = await callTool('upload_attachment', {
+        docPath: 'memo.md',
+        fileName: badExt,
+        dataBase64: TINY_PNG_BASE64,
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('UNSUPPORTED_FILE_TYPE');
+    }
+  });
+
+  it('異常系: 不正 base64 (文字不正・パディング不正) で INVALID_BASE64', async () => {
+    await callTool('create_note', { path: 'memo.md', content: '# メモ\n' });
+
+    const invalidCases = [
+      'abc', // 長さが 4 の倍数でない
+      'abcde===', // 不正パディング
+      'abc?defg', // 不正文字
+    ];
+
+    for (const badBase64 of invalidCases) {
+      const res = await callTool('upload_attachment', {
+        docPath: 'memo.md',
+        fileName: 'test.png',
+        dataBase64: badBase64,
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('INVALID_BASE64');
+    }
+  });
+
+  it('異常系: data: URL 接頭辞付き(前置空白含む)の場合はヒントメッセージを含む INVALID_BASE64 が返る', async () => {
+    await callTool('create_note', { path: 'memo.md', content: '# メモ\n' });
+
+    for (const prefix of ['', '  ', '\n\t']) {
+      const res = await callTool('upload_attachment', {
+        docPath: 'memo.md',
+        fileName: 'test.png',
+        dataBase64: `${prefix}data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==`,
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('INVALID_BASE64');
+      expect(res.structuredContent.message).toContain('data: URL の接頭辞を外してください');
+    }
+  });
+
+  it('正常系: 改行入り base64 (MIME形式) でも正常に添付・デコードできる', async () => {
+    await callTool('create_note', { path: 'memo.md', content: '# メモ\n' });
+
+    const withNewlines =
+      TINY_PNG_BASE64.slice(0, 20) +
+      '\r\n' +
+      TINY_PNG_BASE64.slice(20, 40) +
+      '\n' +
+      TINY_PNG_BASE64.slice(40);
+
+    const res = await callTool('upload_attachment', {
+      docPath: 'memo.md',
+      fileName: 'newlines.png',
+      dataBase64: withNewlines,
+    });
+
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent.fileName).toMatch(/^image-\d{14}\.png$/);
+    const saved = await readFile(join(lib, res.structuredContent.path));
+    expect(saved.length).toBeGreaterThan(0);
+  });
+
+  it('EXIF 除去: 長辺上限以下の JPEG でも EXIF メタデータが除去されること', async () => {
+    await callTool('create_note', { path: 'memo.md', content: '# メモ\n' });
+
+    const jpegWithExif = await sharp({
+      create: { width: 100, height: 80, channels: 3, background: { r: 10, g: 20, b: 30 } },
+    })
+      .jpeg()
+      .withMetadata({ exif: { IFD0: { Make: 'TsumiWiki-Test' } } })
+      .toBuffer();
+
+    expect((await sharp(jpegWithExif).metadata()).exif).toBeDefined();
+
+    const res = await callTool('upload_attachment', {
+      docPath: 'memo.md',
+      fileName: 'photo.jpg',
+      dataBase64: jpegWithExif.toString('base64'),
+    });
+
+    expect(res.isError).toBeFalsy();
+    const saved = await readFile(join(lib, res.structuredContent.path));
+    const meta = await sharp(saved).metadata();
+    expect(meta.exif).toBeUndefined();
+  });
+
+  it('異常系: 大容量(5MB)の base64 でも RangeError(スタックオーバーフロー)にならず安全に処理される', async () => {
+    const largeBuffer = Buffer.alloc(5 * 1024 * 1024, 0x41);
+    const largeBase64 = largeBuffer.toString('base64');
+
+    const res = await callTool('upload_attachment', {
+      docPath: 'non-existent.md',
+      fileName: 'test.png',
+      dataBase64: largeBase64,
+    });
+
+    expect(res.isError).toBe(true);
+    expect(res.structuredContent.code).toBe('NOT_FOUND');
+  });
+
+  it('異常系: サイズ超過で PAYLOAD_TOO_LARGE', async () => {
+    await app.close();
+    await rm(lib, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await buildMcpApp({ MAX_UPLOAD_MB: '1' });
+
+    await callTool('create_note', { path: 'memo.md', content: '# メモ\n' });
+
+    // 1MB (1,048,576) を超え、かつ Fastify bodyLimit (~1.58MB) を超えない 1.1MB
+    const oversized = Buffer.alloc(Math.floor(1.1 * 1024 * 1024), 0);
+    const res = await callTool('upload_attachment', {
+      docPath: 'memo.md',
+      fileName: 'large.png',
+      dataBase64: oversized.toString('base64'),
+    });
+
+    expect(res.isError).toBe(true);
+    expect(res.structuredContent.code).toBe('PAYLOAD_TOO_LARGE');
+  });
+
+  it('異常系: 存在しない docPath で NOT_FOUND (画像デコード前に事前チェック)', async () => {
+    const res = await callTool('upload_attachment', {
+      docPath: 'non-existent.md',
+      fileName: 'test.png',
+      dataBase64: TINY_PNG_BASE64,
+    });
+    expect(res.isError).toBe(true);
+    expect(res.structuredContent.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('decodeBase64Strict 単体テスト', () => {
+  it('正常系: パディングなし、パディング1個、パディング2個、空白・改行混在を正しくデコードできる', () => {
+    expect(decodeBase64Strict('YW55IGNhcm5l')?.toString('utf8')).toBe('any carne');
+    expect(decodeBase64Strict('YW55IGNhcm4=')?.toString('utf8')).toBe('any carn');
+    expect(decodeBase64Strict('YW55IGNhcg==')?.toString('utf8')).toBe('any car');
+    expect(decodeBase64Strict('YW55\nIGNh\r\ncm5l')?.toString('utf8')).toBe('any carne');
+  });
+
+  it('異常系: data: URL接頭辞(前置空白含む)、長さ不正、不正文字、不正パディングで null が返る', () => {
+    expect(decodeBase64Strict('data:image/png;base64,YW55')).toBeNull();
+    expect(decodeBase64Strict('  data:image/png;base64,YW55')).toBeNull();
+    expect(decodeBase64Strict('YW55I')).toBeNull();
+    expect(decodeBase64Strict('YW55?G5l')).toBeNull();
+    expect(decodeBase64Strict('YW55===')).toBeNull();
+    expect(decodeBase64Strict('')).toBeNull();
+  });
+
+  it('大容量(5MB)でもスタックオーバーフローせず正常にデコードできる', () => {
+    const large = Buffer.alloc(5 * 1024 * 1024, 0x41);
+    const b64 = large.toString('base64');
+    const decoded = decodeBase64Strict(b64);
+    expect(decoded).not.toBeNull();
+    expect(decoded?.length).toBe(large.length);
   });
 });
 

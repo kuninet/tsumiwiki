@@ -57,7 +57,7 @@ curl -i -X POST http://localhost:3000/mcp
 # WWW-Authenticate: Bearer realm="tsumiwiki-mcp"
 ```
 
-正しいトークンで `tools/list` を叩き、27 個のツールが返ることを確認:
+正しいトークンで `tools/list` を叩き、28 個のツールが返ることを確認:
 
 ```bash
 export MCP_TOKEN=<設定したトークン>
@@ -192,7 +192,7 @@ Claude Desktop は `headers` を省く:
 
 ## 5. 公開ツール一覧
 
-Read 9 種 + 履歴 4 種 + Write 9 種 + ごみ箱 2 種 + 記録の手順 1 種 + ライブラリ運用 2 種の計 27 個。文書操作は全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。ライブラリ運用ツールは REST の `/api/library/*` と同じ処理を呼ぶ。
+Read 9 種 + 履歴 4 種 + Write 9 種 + 添付 1 種 + ごみ箱 2 種 + 記録の手順 1 種 + ライブラリ運用 2 種の計 28 個。文書操作は全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。ライブラリ運用ツールは REST の `/api/library/*` と同じ処理を呼ぶ。
 
 ### Read
 
@@ -234,6 +234,26 @@ Read 9 種 + 履歴 4 種 + Write 9 種 + ごみ箱 2 種 + 記録の手順 1 �
 | `delete_note` | `path: string` | `.trash/` へ送る(完全削除ではない) |
 | `create_daily_note` | `date?: string (YYYY-MM-DD)` | ライブラリ設定 `dailyNotes.folder` / `template` / `filenamePattern` に基づき指定日(省略時は今日)の Daily Note を生成 or 既存を返す。実在しない日付・形式不正は `isError` かつ `structuredContent.code` が `INVALID_DATE` |
 | `append_to_daily_note` | `text: string`, `heading?: string`(既定 `## メモ`), `source?: string` | 今日のデイリーノートの指定見出しの節末尾に `HH:MM [source] text` を1件追記(なければノート・見出しごと作成)。本文全体の読み書きは不要。戻り値は `path` / `created` / `updatedAt`。箇条書きにしたいときは `text` を `- ` で始める。日付と時刻はサーバーのローカル時刻(`TZ` 環境変数)で決まる。UI で編集中のノートには書けず、`isError` かつ `structuredContent.code` が `DOC_LOCKED` になる |
+
+### 添付
+
+| ツール | 引数 | 用途 |
+|---|---|---|
+| `upload_attachment` | `docPath: string`, `fileName: string`, `dataBase64: string` | ノートに画像または PDF を添付ファイルとして保存する(長辺超過時は自動縮小・EXIF 除去)。本文への挿入は呼び出し側で行う(`![[fileName]]`) |
+
+- **`upload_attachment` の仕様と使用例**:
+  - **引数**:
+    - `docPath`: 添付先ノートの相対パス(例: `設計/アーキテクチャ.md`)。このノートの配置設定(`attachmentDirMode`)に基づいて保存先が決まる
+    - `fileName`: 元のファイル名(拡張子で判定。画像または `.pdf` のみ)。画像は `image-YYYYMMDDHHmmss.ext` 形式、PDF は元ファイル名で保存され、同名重複時は自動で連番が付与される
+    - `dataBase64`: ファイルバイナリの base64 文字列(`data:image/png;base64,` などの接頭辞は含めない。MIME 形式などの改行や空白を含む base64 も受け付ける)
+  - **戻り値**:
+    - `{ fileName: "image-20261103120000.png", path: "設計/image-20261103120000.png", embed: "![[image-20261103120000.png]]" }`
+  - **使用例**:
+    1. `upload_attachment` を呼び出して画像を保存
+    2. 戻り値の `embed` (`![[image-...png]]`) をノート本文の挿入したい箇所に `save_note` 等で追記する
+  - **注意**:
+    - デコード後のファイルサイズが `MAX_UPLOAD_MB`(既定 20MB)を超える場合は `PAYLOAD_TOO_LARGE` エラーが返ります。
+    - Fastify の `/mcp` ルートには base64 展開後のサイズを考慮した `bodyLimit` (約 27MB) が設定されています。これを超える巨大な HTTP リクエストは Fastify レベルで HTTP 413 (`FST_ERR_CTP_BODY_TOO_LARGE`) となり、ツール実行まで届きません。
 
 ### ごみ箱
 

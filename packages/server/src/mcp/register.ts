@@ -19,5 +19,7 @@ export async function registerMcpRoutes(app: FastifyInstance): Promise<void> {
     await app.register(mcpAuthPlugin);
   }
   const handler = createMcpHttpHandler(app);
-  app.all('/mcp', handler);
+  const mcpBodyLimit =
+    Math.ceil((app.config.maxUploadMb * 1024 * 1024 * 4) / 3) + 256 * 1024;
+  app.all('/mcp', { bodyLimit: mcpBodyLimit }, handler);
 }

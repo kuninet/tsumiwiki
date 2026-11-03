@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 
-// MCP用Bearer認証。preHandlerで/mcpへの全リクエストを検証する(issue #190)
+// MCP用Bearer認証。onRequestで/mcpへの全リクエストを検証する(issue #190)
 export const mcpAuthPlugin = fp(async (app) => {
   const token = app.config.mcpToken;
   if (!token) {
@@ -11,7 +11,7 @@ export const mcpAuthPlugin = fp(async (app) => {
   }
   const expected = Buffer.from(token, 'utf8');
 
-  app.addHook('preHandler', async (req: FastifyRequest, reply: FastifyReply) => {
+  app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     // このプラグインは/mcpだけを持つカプセル化コンテキストに張られるため無条件で検査する。
     // 生URLの文字列比較によるパス判定はパーセントエンコード(/%6dcp等)で素通りするので行わない
     const header = req.headers.authorization ?? '';
