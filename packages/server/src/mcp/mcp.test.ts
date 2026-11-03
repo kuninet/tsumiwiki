@@ -1,7 +1,8 @@
 import { execSync } from 'node:child_process';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import path, { join } from 'node:path';
 import sharp from 'sharp';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
@@ -162,7 +163,7 @@ describe('POST /mcp JSON-RPC', () => {
     expect(res.json().result.serverInfo.name).toBe('tsumiwiki');
   });
 
-  it('tools/listで期待する30個のツール名が全て含まれる', async () => {
+  it('tools/listで期待する31個のツール名が全て含まれる', async () => {
     const res = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(res.statusCode).toBe(200);
     const names = res.json().result.tools.map((t: { name: string }) => t.name);
@@ -186,6 +187,7 @@ describe('POST /mcp JSON-RPC', () => {
       'get_history_content',
       'get_history_diff',
       'list_library_history',
+      'restore_history',
       'update_frontmatter',
       'create_folder',
       'move_folder',
@@ -201,8 +203,8 @@ describe('POST /mcp JSON-RPC', () => {
     for (const name of expected) {
       expect(names).toContain(name);
     }
-    expect(expected).toHaveLength(30);
-    expect(names).toHaveLength(30);
+    expect(expected).toHaveLength(31);
+    expect(names).toHaveLength(31);
   });
 
   it('search_notesを何もない状態で呼ぶと空配列が返る', async () => {
@@ -3877,6 +3879,453 @@ describe('patch_note (issue #311)', () => {
       const read = await callTool('read_note', { path: 'mixed.md' });
       expect(read.structuredContent.body).toContain('更新ヘッダー');
       expect(read.structuredContent.body).toContain('追加の行');
+    });
+  });
+});
+
+
+describe('restore_history (issue #312)', () => {
+  let seq = 10000;
+  beforeEach(async () => {
+    await buildMcpApp();
+  });
+
+  async function callTool(name: string, args: Record<string, unknown> = {}) {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: seq++,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().result;
+  }
+
+  function acquireLock(docPath: string) {
+    const user = app.userService.create({
+      username: `user_${seq++}`,
+      displayName: '山田太郎',
+      password: 'password',
+      role: 'user',
+    });
+    app.lockService.acquire(docPath, user.id);
+    return user;
+  }
+
+  const P = 'メモ/計画.md';
+
+  async function setupHistory() {
+    // rev1: 初回作成
+    await callTool('create_note', { path: P, content: 'v1\n' });
+    // rev2: save_note で v2 に
+    const r1 = await callTool('read_note', { path: P });
+    await callTool('save_note', { path: P, body: 'v2\n', baseUpdatedAt: r1.structuredContent.updatedAt });
+    // rev3: append_to_note で 追記
+    await callTool('append_to_note', { path: P, text: '追記' });
+
+    const histRes = await callTool('get_history', { path: P });
+    const hist = histRes.structuredContent.history as { rev: string; message: string }[];
+    // hist[0] = rev3 (edit: メモ/計画.md)
+    // hist[1] = rev2 (edit: メモ/計画.md)
+    // hist[2] = rev1 (add: メモ/計画.md)
+    return {
+      rev1: hist[2].rev,
+      rev2: hist[1].rev,
+      rev3: hist[0].rev,
+    };
+  }
+
+  describe('A: 正常系', () => {
+    it('A1: 1つ前の版(rev2)に戻せる。ファイル全文が過去版とバイト一致し、updatedAt が read_note と一致する', async () => {
+      const { rev2 } = await setupHistory();
+
+      const res = await callTool('restore_history', { path: P, rev: rev2 });
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.path).toBe(P);
+      expect(typeof res.structuredContent.updatedAt).toBe('string');
+
+      const expected = await callTool('get_history_content', { path: P, rev: rev2 });
+      const current = readFileSync(path.join(lib, P), 'utf8');
+      expect(current).toBe(expected.structuredContent.content);
+
+      const read = await callTool('read_note', { path: P });
+      expect(read.structuredContent.updatedAt).toBe(res.structuredContent.updatedAt);
+    });
+
+    it('A2: コミットログに restore: <path> @<rev7> と MCP Agent が記録され、ワーキングツリーがクリーン', async () => {
+      const { rev2 } = await setupHistory();
+
+      await callTool('restore_history', { path: P, rev: rev2 });
+
+      const log = execSync('git log -1 --format="%an|%ae|%s"', { cwd: lib }).toString().trim();
+      expect(log).toBe(`MCP Agent|mcp@tsumiwiki.local|restore: ${P} @${rev2.slice(0, 7).toLowerCase()}`);
+
+      const status = execSync('git status --porcelain', { cwd: lib }).toString().trim();
+      expect(status).toBe('');
+
+      const histRes = await callTool('get_history', { path: P });
+      const hist = histRes.structuredContent.history as { rev: string; message: string }[];
+      expect(hist[0].message).toBe(`restore: ${P} @${rev2.slice(0, 7).toLowerCase()}`);
+      expect(hist).toHaveLength(4);
+    });
+
+    it('A3: 最初の版(rev1)に戻せる', async () => {
+      const { rev1 } = await setupHistory();
+
+      const res = await callTool('restore_history', { path: P, rev: rev1 });
+      expect(res.isError).toBeFalsy();
+
+      const expected = await callTool('get_history_content', { path: P, rev: rev1 });
+      const current = readFileSync(path.join(lib, P), 'utf8');
+      expect(current).toBe(expected.structuredContent.content);
+    });
+
+    it('A4: 戻した後でさらに戻せる(rev2 復元後に rev3 に戻す)', async () => {
+      const { rev2, rev3 } = await setupHistory();
+
+      await callTool('restore_history', { path: P, rev: rev2 });
+      const res = await callTool('restore_history', { path: P, rev: rev3 });
+      expect(res.isError).toBeFalsy();
+
+      const expected = await callTool('get_history_content', { path: P, rev: rev3 });
+      const current = readFileSync(path.join(lib, P), 'utf8');
+      expect(current).toBe(expected.structuredContent.content);
+    });
+
+    it('A5: フロントマターと updated が過去版のまま維持される(更新されない)', async () => {
+      const timeA = '2026-01-01T00:00:00.000Z';
+      const fmContent = `---\ntitle: 元タイトル\nupdated: '${timeA}'\ncustom: valA\n---\n本文v1\n`;
+      await callTool('create_note', { path: 'fm_test.md', content: fmContent });
+
+      const r1 = await callTool('read_note', { path: 'fm_test.md' });
+      await callTool('save_note', {
+        path: 'fm_test.md',
+        body: '本文v2\n',
+        baseUpdatedAt: r1.structuredContent.updatedAt,
+      });
+
+      const histRes = await callTool('get_history', { path: 'fm_test.md' });
+      const rev1 = (histRes.structuredContent.history as { rev: string }[])[1].rev;
+
+      const res = await callTool('restore_history', { path: 'fm_test.md', rev: rev1 });
+      expect(res.isError).toBeFalsy();
+
+      const read = await callTool('read_note', { path: 'fm_test.md' });
+      expect(read.structuredContent.frontmatter.title).toBe('元タイトル');
+      expect(read.structuredContent.frontmatter.updated).toBe(timeA);
+      expect(read.structuredContent.frontmatter.custom).toBe('valA');
+    });
+
+    it('A6: CRLF で保存されていた版はバイト単位で CRLF のまま戻る', async () => {
+      const crlfContent = 'line1\r\nline2\r\n';
+      writeFileSync(path.join(lib, 'crlf_hist.md'), crlfContent);
+      execSync('git add crlf_hist.md && git commit -m "add crlf"', { cwd: lib });
+      await callTool('rescan_library', {});
+
+      const hist1 = await callTool('get_history', { path: 'crlf_hist.md' });
+      const crlfRev = (hist1.structuredContent.history as { rev: string }[])[0].rev;
+
+      await callTool('append_to_note', { path: 'crlf_hist.md', text: 'lf追加' });
+
+      const res = await callTool('restore_history', { path: 'crlf_hist.md', rev: crlfRev });
+      expect(res.isError).toBeFalsy();
+
+      const raw = readFileSync(path.join(lib, 'crlf_hist.md'), 'utf8');
+      expect(raw).toBe(crlfContent);
+    });
+
+    it('A7: 索引(タグ・バックリンク・検索)が過去版の内容に戻る', async () => {
+      await callTool('create_note', { path: 'target.md', content: '# Target\n' });
+      const noteContent = '初版 #旧タグ [[target]] 独自キーワード123\n';
+      await callTool('create_note', { path: 'indexed_note.md', content: noteContent });
+
+      const histRes = await callTool('get_history', { path: 'indexed_note.md' });
+      const revOriginal = (histRes.structuredContent.history as { rev: string }[])[0].rev;
+
+      const read = await callTool('read_note', { path: 'indexed_note.md' });
+      await callTool('save_note', {
+        path: 'indexed_note.md',
+        body: '改訂版 タグやリンクは削除\n',
+        baseUpdatedAt: read.structuredContent.updatedAt,
+      });
+
+      // 復元前はタグ・リンク・キーワードが消えている
+      let tagsRes = await callTool('list_tags', {});
+      expect((tagsRes.structuredContent.items as { tag: string }[]).some((t) => t.tag === '旧タグ')).toBe(false);
+
+      // 過去版へ復元
+      await callTool('restore_history', { path: 'indexed_note.md', rev: revOriginal });
+
+      // 復元後はタグ・バックリンク・全文検索が復活
+      tagsRes = await callTool('list_tags', {});
+      expect((tagsRes.structuredContent.items as { tag: string }[]).some((t) => t.tag === '旧タグ')).toBe(true);
+
+      const bl = await callTool('get_backlinks', { path: 'target.md' });
+      expect(bl.structuredContent.backlinks.some((b: { sourcePath: string }) => b.sourcePath === 'indexed_note.md')).toBe(true);
+
+      const search = await callTool('search_notes', { query: '独自キーワード123' });
+      expect((search.structuredContent.items as { path: string }[]).some((i) => i.path === 'indexed_note.md')).toBe(true);
+    });
+
+    it('A8: 今と同じ内容の版を指定した場合はコミットが増えない', async () => {
+      const { rev3 } = await setupHistory();
+
+      const countBefore = parseInt(execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(), 10);
+      const res = await callTool('restore_history', { path: P, rev: rev3 });
+      expect(res.isError).toBeFalsy();
+
+      const countAfter = parseInt(execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(), 10);
+      expect(countAfter).toBe(countBefore);
+    });
+
+    it('A9: 短い rev(8文字)や大文字の rev を受け付け、コミットメッセージは小文字7文字になる', async () => {
+      const { rev2 } = await setupHistory();
+
+      const shortRev = rev2.slice(0, 8);
+      const upperRev = shortRev.toUpperCase();
+
+      const res = await callTool('restore_history', { path: P, rev: upperRev });
+      expect(res.isError).toBeFalsy();
+
+      const log = execSync('git log -1 --format=%s', { cwd: lib }).toString().trim();
+      expect(log).toBe(`restore: ${P} @${rev2.slice(0, 7).toLowerCase()}`);
+    });
+  });
+
+  describe('B: rev のエラー', () => {
+    beforeEach(async () => {
+      await setupHistory();
+    });
+
+    it('B1: rev の形式が不正な場合はスキーマ検証でエラーになる', async () => {
+      const res1 = await callTool('restore_history', { path: P, rev: 'xyz' });
+      expect(res1.isError).toBe(true);
+
+      const res2 = await callTool('restore_history', { path: P, rev: 'abc' });
+      expect(res2.isError).toBe(true);
+
+      const res3 = await callTool('restore_history', { path: P, rev: 'a'.repeat(41) });
+      expect(res3.isError).toBe(true);
+    });
+
+    it('B2: 存在しない rev は NOT_FOUND になり、message に @deadbee を含む', async () => {
+      const res = await callTool('restore_history', { path: P, rev: 'deadbeef' });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+      expect(res.structuredContent.message).toContain('@deadbee');
+    });
+
+    it('B3: そのノートがなかった頃の rev は NOT_FOUND になる', async () => {
+      await callTool('create_note', { path: 'other.md', content: '別ノート\n' });
+      const histOther = await callTool('get_history', { path: 'other.md' });
+      const revOther = (histOther.structuredContent.history as { rev: string }[])[0].rev;
+
+      const res = await callTool('restore_history', { path: 'new_note.md', rev: revOther });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+    });
+
+    it('B4: 削除コミットの rev は NOT_FOUND になる', async () => {
+      await callTool('create_note', { path: 'q.md', content: 'q\n' });
+      await callTool('delete_note', { path: 'q.md' });
+      await callTool('restore_from_trash', { trashPath: '.trash/q.md' });
+
+      const histQ = await callTool('get_history', { path: 'q.md' });
+      const trashCommit = (histQ.structuredContent.history as { rev: string; message: string }[]).find((h) =>
+        h.message.startsWith('trash:'),
+      );
+      expect(trashCommit).toBeDefined();
+
+      const res = await callTool('restore_history', { path: 'q.md', rev: trashCommit!.rev });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+    });
+
+    it('B5: 失敗してもファイル内容・mtime・コミット数が変わらない', async () => {
+      const beforeContent = readFileSync(path.join(lib, P), 'utf8');
+      const beforeStat = statSync(path.join(lib, P));
+      const beforeCommitCount = execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim();
+
+      await callTool('restore_history', { path: P, rev: 'deadbeef' });
+
+      const afterContent = readFileSync(path.join(lib, P), 'utf8');
+      const afterStat = statSync(path.join(lib, P));
+      const afterCommitCount = execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim();
+
+      expect(afterContent).toBe(beforeContent);
+      expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
+      expect(afterCommitCount).toBe(beforeCommitCount);
+    });
+  });
+
+  describe('C: パスとファイルの状態', () => {
+    let revValid: string;
+    beforeEach(async () => {
+      const { rev2 } = await setupHistory();
+      revValid = rev2;
+    });
+
+    it('C1: 不正なパスは INVALID_PATH になる', async () => {
+      const res1 = await callTool('restore_history', { path: '../x.md', rev: revValid });
+      expect(res1.isError).toBe(true);
+      expect(res1.structuredContent.code).toBe('INVALID_PATH');
+
+      const res2 = await callTool('restore_history', { path: 'a.txt', rev: revValid });
+      expect(res2.isError).toBe(true);
+      expect(res2.structuredContent.code).toBe('INVALID_PATH');
+
+      const res3 = await callTool('restore_history', { path: '.trash/x.md', rev: revValid });
+      expect(res3.isError).toBe(true);
+      expect(res3.structuredContent.code).toBe('INVALID_PATH');
+    });
+
+    it('C2: 削除済みノートは NOT_FOUND になり、restore_from_trash で戻した後は成功する', async () => {
+      await callTool('delete_note', { path: P });
+
+      const res = await callTool('restore_history', { path: P, rev: revValid });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+
+      await callTool('restore_from_trash', { trashPath: `.trash/${path.basename(P)}` });
+
+      const resAfter = await callTool('restore_history', { path: P, rev: revValid });
+      expect(resAfter.isError).toBeFalsy();
+    });
+
+    it('C3: 名前を変えたノートは古いパスで NOT_FOUND になる', async () => {
+      await callTool('move_note', { path: P, newFolder: 'メモ', newTitle: '新計画' });
+
+      const res = await callTool('restore_history', { path: P, rev: revValid });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('D: ロックと競合', () => {
+    let revValid: string;
+    beforeEach(async () => {
+      const { rev2 } = await setupHistory();
+      revValid = rev2;
+    });
+
+    it('D1: UI で編集中(ロック保持中)は DOC_LOCKED になりファイルは変わらない', async () => {
+      acquireLock(P);
+      const beforeContent = readFileSync(path.join(lib, P), 'utf8');
+
+      const res = await callTool('restore_history', { path: P, rev: revValid });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('DOC_LOCKED');
+      expect(res.structuredContent.holder.displayName).toBe('山田太郎');
+
+      const afterContent = readFileSync(path.join(lib, P), 'utf8');
+      expect(afterContent).toBe(beforeContent);
+    });
+
+    it('D2: ロック解除後に再実行すると成功する', async () => {
+      const user = acquireLock(P);
+      await callTool('restore_history', { path: P, rev: revValid });
+
+      app.lockService.release(P, user.id);
+
+      const res = await callTool('restore_history', { path: P, rev: revValid });
+      expect(res.isError).toBeFalsy();
+    });
+
+    it('D3: baseUpdatedAt が一致していれば成功する', async () => {
+      const read = await callTool('read_note', { path: P });
+      const res = await callTool('restore_history', {
+        path: P,
+        rev: revValid,
+        baseUpdatedAt: read.structuredContent.updatedAt,
+      });
+      expect(res.isError).toBeFalsy();
+    });
+
+    it('D4: baseUpdatedAt が古い場合は CONFLICT になりファイルは変わらない', async () => {
+      const read1 = await callTool('read_note', { path: P });
+      const oldUpdatedAt = read1.structuredContent.updatedAt;
+
+      await callTool('append_to_note', { path: P, text: '更新' });
+      const beforeContent = readFileSync(path.join(lib, P), 'utf8');
+
+      const res = await callTool('restore_history', {
+        path: P,
+        rev: revValid,
+        baseUpdatedAt: oldUpdatedAt,
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('CONFLICT');
+
+      const afterContent = readFileSync(path.join(lib, P), 'utf8');
+      expect(afterContent).toBe(beforeContent);
+    });
+
+    it('D5: エラーの優先順: 存在しない rev かつ古い baseUpdatedAt では NOT_FOUND が優先される', async () => {
+      const res = await callTool('restore_history', {
+        path: P,
+        rev: 'deadbeef',
+        baseUpdatedAt: '2000-01-01T00:00:00.000Z',
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('E: 並列実行', () => {
+    it('E1: restore_history と append_to_note の同時実行が両方成功しコミットが2件増える', async () => {
+      const { rev2 } = await setupHistory();
+      const countBefore = parseInt(execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(), 10);
+
+      const [resRestore, resAppend] = await Promise.all([
+        callTool('restore_history', { path: P, rev: rev2 }),
+        callTool('append_to_note', { path: P, text: '並列追記' }),
+      ]);
+
+      expect(resRestore.isError).toBeFalsy();
+      expect(resAppend.isError).toBeFalsy();
+
+      const countAfter = parseInt(execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(), 10);
+      expect(countAfter).toBe(countBefore + 2);
+
+      const current = readFileSync(path.join(lib, P), 'utf8');
+      const expectedRev2 = (await callTool('get_history_content', { path: P, rev: rev2 })).structuredContent.content;
+      const isValid = current.includes('並列追記') || current === expectedRev2;
+      expect(isValid).toBe(true);
+    });
+
+    it('E2: 2件の restore_history を同時に実行すると両方成功し、コミットが2件増え混ざらない', async () => {
+      const { rev1, rev2 } = await setupHistory();
+      const countBefore = parseInt(execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(), 10);
+
+      const [res1, res2] = await Promise.all([
+        callTool('restore_history', { path: P, rev: rev1 }),
+        callTool('restore_history', { path: P, rev: rev2 }),
+      ]);
+
+      expect(res1.isError).toBeFalsy();
+      expect(res2.isError).toBeFalsy();
+
+      const countAfter = parseInt(execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(), 10);
+      expect(countAfter).toBe(countBefore + 2);
+
+      const current = readFileSync(path.join(lib, P), 'utf8');
+      const content1 = (await callTool('get_history_content', { path: P, rev: rev1 })).structuredContent.content;
+      const content2 = (await callTool('get_history_content', { path: P, rev: rev2 })).structuredContent.content;
+      expect(current === content1 || current === content2).toBe(true);
+    });
+  });
+
+  describe('F: 登録', () => {
+    it('F1 & F2: tools/list に restore_history が含まれ、required に path と rev が入り rev に pattern がある', async () => {
+      const listRes = await mcpRequest({ jsonrpc: '2.0', id: seq++, method: 'tools/list', params: {} });
+      const tools = listRes.json().result.tools as {
+        name: string;
+        inputSchema: { required: string[]; properties: Record<string, unknown> };
+      }[];
+      const tool = tools.find((t) => t.name === 'restore_history');
+      expect(tool).toBeDefined();
+      expect(tool!.inputSchema.required).toEqual(['path', 'rev']);
+      expect((tool!.inputSchema.properties.rev as { pattern?: string }).pattern).toBeDefined();
     });
   });
 });
