@@ -11,6 +11,7 @@ import {
   isValidHeading,
   normalizeEntryText,
 } from '../daily-append.js';
+import { NotePatchError } from '../note-patch.js';
 import { docError, lockedError, toolError, toolResult as asResult } from '../tool-result.js';
 
 // 書き込み系ツール(issue #190)。docServiceを経由し生fsは使わない
@@ -202,6 +203,40 @@ export function registerWriteTools(mcp: McpServer, app: FastifyInstance): void {
         );
         return asResult({ path: saved.path, updatedAt: saved.updatedAt });
       } catch (e) {
+        return docError(e);
+      }
+    },
+  );
+
+  mcp.registerTool(
+    'patch_note',
+    {
+      title: 'ノート部分置換',
+      description:
+        '既存ノートの本文の一部を期待文字列の完全一致で安全に置換・削除する。本文全体の再送が不要。各editは本文中にちょうど1回現れる必要があり、未検出・複数箇所検出・範囲重複があればエラーになる。フロントマターは変更されない',
+      inputSchema: {
+        path: z.string().min(1).describe('ノートの相対パス'),
+        edits: z
+          .array(
+            z.object({
+              oldText: z.string().min(1).describe('置換前の文字列(本文中にちょうど1回現れること)'),
+              newText: z.string().describe('置換後の文字列(空文字で削除)'),
+            }),
+          )
+          .min(1)
+          .max(50)
+          .describe('置換指示の配列(1〜50件)'),
+        baseUpdatedAt: z.string().optional().describe('指定時のみ競合検知する'),
+      },
+    },
+    async ({ path: docPath, edits, baseUpdatedAt }) => {
+      try {
+        const saved = await app.docService.patchDocMcp(docPath, edits, MCP_AUTHOR, baseUpdatedAt);
+        return asResult({ path: saved.path, updatedAt: saved.updatedAt, applied: edits.length });
+      } catch (e) {
+        if (e instanceof NotePatchError) {
+          return toolError(e.payload);
+        }
         return docError(e);
       }
     },
