@@ -57,7 +57,7 @@ curl -i -X POST http://localhost:3000/mcp
 # WWW-Authenticate: Bearer realm="tsumiwiki-mcp"
 ```
 
-正しいトークンで `tools/list` を叩き、30 個のツールが返ることを確認:
+正しいトークンで `tools/list` を叩き、31 個のツールが返ることを確認:
 
 ```bash
 export MCP_TOKEN=<設定したトークン>
@@ -192,7 +192,7 @@ Claude Desktop は `headers` を省く:
 
 ## 5. 公開ツール一覧
 
-Read 9 種 + 履歴 5 種 + Write 10 種 + 添付 1 種 + ごみ箱 2 種 + 記録の手順 1 種 + ライブラリ運用 2 種の計 30 個。文書操作は全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。ライブラリ運用ツールは REST の `/api/library/*` と同じ処理を呼ぶ。
+Read 9 種 + 履歴 5 種 + Write 11 種 + 添付 1 種 + ごみ箱 2 種 + 記録の手順 1 種 + ライブラリ運用 2 種の計 31 個。文書操作は全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。ライブラリ運用ツールは REST の `/api/library/*` と同じ処理を呼ぶ。
 
 ### Read
 
@@ -234,6 +234,7 @@ Read 9 種 + 履歴 5 種 + Write 10 種 + 添付 1 種 + ごみ箱 2 種 + 記�
 | `create_daily_note` | `date?: string (YYYY-MM-DD)` | ライブラリ設定 `dailyNotes.folder` / `template` / `filenamePattern` に基づき指定日(省略時は今日)の Daily Note を生成 or 既存を返す。実在しない日付・形式不正は `isError` かつ `structuredContent.code` が `INVALID_DATE` |
 | `append_to_daily_note` | `text: string`, `heading?: string`(既定 `## メモ`), `source?: string` | 今日のデイリーノートの指定見出しの節末尾に `HH:MM [source] text` を1件追記(なければノート・見出しごと作成)。本文全体の読み書きは不要。戻り値は `path` / `created` / `updatedAt`。箇条書きにしたいときは `text` を `- ` で始める。日付と時刻はサーバーのローカル時刻(`TZ` 環境変数)で決まる。UI で編集中のノートには書けず、`isError` かつ `structuredContent.code` が `DOC_LOCKED` になる |
 | `append_to_note` | `path: string`, `text: string`, `heading?: string`, `timestamp?: boolean`, `source?: string`, `baseUpdatedAt?: string` | 既存ノートの末尾または指定見出しの節末尾にテキストを追記する。本文全体の読み書きは不要。`heading` 省略時は本文末尾に追記。`timestamp: true` で先頭に `HH:MM [source] ` を付与。`baseUpdatedAt` 指定時のみ競合検知する。UI で編集中のノートには書けず `DOC_LOCKED`。戻り値は `path` / `updatedAt` |
+| `patch_note` | `path: string`, `edits: { oldText: string, newText: string }[]`, `baseUpdatedAt?: string` | 既存ノートの本文の一部を期待文字列の完全一致で安全に置換・削除する。本文全体の再送が不要。各 edit は本文中にちょうど1回現れる必要があり、未検出・複数箇所検出・範囲重複があればエラーになる。フロントマターは変更されない。戻り値は `path` / `updatedAt` / `applied` |
 
 ### 添付
 
@@ -284,7 +285,7 @@ Read 9 種 + 履歴 5 種 + Write 10 種 + 添付 1 種 + ごみ箱 2 種 + 記�
   - `addTags` / `removeTags` は、今のタグを原文の表記のまま残す(`2026-01-01`・`true`・`1.0` などのタグも消えない)。`tags` の中にある入れ子の配列など、タグとして読めない要素は追加・削除の対象外とし、そのまま残す。ただし `null` や空文字の要素は削除される
   - `tags` がなく単数形の `tag` だけがあるノートでは、`tag` を残したまま、そのタグを含めた `tags` を新しく書く
   - フロントマターが壊れている(YAML の構文エラー、閉じフェンスがない、ルートがマップでない)ノートは、タグだけの指定でもエラーにして何も書き込まない
-- **`update_frontmatter` と `save_note` の同時実行**: `update_frontmatter` は `append_to_daily_note` や `append_to_note`、`restore_history` とは順番に処理されますが、`save_note` とは同時に走りえます。その場合は後から書いたほうが残ります(先に書いた変更は消える)。`read_note` で得た `updatedAt` を `baseUpdatedAt` に渡すと、途中で変更されていれば競合エラーになるので安全です。
+- **`update_frontmatter` と `save_note` の同時実行**: `update_frontmatter` は `append_to_daily_note` や `append_to_note`、`patch_note`、`restore_history` とは順番に処理されますが、`save_note` とは同時に走りえます。その場合は後から書いたほうが残ります(先に書いた変更は消える)。`read_note` で得た `updatedAt` を `baseUpdatedAt` に渡すと、途中で変更されていれば競合エラーになるので安全です。
 - **`save_note` のフロントマター自動抽出**: `body` の先頭に YAML ヘッダー(`---`)が含まれる場合、二重化を防ぐため自動抽出されてフロントマターにマージされます。本文ヘッダー由来の空キー(`aliases:` など)はキー削除されず保持されます(明示的な `frontmatter` 引数で `key: null` を渡した場合はキー削除されます)。
 
 ---

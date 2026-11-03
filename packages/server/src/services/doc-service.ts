@@ -35,6 +35,7 @@ import type { GitAuthor, GitService } from './git-service.js';
 import type { IndexerService } from './indexer-service.js';
 import { DocLockedError, type LockService } from './lock-service.js';
 import { normalizeTagName, parseDocMeta, splitTagString } from './markdown-meta.js';
+import { applyPatches, guardFrontmatter, type PatchEdit } from '../mcp/note-patch.js';
 
 // 文書・フォルダ操作(FR-DOC / 設計03章)
 // - ファイル書き込みはアトミック(一時ファイル→rename。NFR-AVL-03)
@@ -1060,6 +1061,30 @@ export class DocService {
       body: transform(bodyAfterFrontmatter(current)),
     }));
     return { path: normalized, updatedAt };
+  }
+
+  // MCP経由の期待文字列つき部分置換(#311)。本文の一部を置換・削除する。
+  // 追記(appendDocMcp)やフロントマター更新と同じ直列化キューに載るため交錯しない。
+  // 本文のみを対象とし、フロントマターはそのまま保持する。
+  async patchDocMcp(
+    relPath: string,
+    edits: PatchEdit[],
+    author: GitAuthor,
+    baseUpdatedAt?: string,
+  ): Promise<{ path: string; updatedAt: string }> {
+    const docNorm = this.validateDocPath(relPath);
+    const { updatedAt } = await this.serializedMcpEdit(
+      docNorm,
+      author,
+      baseUpdatedAt,
+      (current) => {
+        const hasFm = FM_BLOCK_RE.test(current);
+        const body = bodyAfterFrontmatter(current);
+        const patched = guardFrontmatter(body, applyPatches(body, edits), hasFm);
+        return { body: patched };
+      },
+    );
+    return { path: docNorm, updatedAt };
   }
 
   // MCP経由のフロントマターのみの更新(#292)。本文は一切変えず、プロパティとタグだけを書き換える。

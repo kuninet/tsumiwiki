@@ -163,7 +163,7 @@ describe('POST /mcp JSON-RPC', () => {
     expect(res.json().result.serverInfo.name).toBe('tsumiwiki');
   });
 
-  it('tools/listで期待する30個のツール名が全て含まれる', async () => {
+  it('tools/listで期待する31個のツール名が全て含まれる', async () => {
     const res = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(res.statusCode).toBe(200);
     const names = res.json().result.tools.map((t: { name: string }) => t.name);
@@ -181,6 +181,7 @@ describe('POST /mcp JSON-RPC', () => {
       'create_daily_note',
       'append_to_daily_note',
       'append_to_note',
+      'patch_note',
       'get_backlinks',
       'get_history',
       'get_history_content',
@@ -202,8 +203,8 @@ describe('POST /mcp JSON-RPC', () => {
     for (const name of expected) {
       expect(names).toContain(name);
     }
-    expect(expected).toHaveLength(30);
-    expect(names).toHaveLength(30);
+    expect(expected).toHaveLength(31);
+    expect(names).toHaveLength(31);
   });
 
   it('search_notesを何もない状態で呼ぶと空配列が返る', async () => {
@@ -3407,6 +3408,481 @@ describe('get_tree のフォルダ指定 (issue #310)', () => {
     });
   });
 });
+
+describe('patch_note (issue #311)', () => {
+  let seq = 9000;
+  beforeEach(async () => {
+    await buildMcpApp();
+  });
+
+  async function callTool(name: string, args: Record<string, unknown> = {}) {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: seq++,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().result;
+  }
+
+  function acquireLock(docPath: string) {
+    const user = app.userService.create({
+      username: `user_${seq++}`,
+      displayName: '山田太郎',
+      password: 'password',
+      role: 'user',
+    });
+    app.lockService.acquire(docPath, user.id);
+  }
+
+  describe('A: 正常系', () => {
+    it('Markdown 表の1行を安全に置換できる', async () => {
+      // Given: 表を含むノート
+      const content = '# 売上\n\n| 項目 | 金額 |\n|---|---|\n| A | 100 |\n| B | 200 |\n';
+      await callTool('create_note', { path: 'table.md', content });
+
+      // When: 表の1行を置換
+      const res = await callTool('patch_note', {
+        path: 'table.md',
+        edits: [{ oldText: '| A | 100 |', newText: '| A | 150 |' }],
+      });
+
+      // Then:
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.applied).toBe(1);
+      const read = await callTool('read_note', { path: 'table.md' });
+      expect(read.structuredContent.body).toContain('| A | 150 |');
+      expect(read.structuredContent.body).toContain('| B | 200 |');
+    });
+
+    it('リスト項目の置換および空文字による削除を適用できる', async () => {
+      const content = '# タスク\n\n- [ ] タスク1\n- [ ] タスク2\n- [ ] タスク3\n';
+      await callTool('create_note', { path: 'tasks.md', content });
+
+      const res = await callTool('patch_note', {
+        path: 'tasks.md',
+        edits: [
+          { oldText: '- [ ] タスク1', newText: '- [x] タスク1' },
+          { oldText: '- [ ] タスク2\n', newText: '' },
+        ],
+      });
+
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.applied).toBe(2);
+      const read = await callTool('read_note', { path: 'tasks.md' });
+      expect(read.structuredContent.body).toBe('# タスク\n\n- [x] タスク1\n- [ ] タスク3\n');
+    });
+
+    it('複数 edits の一括適用・隣接範囲・newText が他 oldText と同一でも連鎖置換されない', async () => {
+      const content = 'alpha beta gamma';
+      await callTool('create_note', { path: 'chain.md', content });
+
+      const res = await callTool('patch_note', {
+        path: 'chain.md',
+        edits: [
+          { oldText: 'alpha', newText: 'beta' },
+          { oldText: 'beta', newText: 'gamma' },
+          { oldText: ' gamma', newText: ' delta' },
+        ],
+      });
+
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.applied).toBe(3);
+      const read = await callTool('read_note', { path: 'chain.md' });
+      expect(read.structuredContent.body).toBe('beta gamma delta\n');
+    });
+
+    it('フロントマターを完全に保全し、コミット・タグ・バックリンクが即時反映される', async () => {
+      await callTool('create_note', { path: 'リンク先ノート.md', content: '# リンク先\n' });
+      const content = '---\ntitle: 元タイトル\ntags:\n  - タグA\n---\n本文 [[リンク先ノート]]\n';
+      await callTool('create_note', { path: 'note.md', content });
+
+      const res = await callTool('patch_note', {
+        path: 'note.md',
+        edits: [{ oldText: '本文', newText: '更新後本文 #タグB' }],
+      });
+
+      expect(res.isError).toBeFalsy();
+      const read = await callTool('read_note', { path: 'note.md' });
+      expect(read.structuredContent.frontmatter.title).toBe('元タイトル');
+      expect(read.structuredContent.body).toContain('更新後本文 #タグB');
+
+      // コミットログ
+      const log = execSync('git log -1 --pretty=%B', { cwd: lib }).toString();
+      expect(log).toContain('edit: note.md');
+
+      // タグ索引
+      const tagsRes = await callTool('list_tags', {});
+      const tags = (tagsRes.structuredContent.items as { tag: string }[]).map((t) => t.tag);
+      expect(tags).toContain('タグA');
+      expect(tags).toContain('タグB');
+
+      // バックリンク
+      const bl = await callTool('get_backlinks', { path: 'リンク先ノート.md' });
+      expect(bl.structuredContent.backlinks.some((i: { sourcePath: string }) => i.sourcePath === 'note.md')).toBe(true);
+    });
+  });
+
+  describe('B: 一意性', () => {
+    beforeEach(async () => {
+      await callTool('create_note', {
+        path: 'ambiguous.md',
+        content: '# タイトル\n\n- 共通項目\n- 特有項目A\n- 共通項目\n- 重複 aaaa\n',
+      });
+    });
+
+    it('存在しない文字列は PATCH_NOT_FOUND になる', async () => {
+      const res = await callTool('patch_note', {
+        path: 'ambiguous.md',
+        edits: [{ oldText: '存在しない行', newText: 'xxx' }],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent).toEqual({
+        code: 'PATCH_NOT_FOUND',
+        message: '置換対象の文字列が見つかりません (edits[0])',
+        editIndex: 0,
+      });
+    });
+
+    it('複数箇所に現れる文字列は PATCH_AMBIGUOUS になる', async () => {
+      const res = await callTool('patch_note', {
+        path: 'ambiguous.md',
+        edits: [{ oldText: '- 共通項目', newText: '- 変更項目' }],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent).toEqual({
+        code: 'PATCH_AMBIGUOUS',
+        message: '置換対象の文字列が複数箇所 (2箇所) 見つかりました (edits[0])',
+        editIndex: 0,
+        occurrences: 2,
+      });
+    });
+
+    it('重なり出現する文字列も PATCH_AMBIGUOUS になる', async () => {
+      const res = await callTool('patch_note', {
+        path: 'ambiguous.md',
+        edits: [{ oldText: 'aa', newText: 'bb' }],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent).toEqual({
+        code: 'PATCH_AMBIGUOUS',
+        message: '置換対象の文字列が複数箇所 (3箇所) 見つかりました (edits[0])',
+        editIndex: 0,
+        occurrences: 3,
+      });
+    });
+
+    it('前後を含めて一意化すれば置換に成功する', async () => {
+      const res = await callTool('patch_note', {
+        path: 'ambiguous.md',
+        edits: [{ oldText: '- 特有項目A\n- 共通項目', newText: '- 特有項目A\n- 変更された項目' }],
+      });
+      expect(res.isError).toBeFalsy();
+      const read = await callTool('read_note', { path: 'ambiguous.md' });
+      expect(read.structuredContent.body).toContain('- 変更された項目');
+    });
+
+    it('複数 edits のうち1件でもエラーがあれば、all-or-nothing で一切置換されない', async () => {
+      const res = await callTool('patch_note', {
+        path: 'ambiguous.md',
+        edits: [
+          { oldText: '- 特有項目A', newText: '- 変更済みA' },
+          { oldText: '存在しない文字列', newText: 'xxx' },
+        ],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('PATCH_NOT_FOUND');
+      expect(res.structuredContent.editIndex).toBe(1);
+
+      const read = await callTool('read_note', { path: 'ambiguous.md' });
+      // 特有項目A は変更されていないこと
+      expect(read.structuredContent.body).toContain('- 特有項目A');
+      expect(read.structuredContent.body).not.toContain('- 変更済みA');
+    });
+
+    it('失敗の優先順位: 先頭の edit でのエラーが優先して返る', async () => {
+      const res = await callTool('patch_note', {
+        path: 'ambiguous.md',
+        edits: [
+          { oldText: '存在しない1', newText: 'x' },
+          { oldText: '- 共通項目', newText: 'y' },
+        ],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('PATCH_NOT_FOUND');
+      expect(res.structuredContent.editIndex).toBe(0);
+    });
+  });
+
+  describe('C: 重なり', () => {
+    beforeEach(async () => {
+      await callTool('create_note', {
+        path: 'overlap.md',
+        content: '# タイトル\n\nABCDEFG HIJKLMNOP\n',
+      });
+    });
+
+    it('置換範囲が重複している場合は PATCH_OVERLAP になる', async () => {
+      const res = await callTool('patch_note', {
+        path: 'overlap.md',
+        edits: [
+          { oldText: 'BCDE', newText: '123' },
+          { oldText: 'DEFG', newText: '456' },
+        ],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent).toEqual({
+        code: 'PATCH_OVERLAP',
+        message: '置換範囲が重複しています (edits[0] と edits[1])',
+        editIndexes: [0, 1],
+      });
+    });
+
+    it('内側包含関係の重複も PATCH_OVERLAP になる', async () => {
+      const res = await callTool('patch_note', {
+        path: 'overlap.md',
+        edits: [
+          { oldText: 'BCDE', newText: '123' },
+          { oldText: 'C', newText: '999' },
+        ],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent).toEqual({
+        code: 'PATCH_OVERLAP',
+        message: '置換範囲が重複しています (edits[0] と edits[1])',
+        editIndexes: [0, 1],
+      });
+    });
+
+    it('同一の oldText を複数 edit で指定した場合は PATCH_OVERLAP になる', async () => {
+      const res = await callTool('patch_note', {
+        path: 'overlap.md',
+        edits: [
+          { oldText: 'BCDE', newText: '1' },
+          { oldText: 'BCDE', newText: '2' },
+        ],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('PATCH_OVERLAP');
+    });
+  });
+
+  describe('D: 境界', () => {
+    it('CRLF で保存されたノートでも正常に置換できる', async () => {
+      await callTool('create_note', {
+        path: 'crlf.md',
+        content: 'line1\r\nline2\r\nline3\r\n',
+      });
+
+      const res = await callTool('patch_note', {
+        path: 'crlf.md',
+        edits: [{ oldText: 'line2\r\n', newText: 'updated\n' }],
+      });
+      expect(res.isError).toBeFalsy();
+      const read = await callTool('read_note', { path: 'crlf.md' });
+      expect(read.structuredContent.body).toBe('line1\nupdated\nline3\n');
+    });
+
+    it('フロントマター内の文字列は置換対象に含まれない', async () => {
+      await callTool('create_note', {
+        path: 'fm.md',
+        content: '---\nauthor: yamada\n---\n本文テキスト\n',
+      });
+
+      const res = await callTool('patch_note', {
+        path: 'fm.md',
+        edits: [{ oldText: 'yamada', newText: 'tanaka' }],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('PATCH_NOT_FOUND');
+    });
+
+    it('本文とフロントマターの両方に存在する場合でも、本文中に1箇所なら正常に置換される', async () => {
+      await callTool('create_note', {
+        path: 'fm2.md',
+        content: '---\nkeyword: target\n---\n本文の target です\n',
+      });
+
+      const res = await callTool('patch_note', {
+        path: 'fm2.md',
+        edits: [{ oldText: 'target', newText: 'replaced' }],
+      });
+      expect(res.isError).toBeFalsy();
+      const read = await callTool('read_note', { path: 'fm2.md' });
+      expect(read.structuredContent.frontmatter.keyword).toBe('target');
+      expect(read.structuredContent.body).toContain('本文の replaced です');
+    });
+
+    it('元々フロントマターのないノートで、本文先頭を --- にしようとすると PATCH_FRONTMATTER で拒否される', async () => {
+      await callTool('create_note', {
+        path: 'no_fm.md',
+        content: '# タイトル\n本文\n',
+      });
+
+      const res = await callTool('patch_note', {
+        path: 'no_fm.md',
+        edits: [{ oldText: '# タイトル', newText: '---\nfake: fm\n---' }],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('PATCH_FRONTMATTER');
+    });
+
+    it('空行の置換・削除ができる', async () => {
+      await callTool('create_note', {
+        path: 'newlines.md',
+        content: 'line1\n\n\n\nline2\n',
+      });
+
+      const res = await callTool('patch_note', {
+        path: 'newlines.md',
+        edits: [{ oldText: '\n\n\n\n', newText: '\n\n' }],
+      });
+      expect(res.isError).toBeFalsy();
+      const read = await callTool('read_note', { path: 'newlines.md' });
+      expect(read.structuredContent.body).toBe('line1\n\nline2\n');
+    });
+  });
+
+  describe('E: 存在・ロック・競合検知', () => {
+    it('存在しないノートは NOT_FOUND になる', async () => {
+      const res = await callTool('patch_note', {
+        path: 'nonexistent.md',
+        edits: [{ oldText: 'a', newText: 'b' }],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+    });
+
+    it('不正なパスは INVALID_PATH になる', async () => {
+      const res = await callTool('patch_note', {
+        path: '../secret.md',
+        edits: [{ oldText: 'a', newText: 'b' }],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('INVALID_PATH');
+    });
+
+    it('ロック中のノートは DOC_LOCKED になる', async () => {
+      await callTool('create_note', { path: 'locked.md', content: 'ロックテスト' });
+      acquireLock('locked.md');
+
+      const res = await callTool('patch_note', {
+        path: 'locked.md',
+        edits: [{ oldText: 'テスト', newText: '変更' }],
+      });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('DOC_LOCKED');
+    });
+
+    it('baseUpdatedAt が一致すれば成功し、古い場合は CONFLICT になる', async () => {
+      await callTool('create_note', { path: 'conflict.md', content: '初期内容' });
+      const read1 = await callTool('read_note', { path: 'conflict.md' });
+      const oldUpdatedAt = read1.structuredContent.updatedAt;
+
+      // 別の更新を行う
+      await callTool('append_to_note', { path: 'conflict.md', text: '追記' });
+
+      // 古い updatedAt で patch_note
+      const resConflict = await callTool('patch_note', {
+        path: 'conflict.md',
+        edits: [{ oldText: '初期内容', newText: '置換内容' }],
+        baseUpdatedAt: oldUpdatedAt,
+      });
+      expect(resConflict.isError).toBe(true);
+      expect(resConflict.structuredContent.code).toBe('CONFLICT');
+
+      // 最新の updatedAt で patch_note
+      const read2 = await callTool('read_note', { path: 'conflict.md' });
+      const latestUpdatedAt = read2.structuredContent.updatedAt;
+
+      const resSuccess = await callTool('patch_note', {
+        path: 'conflict.md',
+        edits: [{ oldText: '初期内容', newText: '置換内容' }],
+        baseUpdatedAt: latestUpdatedAt,
+      });
+      expect(resSuccess.isError).toBeFalsy();
+    });
+  });
+
+  describe('F: 並列実行', () => {
+    it('同一ノートの異なる箇所への同時 patch_note は直列化キューにより両方成功する', async () => {
+      await callTool('create_note', {
+        path: 'parallel.md',
+        content: '項目A: 0\n項目B: 0\n項目C: 0\n',
+      });
+
+      const [res1, res2] = await Promise.all([
+        callTool('patch_note', {
+          path: 'parallel.md',
+          edits: [{ oldText: '項目A: 0', newText: '項目A: 100' }],
+        }),
+        callTool('patch_note', {
+          path: 'parallel.md',
+          edits: [{ oldText: '項目B: 0', newText: '項目B: 200' }],
+        }),
+      ]);
+
+      expect(res1.isError).toBeFalsy();
+      expect(res2.isError).toBeFalsy();
+
+      const read = await callTool('read_note', { path: 'parallel.md' });
+      expect(read.structuredContent.body).toContain('項目A: 100');
+      expect(read.structuredContent.body).toContain('項目B: 200');
+      expect(read.structuredContent.body).toContain('項目C: 0');
+    });
+
+    it('同一箇所への同時 patch_note は1件が成功し、もう1件は PATCH_NOT_FOUND になる', async () => {
+      await callTool('create_note', {
+        path: 'race.md',
+        content: '状態: 待機中\n',
+      });
+
+      const [res1, res2] = await Promise.all([
+        callTool('patch_note', {
+          path: 'race.md',
+          edits: [{ oldText: '状態: 待機中', newText: '状態: 処理中1' }],
+        }),
+        callTool('patch_note', {
+          path: 'race.md',
+          edits: [{ oldText: '状態: 待機中', newText: '状態: 処理中2' }],
+        }),
+      ]);
+
+      const successCount = [res1, res2].filter((r) => !r.isError).length;
+      const errorCount = [res1, res2].filter((r) => r.isError && r.structuredContent.code === 'PATCH_NOT_FOUND').length;
+
+      expect(successCount).toBe(1);
+      expect(errorCount).toBe(1);
+    });
+
+    it('patch_note と append_to_note の同時実行がアトミックに完了する', async () => {
+      await callTool('create_note', {
+        path: 'mixed.md',
+        content: '# メモ\n\nヘッダー\n',
+      });
+
+      const [patchRes, appendRes] = await Promise.all([
+        callTool('patch_note', {
+          path: 'mixed.md',
+          edits: [{ oldText: 'ヘッダー', newText: '更新ヘッダー' }],
+        }),
+        callTool('append_to_note', {
+          path: 'mixed.md',
+          text: '追加の行',
+        }),
+      ]);
+
+      expect(patchRes.isError).toBeFalsy();
+      expect(appendRes.isError).toBeFalsy();
+
+      const read = await callTool('read_note', { path: 'mixed.md' });
+      expect(read.structuredContent.body).toContain('更新ヘッダー');
+      expect(read.structuredContent.body).toContain('追加の行');
+    });
+  });
+});
+
 
 describe('restore_history (issue #312)', () => {
   let seq = 10000;
