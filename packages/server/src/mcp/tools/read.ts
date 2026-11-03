@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { EXCLUDED_PROP_KEYS } from '../../services/markdown-meta.js';
-import { toolError, toolResult as asResult } from '../tool-result.js';
+import { docError, toolError, toolResult as asResult } from '../tool-result.js';
 
 // 読み取り系ツール(issue #190)。queryService / docServiceを経由し生fsは使わない
 
@@ -111,10 +111,21 @@ export function registerReadTools(mcp: McpServer, app: FastifyInstance): void {
     'get_tree',
     {
       title: 'ライブラリ全体のツリー取得',
-      description: 'フォルダ一覧と全ノート(パス・タイトル・フォルダ・更新日時)を取得する',
-      inputSchema: {},
+      description:
+        'フォルダ一覧とノート一覧を取得する。folder で起点を絞れる。大きなライブラリでは folder と recursive: false で必要な階層だけ取得するとよい',
+      inputSchema: {
+        folder: z.string().optional().describe('起点フォルダ(省略または "" でライブラリ全体)'),
+        recursive: z.boolean().optional().describe('false なら直下のみ(既定 true)'),
+        foldersOnly: z.boolean().optional().describe('true ならノートを含めずフォルダだけ返す'),
+      },
     },
-    async () => asResult(await app.docService.getTree()),
+    async (args) => {
+      try {
+        return asResult(await app.docService.getTree(args));
+      } catch (e) {
+        return docError(e);
+      }
+    },
   );
 
   mcp.registerTool(

@@ -3173,3 +3173,235 @@ describe('docError 単体テスト', () => {
     expect(() => docError(genericError)).toThrow(genericError);
   });
 });
+
+describe('get_tree のフォルダ指定 (issue #310)', () => {
+  let seq = 8000;
+  beforeEach(async () => {
+    await buildMcpApp();
+  });
+
+  async function callTool(name: string, args: Record<string, unknown> = {}) {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: seq++,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().result;
+  }
+
+  describe('A: 後方互換性', () => {
+    it('引数なしで従来通りライブラリ全体のツリーを取得できる', async () => {
+      // Given: 複数のノートとフォルダが存在する
+      await callTool('create_note', { path: 'root.md', content: '# ルート' });
+      await callTool('create_note', { path: 'projects/alpha.md', content: '# Alpha' });
+
+      // When: 引数なしで get_tree を呼び出す
+      const res = await callTool('get_tree', {});
+
+      // Then: 成功し、folder は空文字で全フォルダ・全ノートが含まれる
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.folder).toBe('');
+      expect(res.structuredContent.folders).toContain('projects');
+      const docPaths = (res.structuredContent.docs as { path: string }[]).map((d) => d.path);
+      expect(docPaths).toContain('root.md');
+      expect(docPaths).toContain('projects/alpha.md');
+    });
+
+    it('folder: "" や folder: "/" でもライブラリ全体が返る', async () => {
+      await callTool('create_note', { path: 'root.md', content: '# ルート' });
+      await callTool('create_note', { path: 'sub/note.md', content: '# Sub' });
+
+      const resEmpty = await callTool('get_tree', { folder: '' });
+      expect(resEmpty.isError).toBeFalsy();
+      expect(resEmpty.structuredContent.folder).toBe('');
+      expect(resEmpty.structuredContent.folders).toContain('sub');
+
+      const resSlash = await callTool('get_tree', { folder: '/' });
+      expect(resSlash.isError).toBeFalsy();
+      expect(resSlash.structuredContent.folder).toBe('');
+      expect(resSlash.structuredContent.folders).toContain('sub');
+    });
+  });
+
+  describe('B: フォルダ指定・再帰', () => {
+    beforeEach(async () => {
+      await callTool('create_note', { path: 'dirA/doc1.md', content: '# Doc 1' });
+      await callTool('create_note', { path: 'dirA/sub/doc2.md', content: '# Doc 2' });
+      await callTool('create_note', { path: 'dirAB/doc3.md', content: '# Doc 3' });
+      await callTool('create_note', { path: 'dir_special/doc4.md', content: '# Doc 4' });
+      await callTool('create_note', { path: 'dir%special/doc5.md', content: '# Doc 5' });
+      await callTool('create_note', { path: 'root.md', content: '# Root' });
+    });
+
+    it('指定フォルダ配下のみ再帰的に取得し、起点フォルダ自身は folders に含めない', async () => {
+      // When: folder: 'dirA' で再帰取得
+      const res = await callTool('get_tree', { folder: 'dirA' });
+
+      // Then:
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.folder).toBe('dirA');
+      // 起点 dirA は含まず、子フォルダ dirA/sub のみ
+      expect(res.structuredContent.folders).toEqual(['dirA/sub']);
+      const docPaths = (res.structuredContent.docs as { path: string }[]).map((d) => d.path);
+      expect(docPaths).toContain('dirA/doc1.md');
+      expect(docPaths).toContain('dirA/sub/doc2.md');
+      // 同名前方一致 dirAB や ルートは含まない
+      expect(docPaths).not.toContain('dirAB/doc3.md');
+      expect(docPaths).not.toContain('root.md');
+    });
+
+    it('アンダースコアやパーセントを含むフォルダ名でもワイルドカード化せず厳密一致する', async () => {
+      const resUnderscore = await callTool('get_tree', { folder: 'dir_special' });
+      expect(resUnderscore.isError).toBeFalsy();
+      const docsUnderscore = (resUnderscore.structuredContent.docs as { path: string }[]).map((d) => d.path);
+      expect(docsUnderscore).toEqual(['dir_special/doc4.md']);
+
+      const resPercent = await callTool('get_tree', { folder: 'dir%special' });
+      expect(resPercent.isError).toBeFalsy();
+      const docsPercent = (resPercent.structuredContent.docs as { path: string }[]).map((d) => d.path);
+      expect(docsPercent).toEqual(['dir%special/doc5.md']);
+    });
+
+    it('大文字小文字違いのフォルダ名は NOT_FOUND になる', async () => {
+      const res = await callTool('get_tree', { folder: 'DIRA' });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('C: 直下のみ (recursive: false)', () => {
+    beforeEach(async () => {
+      await callTool('create_note', { path: 'root.md', content: '# Root' });
+      await callTool('create_note', { path: 'dirA/doc1.md', content: '# Doc 1' });
+      await callTool('create_note', { path: 'dirA/sub/doc2.md', content: '# Doc 2' });
+      await callTool('create_note', { path: 'dirA/sub/grand/doc3.md', content: '# Doc 3' });
+    });
+
+    it('folder 指定かつ recursive: false で直下のみ取得する', async () => {
+      const res = await callTool('get_tree', { folder: 'dirA', recursive: false });
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.folder).toBe('dirA');
+      // 直下の sub のみで、孫 grand は含まない
+      expect(res.structuredContent.folders).toEqual(['dirA/sub']);
+      // 直下の doc1.md のみで、sub や grand のノートは含まない
+      const docPaths = (res.structuredContent.docs as { path: string }[]).map((d) => d.path);
+      expect(docPaths).toEqual(['dirA/doc1.md']);
+    });
+
+    it('ルート指定かつ recursive: false でルート直下のみ取得する', async () => {
+      const res = await callTool('get_tree', { folder: '', recursive: false });
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.folder).toBe('');
+      // ルート直下のフォルダのみ
+      expect(res.structuredContent.folders).toEqual(['dirA']);
+      // ルート直下のノートのみ
+      const docPaths = (res.structuredContent.docs as { path: string }[]).map((d) => d.path);
+      expect(docPaths).toEqual(['root.md']);
+    });
+  });
+
+  describe('D: foldersOnly (foldersOnly: true)', () => {
+    it('foldersOnly: true の場合 docs は空配列になる', async () => {
+      await callTool('create_note', { path: 'dirA/doc1.md', content: '# Doc 1' });
+      await callTool('create_note', { path: 'dirA/sub/doc2.md', content: '# Doc 2' });
+
+      const res = await callTool('get_tree', { folder: 'dirA', foldersOnly: true });
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.folder).toBe('dirA');
+      expect(res.structuredContent.folders).toEqual(['dirA/sub']);
+      expect(res.structuredContent.docs).toEqual([]);
+    });
+  });
+
+  describe('E: 正規化・エラーハンドリング', () => {
+    beforeEach(async () => {
+      await callTool('create_note', { path: 'nested/target/doc.md', content: '# Doc' });
+      await callTool('create_note', { path: '日本語フォルダ/doc.md', content: '# 日本語' });
+    });
+
+    it('末尾スラッシュ・バックスラッシュが正規化される', async () => {
+      const resSlash = await callTool('get_tree', { folder: 'nested/target/' });
+      expect(resSlash.isError).toBeFalsy();
+      expect(resSlash.structuredContent.folder).toBe('nested/target');
+
+      const resBackslash = await callTool('get_tree', { folder: 'nested\\target\\' });
+      expect(resBackslash.isError).toBeFalsy();
+      expect(resBackslash.structuredContent.folder).toBe('nested/target');
+    });
+
+    it('NFD形式のフォルダ指定がNFC正規化されて解決される', async () => {
+      const nfd = '日本語フォルダ'.normalize('NFD');
+      const res = await callTool('get_tree', { folder: nfd });
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.folder).toBe('日本語フォルダ'.normalize('NFC'));
+    });
+
+    it('存在しないフォルダは NOT_FOUND になる', async () => {
+      const res = await callTool('get_tree', { folder: 'nonexistent' });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+    });
+
+    it('ファイルパスを指定した場合は NOT_FOUND になる', async () => {
+      const res = await callTool('get_tree', { folder: 'nested/target/doc.md' });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+    });
+
+    it('不正なパス(.. や保護パス、.trash)は INVALID_PATH になる', async () => {
+      const resDotDot = await callTool('get_tree', { folder: '../secret' });
+      expect(resDotDot.isError).toBe(true);
+      expect(resDotDot.structuredContent.code).toBe('INVALID_PATH');
+
+      const resGit = await callTool('get_tree', { folder: '.git' });
+      expect(resGit.isError).toBe(true);
+      expect(resGit.structuredContent.code).toBe('INVALID_PATH');
+
+      const resTrash = await callTool('get_tree', { folder: '.trash' });
+      expect(resTrash.isError).toBe(true);
+      expect(resTrash.structuredContent.code).toBe('INVALID_PATH');
+
+      const resSubTrash = await callTool('get_tree', { folder: 'nested/.trash' });
+      expect(resSubTrash.isError).toBe(true);
+      expect(resSubTrash.structuredContent.code).toBe('INVALID_PATH');
+    });
+
+    it('型不正な引数はエラーになる', async () => {
+      const res = await callTool('get_tree', { folder: 123 as unknown as string });
+      expect(res.isError).toBe(true);
+    });
+  });
+
+  describe('F: 状態変化への即時追従', () => {
+    it('ノート作成・フォルダ作成・フォルダ改名・ノート削除がツリーに即時反映される', async () => {
+      // 1. ノート作成
+      await callTool('create_note', { path: 'work/memo.md', content: '# メモ' });
+      let tree = await callTool('get_tree', { folder: 'work' });
+      expect((tree.structuredContent.docs as { path: string }[]).map((d) => d.path)).toEqual(['work/memo.md']);
+
+      // 2. サブフォルダ作成
+      await callTool('create_folder', { path: 'work/archive' });
+      tree = await callTool('get_tree', { folder: 'work' });
+      expect(tree.structuredContent.folders).toContain('work/archive');
+
+      // 3. フォルダ移動 (move_folder)
+      await callTool('move_folder', { path: 'work', newPath: 'tasks' });
+      const oldTree = await callTool('get_tree', { folder: 'work' });
+      expect(oldTree.isError).toBe(true);
+      expect(oldTree.structuredContent.code).toBe('NOT_FOUND');
+
+      const newTree = await callTool('get_tree', { folder: 'tasks' });
+      expect(newTree.isError).toBeFalsy();
+      expect(newTree.structuredContent.folders).toContain('tasks/archive');
+      expect((newTree.structuredContent.docs as { path: string }[]).map((d) => d.path)).toEqual(['tasks/memo.md']);
+
+      // 4. ノート削除 (delete_note)
+      await callTool('delete_note', { path: 'tasks/memo.md' });
+      const afterDelete = await callTool('get_tree', { folder: 'tasks' });
+      expect(afterDelete.structuredContent.docs).toEqual([]);
+      expect(afterDelete.structuredContent.folders).not.toContain('tasks/.trash');
+    });
+  });
+});
