@@ -5,6 +5,7 @@ import { registerWriteTools } from './tools/write.js';
 import { registerDailyTools } from './tools/daily.js';
 import { registerHistoryTools } from './tools/history.js';
 import { registerInstructionTools } from './tools/instructions.js';
+import { registerTrashTools } from './tools/trash.js';
 import { registerWorkLogPrompt } from './prompts/work-log.js';
 import { registerDailyJournalPrompt } from './prompts/daily-journal.js';
 
@@ -24,6 +25,7 @@ export function buildMcpServer(app: FastifyInstance): McpServer {
   registerDailyTools(mcp, app);
   registerHistoryTools(mcp, app);
   registerInstructionTools(mcp, app);
+  registerTrashTools(mcp, app);
   registerWorkLogPrompt(mcp, app);
   registerDailyJournalPrompt(mcp, app);
   return mcp;

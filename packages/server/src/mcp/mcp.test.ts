@@ -6,6 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
 import { openDatabase } from '../db/index.js';
+import { InvalidPathError } from '../lib/paths.js';
+import {
+  DocNotFoundError,
+  DocConflictError,
+  FrontmatterUpdateError,
+} from '../services/doc-service.js';
+import { DocLockedError } from '../services/lock-service.js';
+import { docError } from './tool-result.js';
 
 // Remote MCPエンドポイント(issue #190)のテスト
 
@@ -138,7 +146,7 @@ describe('POST /mcp JSON-RPC', () => {
     expect(res.json().result.serverInfo.name).toBe('tsumiwiki');
   });
 
-  it('tools/listで期待する23個のツール名が全て含まれる', async () => {
+  it('tools/listで期待する25個のツール名が全て含まれる', async () => {
     const res = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(res.statusCode).toBe(200);
     const names = res.json().result.tools.map((t: { name: string }) => t.name);
@@ -166,12 +174,14 @@ describe('POST /mcp JSON-RPC', () => {
       'find_notes_by_property',
       'list_properties',
       'get_record_instructions',
+      'list_trash',
+      'restore_from_trash',
     ];
     for (const name of expected) {
       expect(names).toContain(name);
     }
-    expect(expected).toHaveLength(23);
-    expect(names).toHaveLength(23);
+    expect(expected).toHaveLength(25);
+    expect(names).toHaveLength(25);
   });
 
   it('search_notesを何もない状態で呼ぶと空配列が返る', async () => {
@@ -2377,5 +2387,248 @@ describe('プロンプト daily_journal / ツール get_record_instructions(issu
     const r = await callTool('find_notes_by_property', { key: 'date', value: d });
     const items = r.structuredContent.items as { path: string; values: unknown }[];
     expect(items.map((i) => i.path)).toEqual(['作業ログ/X/作業.md']);
+  });
+});
+
+describe('ごみ箱(list_trash / restore_from_trash)', () => {
+  let seq = 2400;
+
+  beforeEach(async () => {
+    await buildMcpApp();
+  });
+
+  async function callTool(name: string, args: Record<string, unknown> = {}) {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: seq++,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().result;
+  }
+
+  it('list_trash: 空の場合 { items: [] } が返る', async () => {
+    const res = await callTool('list_trash');
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent).toEqual({ items: [] });
+  });
+
+  it('list_trash: 複数ノート削除時に deletedAt 降順で返る', async () => {
+    await callTool('create_note', { path: 'a.md', content: 'note a' });
+    await callTool('create_note', { path: 'b.md', content: 'note b' });
+
+    await callTool('delete_note', { path: 'a.md' });
+    // git commit のタイムスタンプは秒単位のため、秒が進むのを待つ
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await callTool('delete_note', { path: 'b.md' });
+
+    const res = await callTool('list_trash');
+    expect(res.isError).toBeFalsy();
+    const items = res.structuredContent.items as Array<{
+      trashPath: string;
+      name: string;
+      originalPath: string | null;
+      deletedAt: string | null;
+    }>;
+    expect(items).toHaveLength(2);
+    expect(items[0].name).toBe('b.md');
+    expect(items[1].name).toBe('a.md');
+    expect(items[0].originalPath).toBe('b.md');
+    expect(items[1].originalPath).toBe('a.md');
+    expect(items[0].deletedAt).not.toBeNull();
+    expect(items[1].deletedAt).not.toBeNull();
+    expect(items[0].deletedAt! >= items[1].deletedAt!).toBe(true);
+  });
+
+  it('restore_from_trash: 削除したノートが元パスに復元され、read_note で内容一致すること、list_trash から消えること', async () => {
+    const content = '# 本文\n\nテスト内容';
+    await callTool('create_note', { path: 'memo.md', content });
+    await callTool('delete_note', { path: 'memo.md' });
+
+    const beforeTrash = await callTool('list_trash');
+    expect(beforeTrash.structuredContent.items).toHaveLength(1);
+    const trashPath = (beforeTrash.structuredContent.items as Array<{ trashPath: string }>)[0].trashPath;
+
+    const restoreRes = await callTool('restore_from_trash', { trashPath });
+    expect(restoreRes.isError).toBeFalsy();
+    expect(restoreRes.structuredContent).toEqual({ path: 'memo.md' });
+
+    const readRes = await callTool('read_note', { path: 'memo.md' });
+    expect(readRes.isError).toBeFalsy();
+    expect(readRes.structuredContent.body).toContain('テスト内容');
+
+    const afterTrash = await callTool('list_trash');
+    expect(afterTrash.structuredContent.items).toHaveLength(0);
+  });
+
+  it('restore_from_trash: 元パスに同名ノートが存在する場合に連番で復元される', async () => {
+    await callTool('create_note', { path: 'memo.md', content: 'first' });
+    await callTool('delete_note', { path: 'memo.md' });
+
+    // 元パスに同名ノートを再作成
+    await callTool('create_note', { path: 'memo.md', content: 'second' });
+
+    const restoreRes = await callTool('restore_from_trash', { trashPath: '.trash/memo.md' });
+    expect(restoreRes.isError).toBeFalsy();
+    expect(restoreRes.structuredContent).toEqual({ path: 'memo (2).md' });
+
+    const readOrig = await callTool('read_note', { path: 'memo.md' });
+    expect(readOrig.structuredContent.body.trim()).toBe('second');
+
+    const readRestored = await callTool('read_note', { path: 'memo (2).md' });
+    expect(readRestored.structuredContent.body.trim()).toBe('first');
+  });
+
+  it('restore_from_trash: フォルダ削除後の復元が動作する', async () => {
+    await callTool('create_folder', { path: 'docs/sub' });
+    await callTool('create_note', { path: 'docs/sub/item.md', content: 'in folder' });
+
+    // フォルダ削除 (docService.deleteFolder)
+    await app.docService.deleteFolder('docs/sub', -1, {
+      name: 'MCP Agent',
+      email: 'mcp@tsumiwiki.local',
+    });
+
+    const listRes = await callTool('list_trash');
+    const folderEntry = (listRes.structuredContent.items as Array<{ trashPath: string; isFolder: boolean }>).find(
+      (e) => e.isFolder,
+    );
+    expect(folderEntry).toBeDefined();
+
+    const restoreRes = await callTool('restore_from_trash', { trashPath: folderEntry!.trashPath });
+    expect(restoreRes.isError).toBeFalsy();
+    expect(restoreRes.structuredContent).toEqual({ path: 'docs/sub' });
+
+    const readRes = await callTool('read_note', { path: 'docs/sub/item.md' });
+    expect(readRes.isError).toBeFalsy();
+    expect(readRes.structuredContent.body.trim()).toBe('in folder');
+  });
+
+  it('restore_from_trash: 存在しない trashPath で code: NOT_FOUND が返る', async () => {
+    const res = await callTool('restore_from_trash', { trashPath: '.trash/non-existent.md' });
+    expect(res.isError).toBe(true);
+    expect(res.structuredContent.code).toBe('NOT_FOUND');
+  });
+
+  it('restore_from_trash: 不正なパス (.. や .trash/ 外) で code: INVALID_PATH が返る', async () => {
+    for (const badPath of ['../escape.md', 'memo.md', '.trash/sub/nested.md']) {
+      const res = await callTool('restore_from_trash', { trashPath: badPath });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('INVALID_PATH');
+    }
+  });
+});
+
+describe('docError 単体テスト', () => {
+  it('各エラーインスタンスが期待通りの構造化エラーにマッピングされる', () => {
+    // 1. InvalidPathError
+    const invalidPath = new InvalidPathError('bad/path', 'パス形式が無効です');
+    expect(docError(invalidPath)).toEqual({
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            { code: 'INVALID_PATH', message: 'パス形式が無効です' },
+            null,
+            2,
+          ),
+        },
+      ],
+      structuredContent: { code: 'INVALID_PATH', message: 'パス形式が無効です' },
+    });
+
+    // userMessage がない InvalidPathError
+    const invalidPathNoUserMsg = new InvalidPathError('bad/path');
+    expect(docError(invalidPathNoUserMsg).structuredContent).toEqual({
+      code: 'INVALID_PATH',
+      message: '不正なパスです: bad/path',
+    });
+
+    // 2. DocNotFoundError
+    const notFound = new DocNotFoundError('memo.md');
+    expect(docError(notFound)).toEqual({
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            { code: 'NOT_FOUND', message: '文書が見つかりません: memo.md' },
+            null,
+            2,
+          ),
+        },
+      ],
+      structuredContent: { code: 'NOT_FOUND', message: '文書が見つかりません: memo.md' },
+    });
+
+    // 3. DocConflictError
+    const conflict = new DocConflictError('競合が発生しました');
+    expect(docError(conflict)).toEqual({
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            { code: 'CONFLICT', message: '競合が発生しました' },
+            null,
+            2,
+          ),
+        },
+      ],
+      structuredContent: { code: 'CONFLICT', message: '競合が発生しました' },
+    });
+
+    // 4. DocLockedError
+    const locked = new DocLockedError({
+      userId: 1,
+      displayName: '山田太郎',
+      acquiredAt: '2026-01-01T00:00:00Z',
+      refreshedAt: '2026-01-01T00:00:00Z',
+    });
+    expect(docError(locked)).toEqual({
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            {
+              code: 'DOC_LOCKED',
+              message: 'この文書は山田太郎さんが編集中です',
+              holder: { displayName: '山田太郎' },
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+      structuredContent: {
+        code: 'DOC_LOCKED',
+        message: 'この文書は山田太郎さんが編集中です',
+        holder: { displayName: '山田太郎' },
+      },
+    });
+
+    // 5. FrontmatterUpdateError
+    const fmError = new FrontmatterUpdateError('フロントマター構文エラー');
+    expect(docError(fmError)).toEqual({
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            { code: 'FRONTMATTER_INVALID', message: 'フロントマター構文エラー' },
+            null,
+            2,
+          ),
+        },
+      ],
+      structuredContent: { code: 'FRONTMATTER_INVALID', message: 'フロントマター構文エラー' },
+    });
+
+    // 6. それ以外の通常Errorは rethrow
+    const genericError = new Error('予期せぬエラー');
+    expect(() => docError(genericError)).toThrow(genericError);
   });
 });

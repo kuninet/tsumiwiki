@@ -1,4 +1,10 @@
-import type { DocLockedError } from '../services/lock-service.js';
+import { InvalidPathError } from '../lib/paths.js';
+import {
+  DocNotFoundError,
+  DocConflictError,
+  FrontmatterUpdateError,
+} from '../services/doc-service.js';
+import { DocLockedError } from '../services/lock-service.js';
 
 // MCPツールの戻り値組み立て共通処理。
 // SDKのCallToolResult.structuredContentはオブジェクト(record)必須で配列を直接渡すと
@@ -29,4 +35,24 @@ export function lockedError(e: DocLockedError) {
     message: e.message,
     holder: { displayName: e.holder.displayName },
   });
+}
+
+// docService由来の主要な業務例外を構造化エラー(isError: true)に変換する
+export function docError(e: unknown) {
+  if (e instanceof InvalidPathError) {
+    return toolError({ code: 'INVALID_PATH', message: e.userMessage ?? e.message });
+  }
+  if (e instanceof DocNotFoundError) {
+    return toolError({ code: 'NOT_FOUND', message: e.message });
+  }
+  if (e instanceof DocConflictError) {
+    return toolError({ code: 'CONFLICT', message: e.message });
+  }
+  if (e instanceof DocLockedError) {
+    return lockedError(e);
+  }
+  if (e instanceof FrontmatterUpdateError) {
+    return toolError({ code: 'FRONTMATTER_INVALID', message: e.message });
+  }
+  throw e;
 }
