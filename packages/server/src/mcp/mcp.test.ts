@@ -146,7 +146,7 @@ describe('POST /mcp JSON-RPC', () => {
     expect(res.json().result.serverInfo.name).toBe('tsumiwiki');
   });
 
-  it('tools/listで期待する25個のツール名が全て含まれる', async () => {
+  it('tools/listで期待する27個のツール名が全て含まれる', async () => {
     const res = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(res.statusCode).toBe(200);
     const names = res.json().result.tools.map((t: { name: string }) => t.name);
@@ -176,12 +176,14 @@ describe('POST /mcp JSON-RPC', () => {
       'get_record_instructions',
       'list_trash',
       'restore_from_trash',
+      'get_library_status',
+      'rescan_library',
     ];
     for (const name of expected) {
       expect(names).toContain(name);
     }
-    expect(expected).toHaveLength(25);
-    expect(names).toHaveLength(25);
+    expect(expected).toHaveLength(27);
+    expect(names).toHaveLength(27);
   });
 
   it('search_notesを何もない状態で呼ぶと空配列が返る', async () => {
@@ -2517,6 +2519,49 @@ describe('ごみ箱(list_trash / restore_from_trash)', () => {
       expect(res.isError).toBe(true);
       expect(res.structuredContent.code).toBe('INVALID_PATH');
     }
+  });
+});
+
+describe('ライブラリ運用(get_library_status / rescan_library)', () => {
+  let seq = 2600;
+
+  beforeEach(async () => {
+    await buildMcpApp();
+  });
+
+  async function callTool(name: string, args: Record<string, unknown> = {}) {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: seq++,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().result;
+  }
+
+  it('get_library_status: バックアップ状態オブジェクトが返ること', async () => {
+    const res = await callTool('get_library_status');
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent).toHaveProperty('backup');
+    expect(res.structuredContent.backup).toHaveProperty('configured');
+    expect(typeof res.structuredContent.backup.configured).toBe('boolean');
+  });
+
+  it('rescan_library: 外部書き込み後に再スキャンし、コミット・インデックスが更新され、read_note で読めること', async () => {
+    await writeFile(join(lib, '外部ノート.md'), '外部で作成したコンテンツ', 'utf-8');
+
+    const res = await callTool('rescan_library');
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent).toMatchObject({
+      committed: true,
+      indexed: 1,
+      failedPaths: [],
+    });
+
+    const readRes = await callTool('read_note', { path: '外部ノート.md' });
+    expect(readRes.isError).toBeFalsy();
+    expect(readRes.structuredContent.body.trim()).toBe('外部で作成したコンテンツ');
   });
 });
 

@@ -57,7 +57,7 @@ curl -i -X POST http://localhost:3000/mcp
 # WWW-Authenticate: Bearer realm="tsumiwiki-mcp"
 ```
 
-正しいトークンで `tools/list` を叩き、25 個のツールが返ることを確認:
+正しいトークンで `tools/list` を叩き、27 個のツールが返ることを確認:
 
 ```bash
 export MCP_TOKEN=<設定したトークン>
@@ -192,7 +192,7 @@ Claude Desktop は `headers` を省く:
 
 ## 5. 公開ツール一覧
 
-Read 9 種 + 履歴 4 種 + Write 9 種 + ごみ箱 2 種 + 記録の手順 1 種の計 25 個。全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。
+Read 9 種 + 履歴 4 種 + Write 9 種 + ごみ箱 2 種 + 記録の手順 1 種 + ライブラリ運用 2 種の計 27 個。文書操作は全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。ライブラリ運用ツールは REST の `/api/library/*` と同じ処理を呼ぶ。
 
 ### Read
 
@@ -247,6 +247,13 @@ Read 9 種 + 履歴 4 種 + Write 9 種 + ごみ箱 2 種 + 記録の手順 1 �
 | ツール | 引数 | 用途 |
 |---|---|---|
 | `get_record_instructions` | `kind: 'work_log' \| 'daily_journal'`, `project?: string` | 作業ログ・日誌・振り返りを書くときの手順を返す。本文は §6 のプロンプトと同じ(同じ関数で作る)。`project` は `work_log` のときだけ使い、`daily_journal` では無視される。戻り値は手順の本文をそのまま入れたテキストだけ(JSON にはしない) |
+
+### ライブラリ運用
+
+| ツール | 引数 | 用途 |
+|---|---|---|
+| `get_library_status` | (なし) | ライブラリのバックアップ状態を取得する(バックアップ先の設定有無(configured)、最終バックアップ成功日時(lastSuccessAt)、直近のバックアップエラー(lastError)を返す) |
+| `rescan_library` | (なし) | ライブラリのファイル変更を再スキャンし、Git コミットと SQLite インデックスを即時更新する(監視が効かない環境や外部変更の即時反映) |
 
 パスは常に **リポジトリルート相対の POSIX 形式**(`Projects/foo.md` など)。`..` / `.git/*` / `.trash/*` / 非 `.md` 拡張子は全て拒否される(restore_from_trash の trashPath は例外で、.trash/ 直下の項目のみ受け付ける)。
 
