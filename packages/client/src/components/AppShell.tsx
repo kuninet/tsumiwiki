@@ -7,6 +7,7 @@ import { useFollowActiveDocInTree } from '../hooks/use-follow-active-doc-in-tree
 import { useHorizontalResize } from '../hooks/use-horizontal-resize';
 import { useMediaQuery } from '../hooks/use-media-query';
 import { useNewDocShortcut } from '../hooks/use-new-doc-shortcut';
+import { useOpenSidebar } from '../hooks/use-open-sidebar';
 import { isMainRoute, useRightPanelActions } from '../hooks/use-right-panel';
 import { useRightPanelShortcut } from '../hooks/use-right-panel-shortcut';
 import { useTabSwitchShortcut } from '../hooks/use-tab-switch-shortcut';
@@ -47,7 +48,6 @@ export function AppShell() {
   const requestCreateDoc = useUIStore((s) => s.requestCreateDoc);
 
   const rightPanelOpen = useUserSettingsStore((s) => s.rightPanelOpen);
-  const setRightPanelOpen = useUserSettingsStore((s) => s.setRightPanelOpen);
 
   const { closeRightPanel, toggleRightPanel } = useRightPanelActions();
 
@@ -149,20 +149,13 @@ export function AppShell() {
   }, [isMobile, location.pathname]);
 
   // デスクトップで左サイドバーを開くときの左右排他フォールバック(D7)
+  const openSidebar = useOpenSidebar();
   function handleToggleLeftSidebar() {
-    if (sidebarCollapsed && !isMobile) {
-      const conflict = resolveSideConflict({
-        innerWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
-        sidebarWidth,
-        leftOpen: false,
-        rightOpen: rightPanelOpen,
-        justOpened: 'left',
-      });
-      if (conflict === 'close-right') {
-        setRightPanelOpen(false);
-      }
+    if (sidebarCollapsed) {
+      openSidebar();
+    } else {
+      toggleSidebarCollapsed();
     }
-    toggleSidebarCollapsed();
   }
 
   // ウィンドウ縮小・右パネル展開時の左右排他フォールバック(D7, C-4-12)。

@@ -59,6 +59,8 @@ interface UIState {
   rightPanelSlot: HTMLElement | null;
   setSidebarWidth: (width: number) => void;
   toggleSidebarCollapsed: () => void;
+  // #322: サイドバーを開く(折りたたまれていれば解除し、右ドロワーを閉じる。既に開いていれば no-op)
+  openSidebar: () => void;
   setSidebarTab: (tab: SidebarTab) => void;
   setRightDrawerOpen: (open: boolean) => void;
   setRightPanelSlot: (el: HTMLElement | null) => void;
@@ -129,6 +131,9 @@ export const useUIStore = create<UIState>((set) => ({
         ...(willOpen ? { rightDrawerOpen: false } : {}),
       };
     }),
+  // #322: サイドバーを開く(折りたたまれていれば解除し、右ドロワーを閉じる。既に開いていれば no-op)
+  openSidebar: () =>
+    set((s) => (s.sidebarCollapsed ? { sidebarCollapsed: false, rightDrawerOpen: false } : {})),
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
   // #271: 右ドロワーを開く(true)なら左サイドバーを折りたたむ(左右排他)
   setRightDrawerOpen: (open) =>
