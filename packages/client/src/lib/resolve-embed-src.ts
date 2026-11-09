@@ -72,7 +72,7 @@ export function embedSrc(file: string, docPath: string, options?: { anchor?: str
 
 // パスセグメント配列から'.'を除去し'..'は1つ上の階層を消費する(posix的な正規化)。
 // ルートより上には出ない('..'が余った場合はそのまま無視する)
-function normalizeRelSegments(path: string): string {
+export function normalizeRelSegments(path: string): string {
   const stack: string[] = [];
   for (const seg of path.split('/')) {
     if (seg === '' || seg === '.') continue;
