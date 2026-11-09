@@ -8,12 +8,18 @@ import { useFollowActiveDocInTree } from '../hooks/use-follow-active-doc-in-tree
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
+import { useUserSettingsStore } from '../stores/user-settings';
 import { FolderTree } from './FolderTree';
 
 const DEEP_TREE: TreeResponse = {
   folders: ['A', 'A/B', 'A/B/C', 'X'],
   docs: [
-    { path: 'A/B/C/深い.md', title: '深い', folder: 'A/B/C', updatedAt: '2026-07-01T00:00:00+09:00' },
+    {
+      path: 'A/B/C/深い.md',
+      title: '深い',
+      folder: 'A/B/C',
+      updatedAt: '2026-07-01T00:00:00+09:00',
+    },
     { path: 'X/別.md', title: '別', folder: 'X', updatedAt: '2026-07-01T00:00:00+09:00' },
     { path: 'ルート.md', title: 'ルート', folder: '', updatedAt: '2026-07-01T00:00:00+09:00' },
   ],
@@ -28,7 +34,8 @@ function NavProbe() {
 }
 
 function Shell() {
-  useFollowActiveDocInTree();
+  const enabled = useUserSettingsStore((s) => s.followActiveDocInTree);
+  useFollowActiveDocInTree({ enabled });
   const tab = useUIStore((s) => s.sidebarTab);
   return (
     <>
@@ -81,6 +88,8 @@ function renderShell(initialPath = '/') {
 describe('FolderTree follow integration (#323)', () => {
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn();
+    useUserSettingsStore.setState({ followActiveDocInTree: true });
+    useUserSettingsStore.persist.clearStorage();
     useUIStore.setState({
       expandedFolders: new Set(),
       revealRequest: null,
@@ -94,6 +103,7 @@ describe('FolderTree follow integration (#323)', () => {
     delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView;
     vi.unstubAllGlobals();
     cleanup();
+    useUserSettingsStore.setState({ followActiveDocInTree: true });
     useUIStore.setState({
       expandedFolders: new Set(),
       revealRequest: null,
@@ -170,5 +180,48 @@ describe('FolderTree follow integration (#323)', () => {
     const docEl = await screen.findByTestId('doc-A/B/C/深い.md');
     expect(docEl).toBeTruthy();
     expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+  });
+
+  describe('FolderTree follow 設定オフ (#324)', () => {
+    it('I-6: followActiveDocInTree: false の場合、URL を直接開いても展開されずスクロールも呼ばれない', async () => {
+      useUserSettingsStore.setState({ followActiveDocInTree: false });
+      renderShell('/doc/A/B/C/深い.md');
+
+      await screen.findByText('A');
+      expect(screen.queryByTestId('doc-A/B/C/深い.md')).toBeNull();
+      expect(useUIStore.getState().expandedFolders.size).toBe(0);
+      expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it('I-7: followActiveDocInTree: false でも、「現在の文書をツリーで表示」ボタンを押すと展開・ハイライト・スクロール・フォーカスされる', async () => {
+      useUserSettingsStore.setState({ followActiveDocInTree: false });
+      renderShell('/doc/A/B/C/深い.md');
+
+      await screen.findByText('A');
+      expect(screen.queryByTestId('doc-A/B/C/深い.md')).toBeNull();
+
+      const btn = screen.getByRole('button', { name: '現在の文書をツリーで表示' });
+      fireEvent.click(btn);
+
+      const docEl = await screen.findByTestId('doc-A/B/C/深い.md');
+      expect(docEl).toBeTruthy();
+      expect(docEl.className).toContain('text-accent');
+      expect(document.activeElement).toBe(docEl);
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    });
+
+    it('I-8: followActiveDocInTree: false の場合、SPA 内で navigate しても追従しない', async () => {
+      useUserSettingsStore.setState({ followActiveDocInTree: false });
+      renderShell('/doc/ルート.md');
+      await screen.findByText('A');
+
+      act(() => {
+        nav('/doc/X/別.md');
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+      expect(screen.queryByTestId('doc-X/別.md')).toBeNull();
+      expect(useUIStore.getState().expandedFolders.has('X')).toBe(false);
+    });
   });
 });

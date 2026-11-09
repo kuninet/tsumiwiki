@@ -108,7 +108,12 @@ describe('AppShell (デスクトップ)', () => {
   beforeEach(() => {
     stubMatchMedia(false); // 広幅 = デスクトップ扱い
     localStorage.clear();
-    useUserSettingsStore.setState({ rightPanelOpen: false, rightPanelWidth: 320 });
+    useUserSettingsStore.setState({
+      rightPanelOpen: false,
+      rightPanelWidth: 320,
+      followActiveDocInTree: true,
+    });
+    useUserSettingsStore.persist.clearStorage();
     useUIStore.setState({ sidebarCollapsed: false, rightDrawerOpen: false });
   });
   afterEach(() => {
@@ -232,7 +237,12 @@ describe('AppShell (デスクトップ)', () => {
       const deepTree: TreeResponse = {
         folders: ['A', 'A/B', 'A/B/C'],
         docs: [
-          { path: 'A/B/C/深い.md', title: '深い', folder: 'A/B/C', updatedAt: '2026-07-01T00:00:00+09:00' },
+          {
+            path: 'A/B/C/深い.md',
+            title: '深い',
+            folder: 'A/B/C',
+            updatedAt: '2026-07-01T00:00:00+09:00',
+          },
         ],
       };
       renderAppShell({
@@ -244,6 +254,42 @@ describe('AppShell (デスクトップ)', () => {
       expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
     } finally {
       delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it('I-9: followActiveDocInTree: false のときは自動追従せず、ツリーのボタン押下で手動表示される (#324)', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    try {
+      useUIStore.setState({
+        expandedFolders: new Set(),
+        revealRequest: null,
+        sidebarTab: 'folder',
+      });
+      useUserSettingsStore.setState({ followActiveDocInTree: false });
+      const deepTree: TreeResponse = {
+        folders: ['A', 'A/B', 'A/B/C'],
+        docs: [
+          {
+            path: 'A/B/C/深い.md',
+            title: '深い',
+            folder: 'A/B/C',
+            updatedAt: '2026-07-01T00:00:00+09:00',
+          },
+        ],
+      };
+      renderAppShell({
+        initialEntries: ['/doc/A/B/C/深い.md'],
+        tree: deepTree,
+      });
+
+      await screen.findByText('A');
+      expect(screen.queryByTestId('doc-A/B/C/深い.md')).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: '現在の文書をツリーで表示' }));
+      expect(await screen.findByTestId('doc-A/B/C/深い.md')).toBeTruthy();
+    } finally {
+      delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView;
+      useUserSettingsStore.setState({ followActiveDocInTree: true });
     }
   });
 });
@@ -410,7 +456,11 @@ describe('C-4: 右パネルと全体レイアウト結合 (AppShell)', () => {
 
   it('C-4-7: seed open=true, width=400, tab=backlinks で幅400px・タブ選択状態で復元', async () => {
     const origInnerWidth = window.innerWidth;
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1440 });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: 1440,
+    });
 
     localStorage.setItem(
       'tsumiwiki-user-settings',
@@ -431,12 +481,20 @@ describe('C-4: 右パネルと全体レイアウト結合 (AppShell)', () => {
     const tab = screen.getByRole('tab', { name: 'バックリンク' });
     expect(tab.getAttribute('aria-selected')).toBe('true');
 
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: origInnerWidth });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: origInnerWidth,
+    });
   });
 
   it('C-4-8: seed width=500, innerWidth=1024, 左260開で描画幅332pxにクランプ', async () => {
     const origInnerWidth = window.innerWidth;
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: 1024,
+    });
 
     useUserSettingsStore.setState({
       rightPanelOpen: true,
@@ -450,12 +508,20 @@ describe('C-4: 右パネルと全体レイアウト結合 (AppShell)', () => {
     expect(panel.style.width).toBe('332px');
     expect(useUserSettingsStore.getState().rightPanelWidth).toBe(500);
 
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: origInnerWidth });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: origInnerWidth,
+    });
   });
 
   it('C-4-9: 右リサイズハンドルでドラッグリサイズ', async () => {
     const origInnerWidth = window.innerWidth;
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1440 });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: 1440,
+    });
 
     renderAppShell({ initialEntries: ['/doc/foo.md'] });
     fireEvent.click(screen.getByRole('button', { name: '右パネルを開く' }));
@@ -467,7 +533,11 @@ describe('C-4: 右パネルと全体レイアウト結合 (AppShell)', () => {
 
     expect(useUserSettingsStore.getState().rightPanelWidth).toBe(400);
 
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: origInnerWidth });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: origInnerWidth,
+    });
   });
 
   it('C-4-10: innerWidth=900, 左開、右を開くと左サイドバーが消える(D7)', async () => {
@@ -483,12 +553,20 @@ describe('C-4: 右パネルと全体レイアウト結合 (AppShell)', () => {
     expect(screen.getByTestId('right-panel')).toBeTruthy();
     expect(screen.queryByTestId('sidebar')).toBeNull();
 
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: origInnerWidth });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: origInnerWidth,
+    });
   });
 
   it('C-4-M1: innerWidth=1024, 右パネル開(240px)で左サイドバーを450pxへドラッグしても折りたたまれず352pxにクランプされる', async () => {
     const origInnerWidth = window.innerWidth;
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: 1024,
+    });
 
     useUserSettingsStore.setState({ rightPanelOpen: true, rightPanelWidth: 240 });
     useUIStore.setState({ sidebarCollapsed: false, sidebarWidth: 260 });
@@ -506,7 +584,11 @@ describe('C-4: 右パネルと全体レイアウト結合 (AppShell)', () => {
     expect(useUIStore.getState().sidebarCollapsed).toBe(false);
     expect(useUIStore.getState().sidebarWidth).toBe(352);
 
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: origInnerWidth });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: origInnerWidth,
+    });
   });
 
   it('C-4-N1: innerWidth=900, localStorage seed で rightPanelOpen=true の初回描画時に左サイドバーが自動的に折りたたまれる(D7)', async () => {
@@ -534,7 +616,11 @@ describe('C-4: 右パネルと全体レイアウト結合 (AppShell)', () => {
       expect(useUIStore.getState().sidebarCollapsed).toBe(true);
     });
 
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: origInnerWidth });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: origInnerWidth,
+    });
   });
 
   it('C-4-N3: innerWidth=900, localStorage seed で rightPanelOpen=true, /trash でマウント後に /doc/foo.md へ遷移すると左サイドバーが自動的に折りたたまれる(D7)', async () => {
@@ -567,7 +653,11 @@ describe('C-4: 右パネルと全体レイアウト結合 (AppShell)', () => {
       expect(useUIStore.getState().sidebarCollapsed).toBe(true);
     });
 
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: origInnerWidth });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: origInnerWidth,
+    });
   });
 
   it('C-4-11: innerWidth=900, 右開、左折りたたみボタンで左を開くと右が消える(D7)', async () => {
@@ -586,12 +676,20 @@ describe('C-4: 右パネルと全体レイアウト結合 (AppShell)', () => {
     expect(screen.queryByTestId('right-panel')).toBeNull();
     expect(useUserSettingsStore.getState().rightPanelOpen).toBe(false);
 
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: origInnerWidth });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: origInnerWidth,
+    });
   });
 
   it('C-4-12: innerWidth=1280 で左右とも開、900 に resize イベントで左が閉じる(D7)', async () => {
     const origInnerWidth = window.innerWidth;
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1280 });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: 1280,
+    });
 
     useUIStore.setState({ sidebarCollapsed: false, sidebarWidth: 260 });
     renderAppShell({ initialEntries: ['/doc/foo.md'] });
@@ -608,7 +706,11 @@ describe('C-4: 右パネルと全体レイアウト結合 (AppShell)', () => {
       expect(screen.getByTestId('right-panel')).toBeTruthy();
     });
 
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: origInnerWidth });
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: origInnerWidth,
+    });
   });
 
   it('C-4-18: mobile初期接続時は desktop open=true でも右ドロワーは閉', async () => {

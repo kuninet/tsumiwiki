@@ -20,11 +20,7 @@ import {
   RIGHT_PANEL_MIN_WIDTH,
   resolveSideConflict,
 } from '../lib/right-panel-layout';
-import {
-  SIDEBAR_MAX_WIDTH,
-  SIDEBAR_MIN_WIDTH,
-  useUIStore,
-} from '../stores/ui';
+import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, useUIStore } from '../stores/ui';
 import { useUserSettingsStore } from '../stores/user-settings';
 import { DatePickerDialog } from './DatePickerDialog';
 import { FolderTree } from './FolderTree';
@@ -48,6 +44,7 @@ export function AppShell() {
   const requestCreateDoc = useUIStore((s) => s.requestCreateDoc);
 
   const rightPanelOpen = useUserSettingsStore((s) => s.rightPanelOpen);
+  const followActiveDocInTree = useUserSettingsStore((s) => s.followActiveDocInTree);
 
   const { closeRightPanel, toggleRightPanel } = useRightPanelActions();
 
@@ -60,8 +57,8 @@ export function AppShell() {
   // Ctrl/Cmd+Shift+U 右パネルトグルショートカット(#271)
   useRightPanelShortcut();
   // 開いている文書の位置にフォルダツリーを追従させる(#323)。
-  // #324 で個人設定 followActiveDocInTree を enabled に渡す
-  useFollowActiveDocInTree();
+  // #324: 個人設定でオフにできる。オフのときもツリーヘッダーのボタンで手動表示できる
+  useFollowActiveDocInTree({ enabled: followActiveDocInTree });
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -119,7 +116,10 @@ export function AppShell() {
             SIDEBAR_MAX_WIDTH,
             innerWidth - COLLAPSE_BUTTON_WIDTH * 2 - RIGHT_PANEL_MIN_WIDTH - MAIN_MIN_WIDTH,
           );
-      const clamped = Math.min(Math.max(SIDEBAR_MIN_WIDTH, width), Math.max(SIDEBAR_MIN_WIDTH, maxAllowed));
+      const clamped = Math.min(
+        Math.max(SIDEBAR_MIN_WIDTH, width),
+        Math.max(SIDEBAR_MIN_WIDTH, maxAllowed),
+      );
       setSidebarWidth(clamped);
     },
     [innerWidth, rightPanelOpen, setSidebarWidth],

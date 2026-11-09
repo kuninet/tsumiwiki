@@ -17,6 +17,7 @@ describe('user-settings', () => {
       rightPanelWidth: 320,
       rightPanelTab: 'backlinks',
       backlinksSort: 'updated-desc',
+      followActiveDocInTree: true,
     });
     useUserSettingsStore.persist.clearStorage();
   });
@@ -173,6 +174,72 @@ describe('user-settings', () => {
       expect(raw).not.toBeNull();
       const parsed = JSON.parse(raw!);
       expect(parsed.state.rightPanelOpen).toBe(true);
+    });
+  });
+
+  describe('followActiveDocInTree (#324)', () => {
+    it('S-1: localStorage にキーが無い既存利用者の設定を rehydrate すると既定の true になる', async () => {
+      useUserSettingsStore.setState({ followActiveDocInTree: false });
+      localStorage.setItem(
+        'tsumiwiki-user-settings',
+        JSON.stringify({
+          state: {
+            contentWidth: 'wide',
+          },
+          version: 0,
+        }),
+      );
+
+      await useUserSettingsStore.persist.rehydrate();
+      const state = useUserSettingsStore.getState();
+      expect(state.followActiveDocInTree).toBe(true);
+      expect(state.contentWidth).toBe('wide');
+    });
+
+    it('S-2: setFollowActiveDocInTree で更新できる', () => {
+      expect(useUserSettingsStore.getState().followActiveDocInTree).toBe(true);
+      useUserSettingsStore.getState().setFollowActiveDocInTree(false);
+      expect(useUserSettingsStore.getState().followActiveDocInTree).toBe(false);
+      useUserSettingsStore.getState().setFollowActiveDocInTree(true);
+      expect(useUserSettingsStore.getState().followActiveDocInTree).toBe(true);
+    });
+
+    it('S-3: setFollowActiveDocInTree(false) 後、localStorage に false が保存される', () => {
+      useUserSettingsStore.getState().setFollowActiveDocInTree(false);
+      const raw = localStorage.getItem('tsumiwiki-user-settings');
+      expect(raw).not.toBeNull();
+      const parsed = JSON.parse(raw!);
+      expect(parsed.state.followActiveDocInTree).toBe(false);
+    });
+
+    it('S-4: localStorage に followActiveDocInTree: false を seed して rehydrate すると false が復元される', async () => {
+      localStorage.setItem(
+        'tsumiwiki-user-settings',
+        JSON.stringify({
+          state: {
+            followActiveDocInTree: false,
+          },
+          version: 0,
+        }),
+      );
+
+      await useUserSettingsStore.persist.rehydrate();
+      expect(useUserSettingsStore.getState().followActiveDocInTree).toBe(false);
+    });
+
+    it('S-5: 不正値(文字列等)を seed して rehydrate すると既定値 true に復旧する', async () => {
+      localStorage.setItem(
+        'tsumiwiki-user-settings',
+        JSON.stringify({
+          state: {
+            followActiveDocInTree: 'yes',
+          },
+          version: 0,
+        }),
+      );
+
+      await useUserSettingsStore.persist.rehydrate();
+      expect(useUserSettingsStore.getState().followActiveDocInTree).toBe(true);
     });
   });
 });

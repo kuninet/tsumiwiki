@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
+import { LocateFixed } from 'lucide-react';
 import type React from 'react';
 import { type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -28,7 +29,6 @@ import { useUIStore } from '../stores/ui';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { PromptDialog } from './PromptDialog';
-
 
 // フォルダツリー(設計04章4.2・デザインhandoff components.md)。ルート・フォルダ・文書の
 // 右クリックメニューから新規作成・リネーム・削除を行う。キーボード操作にも対応する
@@ -135,9 +135,11 @@ export function FolderTree() {
   const [focusedPath, setFocusedPath] = useState<string | null>(null);
   // D&D 移動用の状態(#71)。draggedItem はドラッグ元・dragOverPath はハイライト対象。
   // dragOverPath は '' = ルート、'foo/bar' = 特定フォルダ、null = ハイライトなし
-  const [draggedItem, setDraggedItem] = useState<
-    { path: string; kind: 'doc' | 'folder'; title?: string } | null
-  >(null);
+  const [draggedItem, setDraggedItem] = useState<{
+    path: string;
+    kind: 'doc' | 'folder';
+    title?: string;
+  } | null>(null);
   const [dragOverPath, setDragOverPath] = useState<string | null>(null);
   // 複数選択と一括移動(#72)。selectedPaths は選択された行のパス集合、
   // lastClickedPath は Shift+クリックの起点として使う
@@ -194,6 +196,19 @@ export function FolderTree() {
   const nodes = tree ? buildTree(tree) : [];
   const flat = useMemo(() => flattenVisible(nodes, expandedFolders), [nodes, expandedFolders]);
 
+  // #324: 「現在の文書をツリーで表示」ボタンの有効条件。
+  // 文書を開いていない画面(/ ・ /settings ・ /trash)、tree 取得前、tree に無いパス
+  // (.md なし URL・存在しない文書・作成直後で未反映)では押せない
+  const canRevealCurrentDoc =
+    !!currentPath && !!tree && tree.docs.some((d) => d.path === currentPath);
+
+  function handleRevealCurrentDoc() {
+    if (!currentPath || !canRevealCurrentDoc) return;
+    // 明示操作なので行に DOM フォーカスを移す(キーボードでそのまま矢印操作できるように)。
+    // ボタンは FolderTree(=フォルダタブ表示中)にしか無いので activateTab は不要
+    useUIStore.getState().revealInTree(currentPath, { focus: true });
+  }
+
   function registerRow(path: string, el: HTMLButtonElement | null) {
     if (el) rowRefs.current.set(path, el);
     else rowRefs.current.delete(path);
@@ -215,9 +230,7 @@ export function FolderTree() {
   function menuItemsFor(target: MenuTarget): ContextMenuItem[] {
     // #73: 右クリック対象が選択中で 2件以上選ばれていれば「まとめる」を先頭に出す
     const groupItem: ContextMenuItem | null =
-      target.type !== 'root' &&
-      selectedPaths.has(target.path) &&
-      selectedPaths.size > 1
+      target.type !== 'root' && selectedPaths.has(target.path) && selectedPaths.size > 1
         ? {
             label: `選択したものを新規フォルダに移動(${selectedPaths.size}件)`,
             onSelect: () =>
@@ -258,7 +271,8 @@ export function FolderTree() {
         {
           label: '削除',
           danger: true,
-          onSelect: () => setConfirm({ kind: 'deleteFolder', path: target.path, name: target.name }),
+          onSelect: () =>
+            setConfirm({ kind: 'deleteFolder', path: target.path, name: target.name }),
         },
       ];
       return groupItem ? [groupItem, ...items] : items;
@@ -488,11 +502,7 @@ export function FolderTree() {
     return true;
   }
 
-  function handleDragStartItem(
-    path: string,
-    kind: 'doc' | 'folder',
-    title: string | undefined,
-  ) {
+  function handleDragStartItem(path: string, kind: 'doc' | 'folder', title: string | undefined) {
     setDraggedItem({ path, kind, title });
   }
 
@@ -687,10 +697,7 @@ export function FolderTree() {
   }
 
   // 行クリック処理(#72)。修飾キーの有無で単一選択 / 追加解除 / 範囲選択を切替
-  function handleRowClick(
-    e: React.MouseEvent<HTMLButtonElement>,
-    node: TreeNode,
-  ) {
+  function handleRowClick(e: React.MouseEvent<HTMLButtonElement>, node: TreeNode) {
     const isModifier = e.metaKey || e.ctrlKey;
     const isShift = e.shiftKey;
 
@@ -842,6 +849,17 @@ export function FolderTree() {
           className="flex-1 rounded border border-line px-2 py-1 text-xs text-ink-soft hover:bg-hoverbg"
         >
           +フォルダ
+        </button>
+        <button
+          type="button"
+          onClick={handleRevealCurrentDoc}
+          disabled={!canRevealCurrentDoc}
+          aria-label="現在の文書をツリーで表示"
+          title="現在の文書をツリーで表示"
+          data-testid="reveal-current-doc"
+          className="flex flex-shrink-0 items-center justify-center rounded border border-line px-2 py-1 text-ink-soft hover:bg-hoverbg disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+        >
+          <LocateFixed size={14} aria-hidden="true" />
         </button>
       </div>
 
@@ -1086,7 +1104,9 @@ function TreeItem({
             style={indent}
             onClick={(e) => onRowClick(e, node)}
             onKeyDown={(e) => onKeyDown(e, entry)}
-            onContextMenu={(e) => onContextMenu(e, { type: 'folder', path: node.path, name: node.name })}
+            onContextMenu={(e) =>
+              onContextMenu(e, { type: 'folder', path: node.path, name: node.name })
+            }
             {...dragHandlers}
             onDragEnter={(e) => {
               e.stopPropagation();
@@ -1197,7 +1217,12 @@ function TreeItem({
         }}
         onKeyDown={(e) => onKeyDown(e, entry)}
         onContextMenu={(e) =>
-          onContextMenu(e, { type: 'doc', path: node.path, folder: parentOf(node.path), title: node.title })
+          onContextMenu(e, {
+            type: 'doc',
+            path: node.path,
+            folder: parentOf(node.path),
+            title: node.title,
+          })
         }
         {...dragHandlers}
         onDragEnter={(e) => {
@@ -1232,7 +1257,9 @@ function TreeItem({
         }}
         data-testid={`doc-${node.path}`}
         className={`flex h-[30px] w-full items-center gap-1 px-2 text-left text-sm focus:outline-none focus-visible:bg-active ${
-          isCurrent ? 'bg-active font-semibold text-accent' : `text-ink-soft hover:bg-hoverbg ${selectedBgClass}`
+          isCurrent
+            ? 'bg-active font-semibold text-accent'
+            : `text-ink-soft hover:bg-hoverbg ${selectedBgClass}`
         } ${isDragging ? 'opacity-50' : ''} ${isParentDropTarget && !isCurrent ? 'bg-accent-soft' : ''}`}
       >
         <span className="inline-block w-3" aria-hidden="true" />
