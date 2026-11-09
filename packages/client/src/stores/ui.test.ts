@@ -52,6 +52,34 @@ describe('uiストア', () => {
     });
   });
 
+  describe('サイドバーを開く (openSidebar, #322)', () => {
+    it('sidebarCollapsed: true のとき false になり、rightDrawerOpen: true だった場合 false になる', () => {
+      useUIStore.setState({ sidebarCollapsed: true, rightDrawerOpen: true });
+      useUIStore.getState().openSidebar();
+      const state = useUIStore.getState();
+      expect(state.sidebarCollapsed).toBe(false);
+      expect(state.rightDrawerOpen).toBe(false);
+    });
+
+    it('sidebarCollapsed: true かつ rightDrawerOpen: false のとき sidebarCollapsed が false になる', () => {
+      useUIStore.setState({ sidebarCollapsed: true, rightDrawerOpen: false });
+      useUIStore.getState().openSidebar();
+      const state = useUIStore.getState();
+      expect(state.sidebarCollapsed).toBe(false);
+      expect(state.rightDrawerOpen).toBe(false);
+    });
+
+    it('既に sidebarCollapsed: false の場合は状態が変わらない (no-op: 値が変化しない)', () => {
+      useUIStore.setState({ sidebarCollapsed: false, rightDrawerOpen: false });
+      const beforeState = useUIStore.getState();
+      useUIStore.getState().openSidebar();
+      const afterState = useUIStore.getState();
+      expect(afterState.sidebarCollapsed).toBe(false);
+      expect(afterState.rightDrawerOpen).toBe(false);
+      expect(afterState).toEqual(beforeState);
+    });
+  });
+
   describe('ツリー追従 (#323)', () => {
     beforeEach(() => {
       useUIStore.setState({

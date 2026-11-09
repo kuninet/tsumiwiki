@@ -31,6 +31,7 @@ import { getTableMenuItems } from '../editor/table-menu';
 import { findTableAt } from '../editor/table-utils';
 import '../editor/editor.css';
 import { useEditingSession } from '../hooks/use-editing-session';
+import { useOpenSidebar } from '../hooks/use-open-sidebar';
 import { useVirtualKeyboard } from '../hooks/use-virtual-keyboard';
 import { dispatchAttachmentChanged } from '../lib/attachment-events';
 import { copyTextWithToast } from '../lib/clipboard';
@@ -229,6 +230,9 @@ export function DocView({
   const setLockedByOtherName = useEditStore((s) => s.setLockedByOtherName);
   const setSidebarTab = useUIStore((s) => s.setSidebarTab);
   const toggleTag = useUIStore((s) => s.toggleTag);
+  // #322: パンくずリストからのツリー表示用(D7の左右排他判定を含むフックを使用)
+  const openSidebar = useOpenSidebar();
+  const revealInTree = useUIStore((s) => s.revealInTree);
   // #212: 本文最大幅の個人設定(normal/wide/full)。編集/閲覧共通
   const contentWidth = useUserSettingsStore((s) => s.contentWidth);
   // #175: 仮想キーボード出現時に scroll 領域下端へ空ける px 数
@@ -1060,11 +1064,31 @@ export function DocView({
       <div className="flex items-start justify-between px-4 pb-4 pt-5 sm:px-6 lg:px-8">
         <div className="min-w-0">
           {breadcrumb.length > 0 && (
-            <nav className="truncate text-xs text-ink-faint">
+            <nav aria-label="パンくずリスト" className="truncate text-xs text-ink-faint">
               {breadcrumb.map((segment, i) => (
                 <span key={i}>
-                  {i > 0 && <span className="mx-1">›</span>}
-                  {segment}
+                  {i > 0 && (
+                    <span className="mx-1 select-none text-ink-faint" aria-hidden="true">
+                      ›
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetPath = breadcrumb.slice(0, i + 1).join('/');
+                      openSidebar();
+                      revealInTree(targetPath, {
+                        isFolder: true,
+                        includeSelf: true,
+                        activateTab: true,
+                        focus: true,
+                      });
+                    }}
+                    aria-label={`フォルダ「${segment}」をツリーで表示`}
+                    className="cursor-pointer rounded text-ink-faint hover:text-ink hover:underline focus:outline-none focus-visible:bg-active focus-visible:text-ink focus-visible:underline"
+                  >
+                    {segment}
+                  </button>
                 </span>
               ))}
             </nav>

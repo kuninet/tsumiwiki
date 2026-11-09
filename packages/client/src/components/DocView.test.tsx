@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { Editor } from '@tiptap/core';
 import type { DocResponse, User } from '@tsumiwiki/shared';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { docUrl } from '../lib/doc-path';
 import { useEditStore } from '../stores/edit';
 import { useTabsStore } from '../stores/tabs';
@@ -102,6 +102,7 @@ describe('DocView', () => {
     // fetchスタブを外す前にアンマウントを済ませる(順序が逆だと実fetchが相対URLで失敗する)
     cleanup();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     useEditStore.setState({ mode: 'view', dirty: false, lockedPath: null, lastDraftSavedAt: null });
     useToastStore.setState({ toast: null });
     useUIStore.setState({ rightPanelSlot: null });
@@ -884,6 +885,144 @@ describe('DocView', () => {
     // 2. Ctrl+クリック(ctrlKey: true)でもダイアログが開く
     fireEvent.click(unresolvedSpan!, { ctrlKey: true });
     expect(await screen.findByRole('dialog')).toBeTruthy();
+  });
+
+  describe('パンくずリスト (#322)', () => {
+    beforeEach(() => {
+      useUIStore.setState({
+        sidebarCollapsed: false,
+        sidebarTab: 'tag',
+        revealRequest: null,
+        expandedFolders: new Set(),
+      });
+    });
+
+    it('フォルダ階層のセグメントがボタンとして描画され、適切なaria-labelを持つ', async () => {
+      stubFetch();
+      renderDocView({
+        ...DOC,
+        path: 'a/b/c/メモ.md',
+      });
+
+      const nav = await screen.findByRole('navigation', { name: 'パンくずリスト' });
+      expect(nav).toBeTruthy();
+
+      const btnA = screen.getByRole('button', { name: 'フォルダ「a」をツリーで表示' });
+      const btnB = screen.getByRole('button', { name: 'フォルダ「b」をツリーで表示' });
+      const btnC = screen.getByRole('button', { name: 'フォルダ「c」をツリーで表示' });
+
+      expect(btnA).toBeTruthy();
+      expect(btnB).toBeTruthy();
+      expect(btnC).toBeTruthy();
+      expect(btnA.textContent).toBe('a');
+      expect(btnB.textContent).toBe('b');
+      expect(btnC.textContent).toBe('c');
+    });
+
+    it('パンくずのフォルダボタンをクリックするとサイドバーが開き revealInTree が実行される (階層パスの結合確認)', async () => {
+      stubFetch();
+      useUIStore.setState({ sidebarCollapsed: true });
+      const revealInTreeSpy = vi.spyOn(useUIStore.getState(), 'revealInTree');
+
+      renderDocView({
+        ...DOC,
+        path: 'folder/sub/doc.md',
+      });
+
+      const btnFolder = await screen.findByRole('button', { name: 'フォルダ「folder」をツリーで表示' });
+      const btnSub = screen.getByRole('button', { name: 'フォルダ「sub」をツリーで表示' });
+
+      // 1. 先頭フォルダをクリック
+      fireEvent.click(btnFolder);
+      expect(useUIStore.getState().sidebarCollapsed).toBe(false);
+      expect(revealInTreeSpy).toHaveBeenCalledWith('folder', {
+        isFolder: true,
+        includeSelf: true,
+        activateTab: true,
+        focus: true,
+      });
+
+      const state1 = useUIStore.getState();
+      expect(state1.revealRequest).toMatchObject({
+        path: 'folder',
+        isFolder: true,
+        focus: true,
+      });
+      expect(state1.sidebarTab).toBe('folder');
+
+      // 2. 深い階層のフォルダをクリック -> 'folder/sub'
+      fireEvent.click(btnSub);
+      expect(revealInTreeSpy).toHaveBeenCalledWith('folder/sub', {
+        isFolder: true,
+        includeSelf: true,
+        activateTab: true,
+        focus: true,
+      });
+
+      const state2 = useUIStore.getState();
+      expect(state2.revealRequest).toMatchObject({
+        path: 'folder/sub',
+        isFolder: true,
+        focus: true,
+      });
+    });
+
+    it('サイドバーが折りたたまれている場合、クリックによりサイドバーが開く', async () => {
+      stubFetch();
+      useUIStore.setState({ sidebarCollapsed: true, rightDrawerOpen: true });
+
+      renderDocView({
+        ...DOC,
+        path: 'folder/sub/doc.md',
+      });
+
+      const btnFolder = await screen.findByRole('button', { name: 'フォルダ「folder」をツリーで表示' });
+      fireEvent.click(btnFolder);
+
+      const state = useUIStore.getState();
+      expect(state.sidebarCollapsed).toBe(false);
+      expect(state.rightDrawerOpen).toBe(false);
+      expect(state.revealRequest?.path).toBe('folder');
+    });
+
+    it('狭いデスクトップ幅(800px)で右パネルが開いている場合、クリックにより右パネルが閉じてサイドバーが開く (B1 / D7左右排他)', async () => {
+      stubFetch();
+      const origInnerWidth = window.innerWidth;
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 800 });
+
+      useUserSettingsStore.setState({ rightPanelOpen: true });
+      useUIStore.setState({ sidebarCollapsed: true, sidebarWidth: 260 });
+
+      renderDocView({
+        ...DOC,
+        path: 'folder/sub/doc.md',
+      });
+
+      const btnFolder = await screen.findByRole('button', { name: 'フォルダ「folder」をツリーで表示' });
+      fireEvent.click(btnFolder);
+
+      expect(useUserSettingsStore.getState().rightPanelOpen).toBe(false);
+      expect(useUIStore.getState().sidebarCollapsed).toBe(false);
+      expect(useUIStore.getState().revealRequest?.path).toBe('folder');
+
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: origInnerWidth });
+    });
+
+    it('フォルダセグメントは button 要素でありフォーカス可能', async () => {
+      stubFetch();
+
+      renderDocView({
+        ...DOC,
+        path: 'folder/doc.md',
+      });
+
+      const btnFolder = await screen.findByRole('button', { name: 'フォルダ「folder」をツリーで表示' });
+      expect(btnFolder.tagName).toBe('BUTTON');
+      expect((btnFolder as HTMLButtonElement).type).toBe('button');
+
+      btnFolder.focus();
+      expect(document.activeElement).toBe(btnFolder);
+    });
   });
 });
 
