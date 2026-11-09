@@ -24,6 +24,23 @@ export function parentOf(path: string): string {
   return idx === -1 ? '' : path.slice(0, idx);
 }
 
+// 文書またはフォルダのパスから、祖先フォルダのパスを浅い順に返す(#323)。
+// 自分自身は含めない。'a/b/c.md' → ['a', 'a/b']、'a/b' → ['a']、'root.md' → []
+// 先頭・末尾の '/' は取り除いてから扱う
+export function ancestorFolderPaths(path: string): string[] {
+  const normalized = path.replace(/^\/+|\/+$/g, '');
+  if (!normalized) return [];
+  const segments = normalized.split('/');
+  if (segments.length <= 1) return [];
+  const result: string[] = [];
+  let current = '';
+  for (let i = 0; i < segments.length - 1; i++) {
+    current = current ? `${current}/${segments[i]}` : segments[i];
+    result.push(current);
+  }
+  return result;
+}
+
 function nameOf(path: string): string {
   const idx = path.lastIndexOf('/');
   return idx === -1 ? path : path.slice(idx + 1);

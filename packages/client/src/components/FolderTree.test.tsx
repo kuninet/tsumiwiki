@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import type { TreeResponse } from '@tsumiwiki/shared';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { docUrl } from '../lib/doc-path';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
@@ -40,7 +40,7 @@ describe('FolderTree', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     cleanup();
-    useUIStore.setState({ expandedFolders: new Set() });
+    useUIStore.setState({ expandedFolders: new Set(), revealRequest: null, sidebarTab: 'folder' });
     useEditStore.setState({ dirty: false });
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
     delete (document as unknown as { execCommand?: unknown }).execCommand;
@@ -1208,6 +1208,215 @@ describe('FolderTree', () => {
       expect(setData).toHaveBeenCalledWith('text/plain', 'ルート文書.md');
       expect(writeText).not.toHaveBeenCalled();
       await waitFor(() => expect(toastMessage()).toBe('パスをコピーしました'));
+    });
+  });
+
+  describe('ツリー追従の要求消費 (#323)', () => {
+    const DEEP_TREE_FOR_REVEAL: TreeResponse = {
+      folders: ['A', 'A/B', 'A/B/C'],
+      docs: [
+        { path: 'A/B/C/深い.md', title: '深い', folder: 'A/B/C', updatedAt: '2026-07-01T00:00:00+09:00' },
+      ],
+    };
+
+    beforeEach(() => {
+      Element.prototype.scrollIntoView = vi.fn();
+      useUIStore.setState({
+        expandedFolders: new Set(),
+        revealRequest: null,
+        sidebarTab: 'folder',
+      });
+    });
+
+    afterEach(() => {
+      delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView;
+      useUIStore.setState({
+        expandedFolders: new Set(),
+        revealRequest: null,
+        sidebarTab: 'folder',
+      });
+    });
+
+    it('F-1: unmount 中に積まれた revealRequest をマウント時に消費し scrollIntoView を呼ぶ', async () => {
+      useUIStore.getState().revealInTree('A/B/C/深い.md');
+      renderFolderTree('/doc/A/B/C/深い.md', DEEP_TREE_FOR_REVEAL);
+
+      const docEl = await screen.findByTestId('doc-A/B/C/深い.md');
+      expect(docEl).toBeTruthy();
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+      expect(useUIStore.getState().revealRequest).toBeNull();
+      expect(docEl.tabIndex).toBe(0);
+      expect(docEl.className).toContain('text-accent');
+    });
+
+    it('F-2: マウント後に revealInTree が呼ばれたときスクロールし、focus: false なら DOM フォーカスは移さない', async () => {
+      renderFolderTree('/doc/A/B/C/深い.md', DEEP_TREE_FOR_REVEAL);
+      await screen.findByText('A');
+
+      act(() => {
+        useUIStore.getState().revealInTree('A/B/C/深い.md');
+      });
+
+      const docEl = await screen.findByTestId('doc-A/B/C/深い.md');
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+      expect(document.activeElement).not.toBe(docEl);
+      expect(useUIStore.getState().revealRequest).toBeNull();
+    });
+
+    it('F-3: focus: true の場合、該当行に DOM フォーカスを移す', async () => {
+      renderFolderTree('/doc/A/B/C/深い.md', DEEP_TREE_FOR_REVEAL);
+      await screen.findByText('A');
+
+      act(() => {
+        useUIStore.getState().revealInTree('A/B/C/深い.md', { focus: true });
+      });
+
+      const docEl = await screen.findByTestId('doc-A/B/C/深い.md');
+      expect(document.activeElement).toBe(docEl);
+    });
+
+    it('F-4: フォルダに対する revealInTree(isFolder: true, includeSelf: true) でフォルダ行がスクロール・展開される', async () => {
+      renderFolderTree('/doc/A/B/C/深い.md', DEEP_TREE_FOR_REVEAL);
+      await screen.findByText('A');
+
+      act(() => {
+        useUIStore.getState().revealInTree('A/B', { isFolder: true, includeSelf: true });
+      });
+
+      await waitFor(() => {
+        const folderBBtn = screen.getByText('B').closest('button');
+        expect(folderBBtn).toBeTruthy();
+        expect(folderBBtn?.getAttribute('aria-expanded')).toBe('true');
+      });
+      expect(screen.getByText('C')).toBeTruthy();
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    });
+
+    it('F-5: 存在しないパスの revealInTree では scrollIntoView は呼ばれず要求は破棄される', async () => {
+      renderFolderTree('/doc/A/B/C/深い.md', DEEP_TREE_FOR_REVEAL);
+      await screen.findByText('A');
+
+      act(() => {
+        useUIStore.getState().revealInTree('存在しない/x.md');
+      });
+
+      await waitFor(() => {
+        expect(useUIStore.getState().revealRequest).toBeNull();
+      });
+      expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it('F-6: tree 応答保留中は revealRequest が残り、resolve 後に scrollIntoView が呼ばれ消費される', async () => {
+      let resolveTree!: (v: TreeResponse) => void;
+      const treePromise = new Promise<TreeResponse>((r) => {
+        resolveTree = r;
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation((url: string) => {
+          if (url === '/api/tree') {
+            return treePromise.then((d) => ({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve(d),
+            }));
+          }
+          return Promise.resolve({ ok: false, status: 404 });
+        }),
+      );
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/doc/A/B/C/深い.md']}>
+            <Routes>
+              <Route path="/doc/*" element={<FolderTree />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      act(() => {
+        useUIStore.getState().revealInTree('A/B/C/深い.md');
+      });
+      expect(useUIStore.getState().revealRequest).not.toBeNull();
+      expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+
+      await act(async () => {
+        resolveTree(DEEP_TREE_FOR_REVEAL);
+      });
+
+      await waitFor(() => {
+        expect(useUIStore.getState().revealRequest).toBeNull();
+      });
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    });
+
+    it('F-7: 利用者がフォルダ A を手動で閉じた後、rerender や tree 再取得でも A は閉じたままで追加スクロールしない', async () => {
+      useUIStore.getState().revealInTree('A/B/C/深い.md');
+      const { rerender } = renderFolderTree('/doc/A/B/C/深い.md', DEEP_TREE_FOR_REVEAL);
+      await screen.findByTestId('doc-A/B/C/深い.md');
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
+
+      const folderABtn = screen.getByText('A').closest('button')!;
+      fireEvent.click(folderABtn);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('doc-A/B/C/深い.md')).toBeNull();
+      });
+
+      rerender(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MemoryRouter initialEntries={['/doc/A/B/C/深い.md']}>
+            <Routes>
+              <Route path="/doc/*" element={<FolderTree />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      expect(screen.queryByTestId('doc-A/B/C/深い.md')).toBeNull();
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
+    });
+
+    it('F-8: Element.prototype.scrollIntoView が存在しない環境でも例外を投げず要求が消費される', async () => {
+      delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView;
+      renderFolderTree('/doc/A/B/C/深い.md', DEEP_TREE_FOR_REVEAL);
+      await screen.findByText('A');
+
+      expect(() => {
+        act(() => {
+          useUIStore.getState().revealInTree('A/B/C/深い.md');
+        });
+      }).not.toThrow();
+
+      await waitFor(() => {
+        expect(useUIStore.getState().revealRequest).toBeNull();
+      });
+    });
+
+    it('B-1: 追従で focusedPath 設定後に祖先フォルダを手動で閉じても、先頭可視行が tabIndex=0 にフォールバックする', async () => {
+      useUIStore.getState().revealInTree('A/B/C/深い.md');
+      renderFolderTree('/doc/A/B/C/深い.md', DEEP_TREE_FOR_REVEAL);
+
+      const docEl = await screen.findByTestId('doc-A/B/C/深い.md');
+      expect(docEl.tabIndex).toBe(0);
+
+      // フォルダ A をクリックして閉じる
+      const folderABtn = screen.getByText('A').closest('button')!;
+      fireEvent.click(folderABtn);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('doc-A/B/C/深い.md')).toBeNull();
+      });
+
+      // 追従で設定された focusedPath ('A/B/C/深い.md') が非表示になったため、
+      // 表示中の先頭行であるフォルダ A に tabIndex=0 がフォールバックすること
+      expect(folderABtn.tabIndex).toBe(0);
+
+      // 実際にフォーカスを当ててキー操作できること
+      folderABtn.focus();
+      expect(document.activeElement).toBe(folderABtn);
     });
   });
 });
