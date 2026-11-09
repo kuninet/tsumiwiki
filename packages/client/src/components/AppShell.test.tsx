@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
+import type { TreeResponse } from '@tsumiwiki/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUIStore } from '../stores/ui';
 import { useUserSettingsStore } from '../stores/user-settings';
@@ -32,9 +33,11 @@ function stubMatchMedia(matches: boolean) {
 function renderAppShell(options?: {
   initialEntries?: string[];
   byDateHandler?: (body: unknown) => { status: number; json: unknown };
+  tree?: TreeResponse;
 }) {
   const initialEntries = options?.initialEntries ?? ['/'];
   const byDateHandler = options?.byDateHandler;
+  const tree = options?.tree ?? { folders: [], docs: [] };
 
   vi.stubGlobal(
     'fetch',
@@ -53,7 +56,7 @@ function renderAppShell(options?: {
         return Promise.resolve({
           ok: true,
           status: 200,
-          json: () => Promise.resolve({ folders: [], docs: [] }),
+          json: () => Promise.resolve(tree),
         });
       }
       if (url === '/api/daily-notes/by-date' && byDateHandler) {
@@ -221,6 +224,27 @@ describe('AppShell (デスクトップ)', () => {
 
     await waitFor(() => expect(byDateHandler).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('I-5: /doc/A/B/C/深い.md でマウントすると AppShell 経由で祖先が展開され文書が表示される (#323)', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    try {
+      const deepTree: TreeResponse = {
+        folders: ['A', 'A/B', 'A/B/C'],
+        docs: [
+          { path: 'A/B/C/深い.md', title: '深い', folder: 'A/B/C', updatedAt: '2026-07-01T00:00:00+09:00' },
+        ],
+      };
+      renderAppShell({
+        initialEntries: ['/doc/A/B/C/深い.md'],
+        tree: deepTree,
+      });
+
+      expect(await screen.findByTestId('doc-A/B/C/深い.md')).toBeTruthy();
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    } finally {
+      delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView;
+    }
   });
 });
 

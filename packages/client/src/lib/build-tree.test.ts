@@ -1,5 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { buildTree, type FolderNode } from './build-tree';
+import { ancestorFolderPaths, buildTree, type FolderNode } from './build-tree';
+
+describe('ancestorFolderPaths (#323)', () => {
+  it('U-1: 文書パスから祖先フォルダのパスを浅い順に返す', () => {
+    expect(ancestorFolderPaths('a/b/c.md')).toEqual(['a', 'a/b']);
+  });
+
+  it('U-2: フォルダパスでは自分自身を含めず祖先フォルダのみ返す', () => {
+    expect(ancestorFolderPaths('a/b')).toEqual(['a']);
+  });
+
+  it('U-3: ルート直下および空文字では空配列を返す', () => {
+    expect(ancestorFolderPaths('root.md')).toEqual([]);
+    expect(ancestorFolderPaths('')).toEqual([]);
+  });
+
+  it('U-4: 先頭・末尾にスラッシュが付いていても正規化して正しく返す', () => {
+    expect(ancestorFolderPaths('/a/b/')).toEqual(['a']);
+  });
+
+  it('U-5: 日本語や記号を含むパスでも祖先フォルダを正しく返す', () => {
+    expect(ancestorFolderPaths('フォルダA/見出し#1/文書.md')).toEqual(['フォルダA', 'フォルダA/見出し#1']);
+  });
+});
 
 describe('buildTree', () => {
   it('ネストしたフォルダと文書を階層化する', () => {

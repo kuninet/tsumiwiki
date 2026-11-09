@@ -106,6 +106,8 @@ export function FolderTree() {
   const toggleFolderExpanded = useUIStore((s) => s.toggleFolderExpanded);
   const repathExpandedFolder = useUIStore((s) => s.repathExpandedFolder);
   const createDocRequest = useUIStore((s) => s.createDocRequest);
+  const revealRequest = useUIStore((s) => s.revealRequest);
+  const consumeRevealRequest = useUIStore((s) => s.consumeRevealRequest);
 
   // AppShell の「+ 新規文書」/ Ctrl+N ショートカット / その他外部要求(#137)を拾って
   // 新規文書ダイアログを開く。初期フォルダは request payload に載って来る。
@@ -169,6 +171,25 @@ export function FolderTree() {
   const isGroupingRef = useRef(false);
 
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
+
+  // #323: revealInTree の要求を消費して、該当行までスクロールする。
+  // 展開(expandedFolders)と要求は同じ set で入るので、この effect の時点で行は DOM にある。
+  // - tree 取得前は待つ(tree が来たら effect が再実行される)
+  // - tree はあるのに行が無い(存在しないパス・リネーム中の行など)ときは要求を捨てる
+  // - unmount 中に積まれた要求はマウント時に拾う(createDocRequest と違い、古い要求も捨てない。
+  //   タグタブ中に開いた文書は、フォルダタブに戻ったときに表示したいため)
+  useEffect(() => {
+    if (!revealRequest) return;
+    if (!tree) return;
+    const el = rowRefs.current.get(revealRequest.path);
+    if (el) {
+      // jsdom には scrollIntoView が無い(wikilink-suggestion.ts と同じガード)
+      if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
+      setFocusedPath(revealRequest.path);
+      if (revealRequest.focus) el.focus({ preventScroll: true });
+    }
+    consumeRevealRequest(revealRequest.nonce);
+  }, [revealRequest, tree, consumeRevealRequest]);
 
   const nodes = tree ? buildTree(tree) : [];
   const flat = useMemo(() => flattenVisible(nodes, expandedFolders), [nodes, expandedFolders]);
@@ -768,7 +789,10 @@ export function FolderTree() {
     }
   }
 
-  const activeFocusPath = focusedPath ?? flat[0]?.node.path ?? null;
+  const activeFocusPath =
+    focusedPath && flat.some((e) => e.node.path === focusedPath)
+      ? focusedPath
+      : (flat[0]?.node.path ?? null);
 
   const dnd: TreeDndHandlers = {
     draggedPath: draggedItem?.path ?? null,

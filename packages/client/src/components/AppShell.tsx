@@ -3,6 +3,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { ApiRequestError } from '../api/client';
 import { useCreateNoteByDate, useCreateOrOpenTodayNote } from '../api/daily-notes';
 import { useApplyTemplate } from '../api/templates';
+import { useFollowActiveDocInTree } from '../hooks/use-follow-active-doc-in-tree';
 import { useHorizontalResize } from '../hooks/use-horizontal-resize';
 import { useMediaQuery } from '../hooks/use-media-query';
 import { useNewDocShortcut } from '../hooks/use-new-doc-shortcut';
@@ -58,6 +59,9 @@ export function AppShell() {
   useTabsBootCleanup();
   // Ctrl/Cmd+Shift+U 右パネルトグルショートカット(#271)
   useRightPanelShortcut();
+  // 開いている文書の位置にフォルダツリーを追従させる(#323)。
+  // #324 で個人設定 followActiveDocInTree を enabled に渡す
+  useFollowActiveDocInTree();
 
   const navigate = useNavigate();
   const location = useLocation();
