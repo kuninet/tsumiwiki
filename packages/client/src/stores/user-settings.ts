@@ -30,6 +30,8 @@ export type UnresolvedLinkFolder = 'same-folder' | 'root';
 // #271: 右パネルのタブ種別
 export type RightPanelTab = 'backlinks' | 'history';
 
+// #324: 開いている文書の位置に文書ツリーを追従させるか(#323 の自動追従)。既定 true
+
 interface UserSettingsState {
   newDocPolicy: NewDocPolicy;
   fixedFolder: string;
@@ -39,6 +41,7 @@ interface UserSettingsState {
   rightPanelOpen: boolean;
   rightPanelWidth: number;
   rightPanelTab: RightPanelTab;
+  followActiveDocInTree: boolean;
   setNewDocPolicy: (policy: NewDocPolicy) => void;
   setFixedFolder: (folder: string) => void;
   setContentWidth: (width: ContentWidth) => void;
@@ -48,6 +51,7 @@ interface UserSettingsState {
   toggleRightPanelOpen: () => void;
   setRightPanelWidth: (width: number) => void;
   setRightPanelTab: (tab: RightPanelTab) => void;
+  setFollowActiveDocInTree: (follow: boolean) => void;
 }
 
 function clampRightPanelWidth(width: number): number {
@@ -65,6 +69,7 @@ export const useUserSettingsStore = create<UserSettingsState>()(
       rightPanelOpen: false,
       rightPanelWidth: RIGHT_PANEL_DEFAULT_WIDTH,
       rightPanelTab: 'backlinks',
+      followActiveDocInTree: true,
       setNewDocPolicy: (newDocPolicy) => set({ newDocPolicy }),
       setFixedFolder: (fixedFolder) => set({ fixedFolder }),
       setContentWidth: (contentWidth) => set({ contentWidth }),
@@ -74,6 +79,7 @@ export const useUserSettingsStore = create<UserSettingsState>()(
       toggleRightPanelOpen: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
       setRightPanelWidth: (width) => set({ rightPanelWidth: clampRightPanelWidth(width) }),
       setRightPanelTab: (rightPanelTab) => set({ rightPanelTab }),
+      setFollowActiveDocInTree: (followActiveDocInTree) => set({ followActiveDocInTree }),
     }),
     {
       name: 'tsumiwiki-user-settings',
@@ -92,7 +98,12 @@ export const useUserSettingsStore = create<UserSettingsState>()(
           rightPanelWidth = clampRightPanelWidth(rest.rightPanelWidth);
         }
 
-        const rightPanelOpen = typeof rest.rightPanelOpen === 'boolean' ? rest.rightPanelOpen : false;
+        const rightPanelOpen =
+          typeof rest.rightPanelOpen === 'boolean' ? rest.rightPanelOpen : false;
+
+        // #324: キーが無い(この設定より前から使っている)場合や不正値は既定のオン
+        const followActiveDocInTree =
+          typeof rest.followActiveDocInTree === 'boolean' ? rest.followActiveDocInTree : true;
 
         return {
           ...currentState,
@@ -100,6 +111,7 @@ export const useUserSettingsStore = create<UserSettingsState>()(
           rightPanelOpen,
           rightPanelWidth,
           rightPanelTab,
+          followActiveDocInTree,
         };
       },
     },

@@ -119,6 +119,7 @@ export function SettingsPage() {
       <NewDocSettings />
       <UnresolvedLinkSettings />
       <ContentWidthSettings />
+      <FolderTreeSettings />
     </div>
   );
 }
@@ -263,6 +264,36 @@ function ContentWidthSettings() {
         {radio('normal', '標準(760px)', '読みやすさ重視。既定')}
         {radio('wide', '広め(1040px)', 'コードや表を扱うときに余裕を持たせる')}
         {radio('full', '全幅', 'ペイン幅いっぱいまで広げる(左右分割時は各ペインの幅)')}
+      </div>
+    </section>
+  );
+}
+
+// #324: 文書ツリーの追従設定。設定はブラウザローカル(zustand/persist)
+function FolderTreeSettings() {
+  const followActiveDocInTree = useUserSettingsStore((s) => s.followActiveDocInTree);
+  const setFollowActiveDocInTree = useUserSettingsStore((s) => s.setFollowActiveDocInTree);
+
+  return (
+    <section className="mt-8 max-w-md space-y-3">
+      <h2 className="text-sm font-bold text-ink">文書ツリー</h2>
+      <p className="text-xs text-ink-faint">左のフォルダツリーの動きを設定します。</p>
+      <div className="space-y-2">
+        <label className="flex cursor-pointer items-start gap-2 rounded border border-line p-3 text-sm hover:bg-hoverbg">
+          <input
+            type="checkbox"
+            name="follow-active-doc-in-tree"
+            checked={followActiveDocInTree}
+            onChange={(e) => setFollowActiveDocInTree(e.target.checked)}
+            className="mt-1"
+          />
+          <span>
+            <span className="font-medium text-ink">開いている文書の位置にツリーを追従させる</span>
+            <span className="mt-0.5 block text-xs text-ink-faint">
+              文書を開くたびに、その文書があるフォルダまでツリーを展開して表示します(既定)。オフにしても、ツリー上部のボタンで現在の文書をツリーに表示できます
+            </span>
+          </span>
+        </label>
       </div>
     </section>
   );

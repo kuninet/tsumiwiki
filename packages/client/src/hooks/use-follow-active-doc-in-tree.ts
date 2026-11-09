@@ -8,7 +8,8 @@ import { useUIStore } from '../stores/ui';
 //   毎回呼ぶと、利用者が手で閉じたフォルダが tree の再取得や再描画で開き直してしまう
 // - tree 取得前や、tree にまだ無いパス(作成直後・.md なし URL・存在しない文書)は追従せず待つ。
 //   tree が更新されて文書が現れた時点で追従する
-// - enabled は #324 の個人設定(followActiveDocInTree)から渡す想定。本 issue では常に true
+// - enabled は #324 の個人設定(followActiveDocInTree)を AppShell から渡す。
+//   false のときは追従しない(手動表示は FolderTree ヘッダーのボタンから revealInTree を呼ぶ)
 export interface FollowActiveDocInTreeOptions {
   enabled?: boolean;
 }

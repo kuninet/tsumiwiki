@@ -10,7 +10,13 @@ interface Call {
   body: unknown;
 }
 
-const CURRENT_USER = { id: 1, username: 'taro', displayName: '太郎', role: 'user' as const, disabled: false };
+const CURRENT_USER = {
+  id: 1,
+  username: 'taro',
+  displayName: '太郎',
+  role: 'user' as const,
+  disabled: false,
+};
 
 function stubFetch(overrides: Record<string, unknown> = {}) {
   const calls: Call[] = [];
@@ -21,7 +27,11 @@ function stubFetch(overrides: Record<string, unknown> = {}) {
     calls.push({ method, path, body });
 
     if (path === '/api/auth/me') {
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ user: CURRENT_USER }) });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ user: CURRENT_USER }),
+      });
     }
     const key = `${method} ${path}`;
     if (key in overrides) {
@@ -33,7 +43,11 @@ function stubFetch(overrides: Record<string, unknown> = {}) {
         'error' in override
       ) {
         const err = override as { status: number; error: { code: string; message: string } };
-        return Promise.resolve({ ok: false, status: err.status, json: () => Promise.resolve({ error: err.error }) });
+        return Promise.resolve({
+          ok: false,
+          status: err.status,
+          json: () => Promise.resolve({ error: err.error }),
+        });
       }
       return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(override) });
     }
@@ -59,6 +73,7 @@ describe('SettingsPage', () => {
       fixedFolder: '',
       contentWidth: 'normal',
       unresolvedLinkFolder: 'same-folder',
+      followActiveDocInTree: true,
     });
     // #212 レビュー M2: setState は persist ミドルウェアで localStorage に書き戻される。
     // 他 test suite の初期状態を汚染しないよう永続層も掃除する
@@ -84,7 +99,9 @@ describe('SettingsPage', () => {
 
     fireEvent.change(screen.getByLabelText('現在のパスワード'), { target: { value: 'old-pass' } });
     fireEvent.change(screen.getByLabelText('新しいパスワード'), { target: { value: 'new-pass' } });
-    fireEvent.change(screen.getByLabelText('新しいパスワード(確認)'), { target: { value: '不一致' } });
+    fireEvent.change(screen.getByLabelText('新しいパスワード(確認)'), {
+      target: { value: '不一致' },
+    });
     fireEvent.click(screen.getByRole('button', { name: '変更する' }));
 
     expect(await screen.findByTestId('password-error')).toHaveProperty(
@@ -142,7 +159,9 @@ describe('SettingsPage', () => {
     fireEvent.click(screen.getByLabelText(/常にライブラリのルート直下に作成します/));
     expect(useUserSettingsStore.getState().unresolvedLinkFolder).toBe('root');
 
-    fireEvent.click(screen.getByLabelText(/リンクを含む文書（リンク元）と同じフォルダに作成します/));
+    fireEvent.click(
+      screen.getByLabelText(/リンクを含む文書（リンク元）と同じフォルダに作成します/),
+    );
     expect(useUserSettingsStore.getState().unresolvedLinkFolder).toBe('same-folder');
   });
 
@@ -158,12 +177,74 @@ describe('SettingsPage', () => {
 
     fireEvent.change(screen.getByLabelText('現在のパスワード'), { target: { value: 'wrong' } });
     fireEvent.change(screen.getByLabelText('新しいパスワード'), { target: { value: 'new-pass' } });
-    fireEvent.change(screen.getByLabelText('新しいパスワード(確認)'), { target: { value: 'new-pass' } });
+    fireEvent.change(screen.getByLabelText('新しいパスワード(確認)'), {
+      target: { value: 'new-pass' },
+    });
     fireEvent.click(screen.getByRole('button', { name: '変更する' }));
 
     expect(await screen.findByTestId('password-error')).toHaveProperty(
       'textContent',
       '現在のパスワードが違います',
     );
+  });
+
+  describe('文書ツリー設定 (#324)', () => {
+    it('V-1: 既定では見出し「文書ツリー」が表示され、チェックボックスが checked である', async () => {
+      stubFetch();
+      renderPage();
+      await screen.findByText('taro');
+
+      expect(screen.getByRole('heading', { level: 2, name: '文書ツリー' })).toBeTruthy();
+      const checkbox = screen.getByRole('checkbox', {
+        name: /開いている文書の位置にツリーを追従させる/,
+      }) as HTMLInputElement;
+      expect(checkbox.checked).toBe(true);
+    });
+
+    it('V-2: チェックボックスをクリックすると store とチェック状態が切り替わる', async () => {
+      stubFetch();
+      renderPage();
+      await screen.findByText('taro');
+
+      const checkbox = screen.getByRole('checkbox', {
+        name: /開いている文書の位置にツリーを追従させる/,
+      }) as HTMLInputElement;
+
+      fireEvent.click(checkbox);
+      expect(useUserSettingsStore.getState().followActiveDocInTree).toBe(false);
+      expect(checkbox.checked).toBe(false);
+
+      fireEvent.click(checkbox);
+      expect(useUserSettingsStore.getState().followActiveDocInTree).toBe(true);
+      expect(checkbox.checked).toBe(true);
+    });
+
+    it('V-3: 保存値が false の場合、初期描画でチェックボックスが unchecked になる', async () => {
+      useUserSettingsStore.setState({ followActiveDocInTree: false });
+      stubFetch();
+      renderPage();
+      await screen.findByText('taro');
+
+      const checkbox = screen.getByRole('checkbox', {
+        name: /開いている文書の位置にツリーを追従させる/,
+      }) as HTMLInputElement;
+      expect(checkbox.checked).toBe(false);
+    });
+
+    it('V-4: チェックボックスを click して false にすると localStorage に保存される', async () => {
+      stubFetch();
+      renderPage();
+      await screen.findByText('taro');
+
+      const checkbox = screen.getByRole('checkbox', {
+        name: /開いている文書の位置にツリーを追従させる/,
+      });
+      fireEvent.click(checkbox);
+
+      const raw = localStorage.getItem('tsumiwiki-user-settings');
+      expect(raw).not.toBeNull();
+      const parsed = JSON.parse(raw!);
+      expect(parsed.state.followActiveDocInTree).toBe(false);
+    });
   });
 });

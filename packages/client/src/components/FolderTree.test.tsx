@@ -1,5 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import type { TreeResponse } from '@tsumiwiki/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,8 +20,18 @@ import { FolderTree } from './FolderTree';
 const TREE = {
   folders: ['フォルダA'],
   docs: [
-    { path: 'フォルダA/子文書.md', title: '子文書', folder: 'フォルダA', updatedAt: '2026-07-01T00:00:00+09:00' },
-    { path: 'ルート文書.md', title: 'ルート文書', folder: '', updatedAt: '2026-07-01T00:00:00+09:00' },
+    {
+      path: 'フォルダA/子文書.md',
+      title: '子文書',
+      folder: 'フォルダA',
+      updatedAt: '2026-07-01T00:00:00+09:00',
+    },
+    {
+      path: 'ルート文書.md',
+      title: 'ルート文書',
+      folder: '',
+      updatedAt: '2026-07-01T00:00:00+09:00',
+    },
     { path: '見出し#1.md', title: '見出し#1', folder: '', updatedAt: '2026-07-01T00:00:00+09:00' },
   ],
 };
@@ -146,13 +164,23 @@ describe('FolderTree', () => {
     const nested = {
       folders: ['親', '親/子'],
       docs: [
-        { path: '親/子/メモ.md', title: 'メモ', folder: '親/子', updatedAt: '2026-08-23T00:00:00+09:00' },
+        {
+          path: '親/子/メモ.md',
+          title: 'メモ',
+          folder: '親/子',
+          updatedAt: '2026-08-23T00:00:00+09:00',
+        },
       ],
     };
     const nestedAfter = {
       folders: ['新親', '新親/子'],
       docs: [
-        { path: '新親/子/メモ.md', title: 'メモ', folder: '新親/子', updatedAt: '2026-08-23T00:00:00+09:00' },
+        {
+          path: '新親/子/メモ.md',
+          title: 'メモ',
+          folder: '新親/子',
+          updatedAt: '2026-08-23T00:00:00+09:00',
+        },
       ],
     };
     let renamed = false;
@@ -178,7 +206,11 @@ describe('FolderTree', () => {
             json: () => Promise.resolve({ path: b.newPath }),
           });
         }
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ ok: true }),
+        });
       }),
     );
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -221,13 +253,23 @@ describe('FolderTree', () => {
     const nested = {
       folders: ['親', '親/子', '親/子/孫'],
       docs: [
-        { path: '親/子/孫/メモ.md', title: 'メモ', folder: '親/子/孫', updatedAt: '2026-08-23T00:00:00+09:00' },
+        {
+          path: '親/子/孫/メモ.md',
+          title: 'メモ',
+          folder: '親/子/孫',
+          updatedAt: '2026-08-23T00:00:00+09:00',
+        },
       ],
     };
     const nestedAfter = {
       folders: ['新親', '新親/子', '新親/子/孫'],
       docs: [
-        { path: '新親/子/孫/メモ.md', title: 'メモ', folder: '新親/子/孫', updatedAt: '2026-08-23T00:00:00+09:00' },
+        {
+          path: '新親/子/孫/メモ.md',
+          title: 'メモ',
+          folder: '新親/子/孫',
+          updatedAt: '2026-08-23T00:00:00+09:00',
+        },
       ],
     };
     let renamed = false;
@@ -253,7 +295,11 @@ describe('FolderTree', () => {
             json: () => Promise.resolve({ path: b.newPath }),
           });
         }
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ ok: true }),
+        });
       }),
     );
     // 事前に「親」「親/子」両方を展開状態としてストアに積む
@@ -297,13 +343,23 @@ describe('FolderTree', () => {
     const initial = {
       folders: ['A', 'A/子', 'B'],
       docs: [
-        { path: 'A/子/メモ.md', title: 'メモ', folder: 'A/子', updatedAt: '2026-08-23T00:00:00+09:00' },
+        {
+          path: 'A/子/メモ.md',
+          title: 'メモ',
+          folder: 'A/子',
+          updatedAt: '2026-08-23T00:00:00+09:00',
+        },
       ],
     };
     const after = {
       folders: ['A', 'B', 'B/子'],
       docs: [
-        { path: 'B/子/メモ.md', title: 'メモ', folder: 'B/子', updatedAt: '2026-08-23T00:00:00+09:00' },
+        {
+          path: 'B/子/メモ.md',
+          title: 'メモ',
+          folder: 'B/子',
+          updatedAt: '2026-08-23T00:00:00+09:00',
+        },
       ],
     };
     let moved = false;
@@ -329,7 +385,11 @@ describe('FolderTree', () => {
             json: () => Promise.resolve({ path: b.newPath }),
           });
         }
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ ok: true }),
+        });
       }),
     );
     // 「A」「A/子」を展開状態にしておく
@@ -403,13 +463,25 @@ describe('FolderTree', () => {
           if (method === 'POST' && reqPath === '/api/docs/move') {
             const b = body as { newFolder: string; newTitle: string };
             const newPath = b.newFolder ? `${b.newFolder}/${b.newTitle}.md` : `${b.newTitle}.md`;
-            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ path: newPath }) });
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve({ path: newPath }),
+            });
           }
           if (method === 'POST' && reqPath === '/api/folders/move') {
             const b = body as { newPath: string };
-            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ path: b.newPath }) });
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve({ path: b.newPath }),
+            });
           }
-          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ ok: true }),
+          });
         }),
       );
       return calls;
@@ -539,9 +611,7 @@ describe('FolderTree', () => {
       await waitFor(() => {
         expect(calls.some((c) => c.method === 'POST' && c.path === '/api/folders')).toBe(true);
       });
-      const createFolderCall = calls.find(
-        (c) => c.method === 'POST' && c.path === '/api/folders',
-      );
+      const createFolderCall = calls.find((c) => c.method === 'POST' && c.path === '/api/folders');
       expect(createFolderCall?.body).toEqual({ path: 'まとめ' });
 
       await waitFor(() => {
@@ -637,7 +707,11 @@ describe('FolderTree', () => {
           const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
           calls2.push({ method, path: reqPath, body });
           if (method === 'GET') {
-            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(TREE_ALL) });
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve(TREE_ALL),
+            });
           }
           if (method === 'POST' && reqPath === '/api/docs/move') {
             return Promise.resolve({
@@ -646,7 +720,11 @@ describe('FolderTree', () => {
               json: () => Promise.resolve({ error: { code: 'INTERNAL_ERROR', message: 'x' } }),
             });
           }
-          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ ok: true }),
+          });
         }),
       );
       const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -727,7 +805,11 @@ describe('FolderTree', () => {
           const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
           calls.push({ method, path: reqPath, body });
           if (method === 'GET') {
-            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(customTree) });
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve(customTree),
+            });
           }
           if (method === 'POST' && reqPath === '/api/docs/move') {
             const b = body as { path: string; newFolder: string; newTitle: string };
@@ -740,13 +822,25 @@ describe('FolderTree', () => {
               });
             }
             const newPath = b.newFolder ? `${b.newFolder}/${b.newTitle}.md` : `${b.newTitle}.md`;
-            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ path: newPath }) });
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve({ path: newPath }),
+            });
           }
           if (method === 'POST' && reqPath === '/api/folders/move') {
             const b = body as { newPath: string };
-            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ path: b.newPath }) });
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve({ path: b.newPath }),
+            });
           }
-          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ ok: true }),
+          });
         }),
       );
       return calls;
@@ -782,8 +876,18 @@ describe('FolderTree', () => {
       const TREE_WITH_B = {
         folders: ['フォルダA', 'フォルダB'],
         docs: [
-          { path: 'フォルダA/子文書.md', title: '子文書', folder: 'フォルダA', updatedAt: '2026-07-01T00:00:00+09:00' },
-          { path: 'ルート文書.md', title: 'ルート文書', folder: '', updatedAt: '2026-07-01T00:00:00+09:00' },
+          {
+            path: 'フォルダA/子文書.md',
+            title: '子文書',
+            folder: 'フォルダA',
+            updatedAt: '2026-07-01T00:00:00+09:00',
+          },
+          {
+            path: 'ルート文書.md',
+            title: 'ルート文書',
+            folder: '',
+            updatedAt: '2026-07-01T00:00:00+09:00',
+          },
         ],
       };
       const calls = stubFetchWithTree(TREE_WITH_B);
@@ -806,7 +910,9 @@ describe('FolderTree', () => {
 
       // 移動APIが叩かれた(folder + doc の2件)ことを待ってから URL 追従を確認
       await waitFor(() => {
-        const folderMoves = calls.filter((c) => c.method === 'POST' && c.path === '/api/folders/move');
+        const folderMoves = calls.filter(
+          (c) => c.method === 'POST' && c.path === '/api/folders/move',
+        );
         const docMoves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
         expect(folderMoves.length).toBe(1);
         expect(docMoves.length).toBe(1);
@@ -1021,7 +1127,12 @@ describe('FolderTree', () => {
         const TREE2 = {
           folders: ['フォルダA', 'フォルダB'],
           docs: [
-            { path: 'フォルダB/子B.md', title: '子B', folder: 'フォルダB', updatedAt: '2026-07-01T00:00:00+09:00' },
+            {
+              path: 'フォルダB/子B.md',
+              title: '子B',
+              folder: 'フォルダB',
+              updatedAt: '2026-07-01T00:00:00+09:00',
+            },
           ],
         };
         const calls: Call[] = [];
@@ -1037,9 +1148,17 @@ describe('FolderTree', () => {
             }
             if (method === 'POST' && reqPath === '/api/folders/move') {
               const b = body as { newPath: string };
-              return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ path: b.newPath }) });
+              return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ path: b.newPath }),
+              });
             }
-            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve({ ok: true }),
+            });
           }),
         );
         const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -1061,7 +1180,9 @@ describe('FolderTree', () => {
         fireEvent.dragEnd(folderA);
 
         await waitFor(() => {
-          expect(calls.some((c) => c.method === 'POST' && c.path === '/api/folders/move')).toBe(true);
+          expect(calls.some((c) => c.method === 'POST' && c.path === '/api/folders/move')).toBe(
+            true,
+          );
         });
         const move = calls.find((c) => c.method === 'POST' && c.path === '/api/folders/move')!;
         expect(move.body).toEqual({ path: 'フォルダA', newPath: 'フォルダB/フォルダA' });
@@ -1215,7 +1336,12 @@ describe('FolderTree', () => {
     const DEEP_TREE_FOR_REVEAL: TreeResponse = {
       folders: ['A', 'A/B', 'A/B/C'],
       docs: [
-        { path: 'A/B/C/深い.md', title: '深い', folder: 'A/B/C', updatedAt: '2026-07-01T00:00:00+09:00' },
+        {
+          path: 'A/B/C/深い.md',
+          title: '深い',
+          folder: 'A/B/C',
+          updatedAt: '2026-07-01T00:00:00+09:00',
+        },
       ],
     };
 
@@ -1366,7 +1492,9 @@ describe('FolderTree', () => {
       });
 
       rerender(
-        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <QueryClientProvider
+          client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        >
           <MemoryRouter initialEntries={['/doc/A/B/C/深い.md']}>
             <Routes>
               <Route path="/doc/*" element={<FolderTree />} />
@@ -1417,6 +1545,172 @@ describe('FolderTree', () => {
       // 実際にフォーカスを当ててキー操作できること
       folderABtn.focus();
       expect(document.activeElement).toBe(folderABtn);
+    });
+  });
+
+  describe('現在の文書をツリーで表示ボタン (#324)', () => {
+    const DEEP_TREE_FOR_REVEAL: TreeResponse = {
+      folders: ['A', 'A/B', 'A/B/C'],
+      docs: [
+        {
+          path: 'A/B/C/深い.md',
+          title: '深い',
+          folder: 'A/B/C',
+          updatedAt: '2026-07-01T00:00:00+09:00',
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      Element.prototype.scrollIntoView = vi.fn();
+      useUIStore.setState({
+        expandedFolders: new Set(),
+        revealRequest: null,
+        sidebarTab: 'folder',
+      });
+    });
+
+    afterEach(() => {
+      delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView;
+      useUIStore.setState({
+        expandedFolders: new Set(),
+        revealRequest: null,
+        sidebarTab: 'folder',
+      });
+    });
+
+    it('T-1: 文書表示中にボタンが表示され有効化されており、アクセシビリティ属性が正しい', async () => {
+      renderFolderTree('/doc/A/B/C/深い.md', DEEP_TREE_FOR_REVEAL);
+      await screen.findByText('A');
+
+      const btn = screen.getByRole('button', { name: '現在の文書をツリーで表示' });
+      expect(btn).toBeTruthy();
+      expect((btn as HTMLButtonElement).disabled).toBe(false);
+      expect(btn.getAttribute('title')).toBe('現在の文書をツリーで表示');
+
+      const icon = btn.querySelector('svg');
+      expect(icon).toBeTruthy();
+      expect(icon?.getAttribute('aria-hidden')).toBe('true');
+    });
+
+    it('T-2: ボタンをクリックすると祖先が展開され、文書行が表示・ハイライト・スクロール・フォーカスされる', async () => {
+      renderFolderTree('/doc/A/B/C/深い.md', DEEP_TREE_FOR_REVEAL);
+      await screen.findByText('A');
+
+      // クリック前は展開されていないため文書行は存在しない
+      expect(screen.queryByTestId('doc-A/B/C/深い.md')).toBeNull();
+
+      const btn = screen.getByRole('button', { name: '現在の文書をツリーで表示' });
+      fireEvent.click(btn);
+
+      const docEl = await screen.findByTestId('doc-A/B/C/深い.md');
+      expect(docEl).toBeTruthy();
+      expect(docEl.className).toContain('text-accent');
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+      expect(document.activeElement).toBe(docEl);
+      expect(useUIStore.getState().revealRequest).toBeNull();
+    });
+
+    it('T-3: フォルダを閉じた後、再度ボタンを押すと再展開されフォーカスが当たる', async () => {
+      renderFolderTree('/doc/A/B/C/深い.md', DEEP_TREE_FOR_REVEAL);
+      await screen.findByText('A');
+
+      const btn = screen.getByRole('button', { name: '現在の文書をツリーで表示' });
+      fireEvent.click(btn);
+
+      const docEl = await screen.findByTestId('doc-A/B/C/深い.md');
+      expect(docEl).toBeTruthy();
+
+      // フォルダ B を閉じる
+      const folderBBtn = screen.getByText('B').closest('button')!;
+      fireEvent.click(folderBBtn);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('doc-A/B/C/深い.md')).toBeNull();
+      });
+
+      // 再度ボタンをクリック
+      fireEvent.click(btn);
+
+      const docElReopened = await screen.findByTestId('doc-A/B/C/深い.md');
+      expect(docElReopened).toBeTruthy();
+      expect(document.activeElement).toBe(docElReopened);
+    });
+
+    it('T-4: 文書を開いていないパス(/)ではボタンが disabled', () => {
+      renderFolderTree('/', DEEP_TREE_FOR_REVEAL);
+
+      const btn = screen.getByRole('button', {
+        name: '現在の文書をツリーで表示',
+      }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+
+      fireEvent.click(btn);
+      expect(useUIStore.getState().revealRequest).toBeNull();
+    });
+
+    it('T-5: tree に存在しない文書パスではボタンが disabled', async () => {
+      renderFolderTree('/doc/A/B/C/存在しない.md', DEEP_TREE_FOR_REVEAL);
+      await screen.findByText('A');
+
+      const btn = screen.getByRole('button', {
+        name: '現在の文書をツリーで表示',
+      }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
+
+    it('T-6: .md が付いていないパスではボタンが disabled', async () => {
+      renderFolderTree('/doc/A/B/C/深い', DEEP_TREE_FOR_REVEAL);
+      await screen.findByText('A');
+
+      const btn = screen.getByRole('button', {
+        name: '現在の文書をツリーで表示',
+      }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
+
+    it('T-7: tree 取得完了前は disabled で、取得完了後に enabled になる', async () => {
+      let resolveTree!: (value: TreeResponse) => void;
+      const treePromise = new Promise<TreeResponse>((resolve) => {
+        resolveTree = resolve;
+      });
+
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation((url: string) => {
+          if (url === '/api/tree') {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () => treePromise,
+            });
+          }
+          return Promise.resolve({ ok: false, status: 404 });
+        }),
+      );
+
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/doc/A/B/C/深い.md']}>
+            <Routes>
+              <Route path="/doc/*" element={<FolderTree />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      const btn = screen.getByRole('button', {
+        name: '現在の文書をツリーで表示',
+      }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+
+      await act(async () => {
+        resolveTree(DEEP_TREE_FOR_REVEAL);
+      });
+
+      await screen.findByText('A');
+      expect(btn.disabled).toBe(false);
     });
   });
 });

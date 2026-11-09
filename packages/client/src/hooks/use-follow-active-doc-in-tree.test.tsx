@@ -325,4 +325,44 @@ describe('useFollowActiveDocInTree (#323)', () => {
       expect(useUIStore.getState().revealRequest?.path).toBe('A/B/C/深い.md');
     });
   });
+
+  it('H-13: enabled: true から enabled: false に切り替わった後は navigate しても追従しない', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve(DEEP_TREE) }),
+    );
+
+    function TestApp({ enabled }: { enabled: boolean }) {
+      return (
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/doc/A/B/C/深い.md']}>
+            <Routes>
+              <Route element={<Layout options={{ enabled }} />}>
+                <Route path="doc/*" element={<NavProbe />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+    }
+
+    const { rerender } = render(<TestApp enabled={true} />);
+
+    await waitFor(() => {
+      expect(useUIStore.getState().revealRequest?.path).toBe('A/B/C/深い.md');
+    });
+    useUIStore.getState().consumeRevealRequest(useUIStore.getState().revealRequest!.nonce);
+    useUIStore.setState({ expandedFolders: new Set() });
+
+    rerender(<TestApp enabled={false} />);
+
+    act(() => {
+      nav('/doc/X/別.md');
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(useUIStore.getState().expandedFolders.has('X')).toBe(false);
+    expect(useUIStore.getState().revealRequest).toBeNull();
+  });
 });
