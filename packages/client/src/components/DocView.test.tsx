@@ -75,11 +75,11 @@ function LocationProbe() {
   return <div data-testid="location-pathname">{location.pathname}</div>;
 }
 
-function renderDocViewWithProbe(doc: DocResponse) {
+function renderDocViewWithProbe(doc: DocResponse, initialUrl = '/doc/メモ.md') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/doc/メモ.md']}>
+      <MemoryRouter initialEntries={[initialUrl]}>
         <Routes>
           <Route
             path="/doc/*"
@@ -1022,6 +1022,240 @@ describe('DocView', () => {
 
       btnFolder.focus();
       expect(document.activeElement).toBe(btnFolder);
+    });
+  });
+
+  describe('本文リンクのクリック (#325)', () => {
+    let openSpy: ReturnType<typeof vi.fn>;
+    let writeText: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      openSpy = vi.fn();
+      vi.stubGlobal('open', openSpy);
+      writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText },
+        configurable: true,
+      });
+      useToastStore.setState({ toast: null });
+    });
+
+    it('1. 閲覧モード・外部リンク: クリックで新しいタブが開く', async () => {
+      stubFetch();
+      renderDocViewWithProbe({
+        ...DOC,
+        lock: { userId: 2, displayName: '次郎' },
+        body: '[例](https://ex.com)',
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /保存/ })).toBeNull();
+      });
+
+      const a = document.querySelector('.ProseMirror a[data-link-kind="external"]') as HTMLAnchorElement;
+      expect(a).not.toBeNull();
+
+      fireEvent.click(a);
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(openSpy).toHaveBeenCalledWith('https://ex.com', '_blank', 'noopener,noreferrer');
+    });
+
+    it('2. 編集モード・修飾キーなし: クリックしても開かない', async () => {
+      stubFetch({
+        'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+        'GET /api/drafts': { draft: null },
+      });
+      renderDocViewWithProbe({
+        ...DOC,
+        body: '[例](https://ex.com)',
+      });
+
+      await screen.findByRole('button', { name: /保存/ });
+
+      const a = document.querySelector('.ProseMirror a[data-link-kind="external"]') as HTMLAnchorElement;
+      expect(a).not.toBeNull();
+
+      fireEvent.click(a);
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(screen.getByTestId('location-pathname').textContent).toBe('/doc/メモ.md');
+    });
+
+    it('3. 編集モード・Ctrl+クリック: 外部リンクが新しいタブで開く(preventDefaultされる)', async () => {
+      stubFetch({
+        'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+        'GET /api/drafts': { draft: null },
+      });
+      renderDocViewWithProbe({
+        ...DOC,
+        body: '[例](https://ex.com)',
+      });
+
+      await screen.findByRole('button', { name: /保存/ });
+
+      const a = document.querySelector('.ProseMirror a[data-link-kind="external"]') as HTMLAnchorElement;
+      expect(a).not.toBeNull();
+
+      const notPrevented = fireEvent.click(a, { ctrlKey: true });
+      expect(notPrevented).toBe(false);
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(openSpy).toHaveBeenCalledWith('https://ex.com', '_blank', 'noopener,noreferrer');
+    });
+
+    it('4. 編集モード・Cmd+クリック: 外部リンクが新しいタブで開く', async () => {
+      stubFetch({
+        'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+        'GET /api/drafts': { draft: null },
+      });
+      renderDocViewWithProbe({
+        ...DOC,
+        body: '[例](https://ex.com)',
+      });
+
+      await screen.findByRole('button', { name: /保存/ });
+
+      const a = document.querySelector('.ProseMirror a[data-link-kind="external"]') as HTMLAnchorElement;
+      expect(a).not.toBeNull();
+
+      const notPrevented = fireEvent.click(a, { metaKey: true });
+      expect(notPrevented).toBe(false);
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(openSpy).toHaveBeenCalledWith('https://ex.com', '_blank', 'noopener,noreferrer');
+    });
+
+    it('5. 閲覧モード・file リンク: クリックでデコード後パスがコピーされトースト表示', async () => {
+      stubFetch();
+      renderDocViewWithProbe({
+        ...DOC,
+        lock: { userId: 2, displayName: '次郎' },
+        body: '[共有](<file:///C:/a b>)',
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /保存/ })).toBeNull();
+      });
+
+      const a = document.querySelector('.ProseMirror a[data-link-kind="file"]') as HTMLAnchorElement;
+      expect(a).not.toBeNull();
+
+      fireEvent.click(a);
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith('file:///C:/a b');
+        expect(useToastStore.getState().toast?.message).toBe('パスをコピーしました');
+      });
+      expect(openSpy).not.toHaveBeenCalled();
+    });
+
+    it('6. 閲覧モード・UNC リンク: クリックでデコード後 UNC パスがコピーされる', async () => {
+      stubFetch();
+      renderDocViewWithProbe({
+        ...DOC,
+        lock: { userId: 2, displayName: '次郎' },
+        body: '[共有](\\\\\\\\srv\\\\s)',
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /保存/ })).toBeNull();
+      });
+
+      const a = document.querySelector('.ProseMirror a[data-link-kind="file"]') as HTMLAnchorElement;
+      expect(a).not.toBeNull();
+
+      fireEvent.click(a);
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith('\\\\srv\\s');
+        expect(useToastStore.getState().toast?.message).toBe('パスをコピーしました');
+      });
+      expect(openSpy).not.toHaveBeenCalled();
+    });
+
+    it('7. 編集モード・file リンク: Ctrl+クリックでコピーされ、修飾キーなしではコピーされない', async () => {
+      stubFetch({
+        'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+        'GET /api/drafts': { draft: null },
+      });
+      renderDocViewWithProbe({
+        ...DOC,
+        body: '[共有](<file:///C:/a b>)',
+      });
+
+      await screen.findByRole('button', { name: /保存/ });
+
+      const a = document.querySelector('.ProseMirror a[data-link-kind="file"]') as HTMLAnchorElement;
+      expect(a).not.toBeNull();
+
+      // 修飾キーなし
+      fireEvent.click(a);
+      expect(writeText).not.toHaveBeenCalled();
+
+      // Ctrl+クリック
+      fireEvent.click(a, { ctrlKey: true });
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith('file:///C:/a b');
+      });
+    });
+
+    it('8. 閲覧モード・相対リンクで SPA 遷移', async () => {
+      stubFetch();
+      renderDocViewWithProbe(
+        {
+          ...DOC,
+          path: '業務/メモ.md',
+          lock: { userId: 2, displayName: '次郎' },
+          body: '[設計](../設計.md)',
+        },
+        docUrl('業務/メモ.md'),
+      );
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /保存/ })).toBeNull();
+      });
+
+      const a = document.querySelector('.ProseMirror a[data-link-kind="relative"]') as HTMLAnchorElement;
+      expect(a).not.toBeNull();
+
+      fireEvent.click(a);
+      expect(screen.getByTestId('location-pathname').textContent).toBe(docUrl('設計.md'));
+      expect(openSpy).not.toHaveBeenCalled();
+    });
+
+    it('9. 閲覧モード・相対リンク(添付ファイル): 新規タブで /api/files/... が開く', async () => {
+      stubFetch();
+      renderDocViewWithProbe({
+        ...DOC,
+        lock: { userId: 2, displayName: '次郎' },
+        body: '[資料](資料.pdf)',
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /保存/ })).toBeNull();
+      });
+
+      const a = document.querySelector('.ProseMirror a[data-link-kind="relative"]') as HTMLAnchorElement;
+      expect(a).not.toBeNull();
+
+      fireEvent.click(a);
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(openSpy).toHaveBeenCalledWith('/api/files/%E8%B3%87%E6%96%99.pdf', '_blank', 'noopener,noreferrer');
+    });
+
+    it('10. 閲覧モード・アンカーリンク: クリックしても何も開かず preventDefault される', async () => {
+      stubFetch();
+      renderDocViewWithProbe({
+        ...DOC,
+        lock: { userId: 2, displayName: '次郎' },
+        body: '[上へ](#head)',
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /保存/ })).toBeNull();
+      });
+
+      const a = document.querySelector('.ProseMirror a[data-link-kind="anchor"]') as HTMLAnchorElement;
+      expect(a).not.toBeNull();
+
+      const notPrevented = fireEvent.click(a);
+      expect(notPrevented).toBe(false);
+      expect(openSpy).not.toHaveBeenCalled();
     });
   });
 });

@@ -35,7 +35,7 @@ import { useOpenSidebar } from '../hooks/use-open-sidebar';
 import { useVirtualKeyboard } from '../hooks/use-virtual-keyboard';
 import { dispatchAttachmentChanged } from '../lib/attachment-events';
 import { copyTextWithToast } from '../lib/clipboard';
-import { titleFromPath } from '../lib/doc-path';
+import { docUrl, titleFromPath } from '../lib/doc-path';
 import { handleWikilinkClick } from '../lib/handle-wikilink-click';
 import {
   buildFrontmatterOps,
@@ -44,6 +44,12 @@ import {
   type PropertyRowsState,
 } from '../lib/frontmatter-edit';
 import { removeInlineTag, renameInlineTag } from '../lib/inline-tag-rewrite';
+import {
+  classifyLinkHref,
+  isLinkOpenModifier,
+  resolveRelativeLink,
+  safeDecodeHref,
+} from '../lib/link-kind';
 import { isPdfFile, parseEmbedTarget, toFilesUrl } from '../lib/resolve-embed-src';
 import { saveBadge } from '../lib/save-badge';
 import { registerTabActions } from '../lib/tab-actions-registry';
@@ -369,6 +375,12 @@ export function DocView({
           setTableMenu({ x: event.clientX, y: event.clientY });
           return true;
         },
+      },
+      // #325: リンク上の Ctrl/Cmd+クリックは「リンクを開く」操作。PM の修飾キー付きクリック
+      // (段落の NodeSelection)を走らせない。開く処理は handleContainerClick 側で行う
+      handleClick: (view, _pos, event) => {
+        if (!view.editable || !isLinkOpenModifier(event)) return false;
+        return event.target instanceof Element && !!event.target.closest('a[href]');
       },
       handleDrop: (_view, event) => {
         const files = Array.from(event.dataTransfer?.files ?? []).filter(isAttachmentFile);
@@ -1012,7 +1024,7 @@ export function DocView({
     showToast('success', 'テンプレートを適用しました');
   }
 
-  // wikilinkクリックでの遷移(FR-OBS-02)とfile://・UNCリンクの「パスをコピー」(FR-LINK-02)
+  // wikilink クリックでの遷移(FR-OBS-02)と本文リンクのクリック処理(FR-LINK-02, #325)
   function handleContainerClick(e: ReactMouseEvent<HTMLDivElement>) {
     const target = e.target as HTMLElement;
 
@@ -1036,22 +1048,38 @@ export function DocView({
       return;
     }
 
-    // 以降(file://・UNC のパスコピー、http(s) の新規タブ)は閲覧モードのみ。
-    // 編集モードでは本文中の生 <a> はカーソル移動として扱う従来挙動を維持
-    if (sessionRef.current.mode !== 'view') return;
+    // #325: 本文中の通常リンク。閲覧モードはクリック、編集モードは Ctrl/Cmd+クリックで開く。
+    // 編集モードの修飾キーなしクリックは従来どおりカーソル移動として扱う
+    const anchorEl = target.closest('.ProseMirror a[href]');
+    if (!anchorEl) return;
+    const isEditMode = sessionRef.current.mode !== 'view';
+    if (isEditMode && !isLinkOpenModifier(e)) return;
 
-    const anchorEl = target.closest('a');
-    if (anchorEl) {
-      const href = anchorEl.getAttribute('href') ?? '';
-      if (href.startsWith('file:') || href.startsWith('\\\\')) {
-        e.preventDefault();
-        copyTextWithToast(href, showToast);
+    const href = anchorEl.getAttribute('href') ?? '';
+    const kind = classifyLinkHref(href);
+    // ブラウザ既定動作(target=_blank / contenteditable 内の Ctrl+クリックで開く等)と二重に開かないよう必ず止める。
+    // ただし閲覧モードの mailto はブラウザ既定に任せる
+    if (kind === 'mailto' && !isEditMode) return;
+    e.preventDefault();
+
+    switch (kind) {
+      case 'file':
+        copyTextWithToast(safeDecodeHref(href), showToast);
         return;
-      }
-      if (/^https?:/i.test(href)) {
-        // 外部リンクは新規タブで開く(openOnClick:false のため自前処理)
-        e.preventDefault();
+      case 'external':
         window.open(href, '_blank', 'noopener,noreferrer');
+        return;
+      case 'mailto':
+        window.location.assign(href);
+        return;
+      case 'anchor':
+        return; // 見出しジャンプは未対応
+      case 'relative': {
+        const resolved = resolveRelativeLink(href, docPathRef.current);
+        if (!resolved) return;
+        if (resolved.type === 'doc') navigate(docUrl(resolved.path));
+        else window.open(resolved.url, '_blank', 'noopener,noreferrer');
+        return;
       }
     }
   }
