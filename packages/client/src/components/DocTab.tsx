@@ -46,7 +46,8 @@ export function DocTab({ path, active, isVisible }: DocTabProps) {
 
   if (error) {
     const message =
-      error instanceof ApiRequestError && error.status === 404
+      error instanceof ApiRequestError &&
+      (error.status === 404 || (error.status === 400 && error.code === 'INVALID_PATH'))
         ? '指定された文書が見つかりません'
         : '文書の取得に失敗しました';
     return <div className="p-6 text-danger">{message}</div>;
