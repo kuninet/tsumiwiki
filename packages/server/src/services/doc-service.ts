@@ -16,6 +16,7 @@ import {
 } from 'yaml';
 import { REV_PATTERN } from '@tsumiwiki/shared';
 import type {
+  AttachmentSummary,
   BacklinksResponse,
   DocResponse,
   DocSummary,
@@ -29,7 +30,12 @@ import type { AppConfig } from '../config.js';
 import type { AppDatabase } from '../db/index.js';
 import { ATTACHMENT_EXTENSIONS, isIndexedFileName } from '../lib/attachments.js';
 import { computeCodeRanges, isWithinCode } from '../lib/code-ranges.js';
-import { InvalidPathError, isProtectedPath, normalizeRelPath, resolveInLibrary } from '../lib/paths.js';
+import {
+  InvalidPathError,
+  isProtectedPath,
+  normalizeRelPath,
+  resolveInLibrary,
+} from '../lib/paths.js';
 import type { DraftService } from './draft-service.js';
 import type { GitAuthor, GitService } from './git-service.js';
 import type { IndexerService } from './indexer-service.js';
@@ -151,7 +157,10 @@ function validateAttachmentName(name: string): string {
   // targetとして捕捉できず、以後の参照検出・リネーム対象から外れてしまう。
   // 既存ファイルの表示・添付索引解決には影響しない(「この名前へ変更する」操作だけを拒否する)
   if (/[#[\]()`]/.test(normalized)) {
-    throw new InvalidPathError(name, 'ファイル名に # [ ] ( ) ` は使えません(リンク記法と衝突するため)');
+    throw new InvalidPathError(
+      name,
+      'ファイル名に # [ ] ( ) ` は使えません(リンク記法と衝突するため)',
+    );
   }
   if (normalized.startsWith('.') || /[. ]$/.test(normalized)) {
     throw new InvalidPathError(name, 'ファイル名の先頭の . や末尾の . / 空白は使えません');
@@ -163,7 +172,10 @@ function validateAttachmentName(name: string): string {
   const ext = path.posix.extname(normalized);
   const stem = ext ? normalized.slice(0, normalized.length - ext.length) : normalized;
   if (WINDOWS_RESERVED_RE.test(stem)) {
-    throw new InvalidPathError(name, 'Windows の予約名(CON, PRN, AUX, NUL, COM1〜9, LPT1〜9)は使えません');
+    throw new InvalidPathError(
+      name,
+      'Windows の予約名(CON, PRN, AUX, NUL, COM1〜9, LPT1〜9)は使えません',
+    );
   }
   return normalized;
 }
@@ -187,7 +199,6 @@ function splitFrontmatter(content: string): { prefix: string; body: string } {
 const WIKILINK_REWRITE_RE = /(!?\[\[)([^\]|#\n]+?)((?:[#|][^\]\n]*)?\]\])/g;
 const MD_LINK_REWRITE_RE = /(!?\[[^\]\n]*\]\()([^)\s\n]+)((?:\s+["'][^)\n]*)?\))/g;
 const EXCLUDED_SCHEME_RE = /^(https?|data|mailto|file):/i;
-
 
 // targetの`?`/`#`以降(クエリ・アンカー)を切り離す。前後空白はtrimする(軽微8。
 // `![[ old.png ]]`のような余白付きtargetも一致判定できるように抽出側・書き換え側で揃える)
@@ -249,6 +260,7 @@ export interface TreeOptions {
   folder?: string;
   recursive?: boolean;
   foldersOnly?: boolean;
+  includeAttachments?: boolean;
 }
 
 type YamlDoc = ReturnType<typeof parseYamlDocument>;
@@ -539,9 +551,7 @@ export function frontmatterStatusOf(content: string): 'ok' | 'none' | 'invalid' 
     if (isMap(parsed.contents)) {
       const hasInvalidKey = parsed.contents.items.some(
         (p) =>
-          !isScalar(p.key) ||
-          p.key.value === null ||
-          !String(p.key.value).normalize('NFC').trim(),
+          !isScalar(p.key) || p.key.value === null || !String(p.key.value).normalize('NFC').trim(),
       );
       if (hasInvalidKey) return 'invalid';
     }
@@ -606,10 +616,7 @@ export function extractLeadingFrontmatter(body: string): {
 const OBSIDIAN_EMBED_RE = /!\[\[([^\]|#\n]+?)(?:[#|][^\]\n]*)?\]\]/g;
 const MARKDOWN_IMG_RE = /!\[[^\]\n]*\]\(([^)\s\n]+)(?:\s+["'][^)\n]*)?\)/g;
 
-function extractAttachmentFilenames(
-  body: string,
-  extensions: ReadonlySet<string>,
-): string[] {
+function extractAttachmentFilenames(body: string, extensions: ReadonlySet<string>): string[] {
   const result = new Set<string>();
   const consider = (raw: string) => {
     const target = raw.trim();
@@ -636,10 +643,7 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 function referencesFilename(content: string, filename: string): boolean {
-  const re = new RegExp(
-    `(?:^|[^\\w\\-./])${escapeRegex(filename)}(?![\\w\\-.])`,
-    'u',
-  );
+  const re = new RegExp(`(?:^|[^\\w\\-./])${escapeRegex(filename)}(?![\\w\\-.])`, 'u');
   return re.test(content);
 }
 
@@ -724,10 +728,7 @@ export class DocService {
 
   // アトミック書き込み: 同一ディレクトリの一時ファイルに書いてからrename
   private async writeAtomic(abs: string, content: string | Buffer): Promise<void> {
-    const tmp = path.join(
-      path.dirname(abs),
-      `.tsumiwiki-tmp-${randomBytes(6).toString('hex')}`,
-    );
+    const tmp = path.join(path.dirname(abs), `.tsumiwiki-tmp-${randomBytes(6).toString('hex')}`);
     await writeFile(tmp, content);
     await rename(tmp, abs);
   }
@@ -740,6 +741,10 @@ export class DocService {
     const folders: string[] = [];
     await this.walkFolders(folder, folders, recursive);
     const docs = options.foldersOnly ? [] : this.queryTreeDocs(folder, recursive);
+    if (options.includeAttachments && !options.foldersOnly) {
+      const attachments = this.queryTreeAttachments(folder, recursive);
+      return { folder, folders: folders.sort(), docs, attachments };
+    }
     return { folder, folders: folders.sort(), docs };
   }
 
@@ -784,7 +789,9 @@ export class DocService {
     // 大文字小文字の厳密一致確認（macOS対策）: 階層ごとに readdir して NFC 厳密一致を確認
     let currentRel = '';
     for (const seg of parts) {
-      const currentAbs = currentRel ? resolveInLibrary(this.libraryPath, currentRel) : this.libraryPath;
+      const currentAbs = currentRel
+        ? resolveInLibrary(this.libraryPath, currentRel)
+        : this.libraryPath;
       const dirEntries = await readdir(currentAbs);
       const matched = dirEntries.some((e) => e.normalize('NFC') === seg);
       if (!matched) {
@@ -801,11 +808,15 @@ export class DocService {
     if (folder === '') {
       if (recursive) {
         rows = this.db
-          .prepare('SELECT doc_path, title, folder, updated_at FROM doc_index ORDER BY folder, title')
+          .prepare(
+            'SELECT doc_path, title, folder, updated_at FROM doc_index ORDER BY folder, title',
+          )
           .all();
       } else {
         rows = this.db
-          .prepare("SELECT doc_path, title, folder, updated_at FROM doc_index WHERE folder = '' ORDER BY folder, title")
+          .prepare(
+            "SELECT doc_path, title, folder, updated_at FROM doc_index WHERE folder = '' ORDER BY folder, title",
+          )
           .all();
       }
     } else {
@@ -817,7 +828,9 @@ export class DocService {
           .all({ f: folder, p: `${folder}/` });
       } else {
         rows = this.db
-          .prepare('SELECT doc_path, title, folder, updated_at FROM doc_index WHERE folder = ? ORDER BY folder, title')
+          .prepare(
+            'SELECT doc_path, title, folder, updated_at FROM doc_index WHERE folder = ? ORDER BY folder, title',
+          )
           .all(folder);
       }
     }
@@ -830,6 +843,51 @@ export class DocService {
         folder: row.folder,
         updatedAt: row.updated_at,
       } satisfies DocSummary;
+    });
+  }
+
+  // attachment_index からツリー表示用の添付ファイル一覧を取得する(#318)。
+  // LIKE ワイルドカード(% や _)による誤一致を避けるため queryTreeDocs と同じく substr で判定する
+  private queryTreeAttachments(folder: string, recursive: boolean): AttachmentSummary[] {
+    let rows: unknown[];
+    if (folder === '') {
+      if (recursive) {
+        rows = this.db
+          .prepare(
+            'SELECT rel_path, name, folder, updated_at FROM attachment_index ORDER BY folder, name',
+          )
+          .all();
+      } else {
+        rows = this.db
+          .prepare(
+            "SELECT rel_path, name, folder, updated_at FROM attachment_index WHERE folder = '' ORDER BY folder, name",
+          )
+          .all();
+      }
+    } else {
+      if (recursive) {
+        rows = this.db
+          .prepare(
+            'SELECT rel_path, name, folder, updated_at FROM attachment_index WHERE folder = @f OR substr(folder, 1, length(@p)) = @p ORDER BY folder, name',
+          )
+          .all({ f: folder, p: `${folder}/` });
+      } else {
+        rows = this.db
+          .prepare(
+            'SELECT rel_path, name, folder, updated_at FROM attachment_index WHERE folder = ? ORDER BY folder, name',
+          )
+          .all(folder);
+      }
+    }
+
+    return rows.map((r) => {
+      const row = r as { rel_path: string; name: string; folder: string; updated_at: string };
+      return {
+        path: row.rel_path,
+        name: row.name,
+        folder: row.folder,
+        updatedAt: row.updated_at,
+      } satisfies AttachmentSummary;
     });
   }
 
@@ -894,11 +952,16 @@ export class DocService {
     return this.indexer.findBacklinks(normalized, options);
   }
 
-
-  async createDoc(folder: string, title: string, author: GitAuthor): Promise<{ path: string; updatedAt: string }> {
+  async createDoc(
+    folder: string,
+    title: string,
+    author: GitAuthor,
+  ): Promise<{ path: string; updatedAt: string }> {
     const folderNorm = folder ? this.validateFolderPath(folder) : '';
     const base = sanitizeTitle(title);
-    const absFolder = folderNorm ? resolveInLibrary(this.libraryPath, folderNorm) : this.libraryPath;
+    const absFolder = folderNorm
+      ? resolveInLibrary(this.libraryPath, folderNorm)
+      : this.libraryPath;
     await mkdir(absFolder, { recursive: true });
 
     // 同名衝突時は「タイトル (2).md」形式で連番を付ける
@@ -931,7 +994,9 @@ export class DocService {
     await mkdir(path.dirname(abs), { recursive: true });
     // LF 統一 + 末尾改行(NFR-COMP-03。他の書き込みパスに合わせる)
     const normalizedContent = content.replace(/\r\n/g, '\n');
-    const finalContent = normalizedContent.endsWith('\n') ? normalizedContent : `${normalizedContent}\n`;
+    const finalContent = normalizedContent.endsWith('\n')
+      ? normalizedContent
+      : `${normalizedContent}\n`;
     const buf = Buffer.from(finalContent, 'utf8');
     // writeExclusive は既存でEEXIST。連番は付けずそのまま「衝突」として上位に伝える
     // (呼び出し側でレース時のフォールバック=既存の再取得ができるように InvalidPath でなく Conflict)
@@ -940,7 +1005,11 @@ export class DocService {
       throw new DocConflictError(`既に存在します: ${normalized}`);
     }
     await this.tryCommit([normalized], `add: ${normalized}`, author);
-    await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
+    await this.tryUpdateIndex(
+      () => this.indexer.indexFile(normalized),
+      { path: normalized },
+      '文書',
+    );
     const st = await stat(abs);
     return { path: normalized, updatedAt: st.mtime.toISOString() };
   }
@@ -980,7 +1049,11 @@ export class DocService {
     }).replace(/\r\n/g, '\n');
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `edit: ${normalized}`, author);
-    await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
+    await this.tryUpdateIndex(
+      () => this.indexer.indexFile(normalized),
+      { path: normalized },
+      '文書',
+    );
     // 明示保存に成功したら本人の下書きは不要になる(FR-EDIT-08)
     this.drafts.removeOwn(normalized, userId);
     const after = await stat(abs);
@@ -1036,7 +1109,11 @@ export class DocService {
     ).replace(/\r\n/g, '\n');
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `edit: ${normalized}`, author);
-    await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
+    await this.tryUpdateIndex(
+      () => this.indexer.indexFile(normalized),
+      { path: normalized },
+      '文書',
+    );
     const after = await stat(abs);
     return {
       updatedAt: after.mtime.toISOString(),
@@ -1057,9 +1134,14 @@ export class DocService {
     baseUpdatedAt?: string,
   ): Promise<{ path: string; updatedAt: string }> {
     const normalized = this.validateDocPath(relPath);
-    const { updatedAt } = await this.serializedMcpEdit(normalized, author, baseUpdatedAt, (current) => ({
-      body: transform(bodyAfterFrontmatter(current)),
-    }));
+    const { updatedAt } = await this.serializedMcpEdit(
+      normalized,
+      author,
+      baseUpdatedAt,
+      (current) => ({
+        body: transform(bodyAfterFrontmatter(current)),
+      }),
+    );
     return { path: normalized, updatedAt };
   }
 
@@ -1189,7 +1271,11 @@ export class DocService {
           }).replace(/\r\n/g, '\n');
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], plan_.commitMessage ?? `edit: ${normalized}`, author);
-    await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
+    await this.tryUpdateIndex(
+      () => this.indexer.indexFile(normalized),
+      { path: normalized },
+      '文書',
+    );
     const after = await stat(abs);
     return { updatedAt: after.mtime.toISOString(), content };
   }
@@ -1268,7 +1354,9 @@ export class DocService {
       if (/^---\r?\n/.test(body)) {
         // 未終端フロントマター等、解釈の割れる文書にはFMを追加しない(二重化防止)
         if (rejectBroken) {
-          throw new FrontmatterUpdateError('フロントマターの解析に失敗しました(未終端または不正な形式)');
+          throw new FrontmatterUpdateError(
+            'フロントマターの解析に失敗しました(未終端または不正な形式)',
+          );
         }
         this.logger?.warn('フロントマターの構造が不明なためタグ更新をスキップしました');
         return body;
@@ -1316,7 +1404,9 @@ export class DocService {
         // strict でも、中身が空のフロントマター(json が null)にはタグを足せるようにする
         (options.strict === true && tags !== undefined && json !== null && json !== undefined)
       ) {
-        throw new FrontmatterUpdateError('フロントマターのルートがマップ(オブジェクト)ではありません');
+        throw new FrontmatterUpdateError(
+          'フロントマターのルートがマップ(オブジェクト)ではありません',
+        );
       }
     }
 
@@ -1383,7 +1473,11 @@ export class DocService {
     await rename(abs, path.join(trashDir, trashName));
     // スコープコミット: 無関係な外部変更を巻き込まない(それらはsyncが拾う)
     await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}`, author);
-    await this.tryUpdateIndex(async () => this.indexer.removeFile(normalized), { path: normalized }, '文書');
+    await this.tryUpdateIndex(
+      async () => this.indexer.removeFile(normalized),
+      { path: normalized },
+      '文書',
+    );
     this.locks.forceRelease(normalized);
     this.drafts.removeAll(normalized);
   }
@@ -1420,11 +1514,9 @@ export class DocService {
     // いる可能性のあるものは他方のリンク維持を優先して現地に残す。
     // 大文字小文字のみの折衝(case-only)は case-insensitive FS で self-exists にぶつかる
     // ため、フォルダ実体は同一とみなして添付走査自体をスキップする。
-    const oldFolder =
-      path.posix.dirname(oldNorm) === '.' ? '' : path.posix.dirname(oldNorm);
+    const oldFolder = path.posix.dirname(oldNorm) === '.' ? '' : path.posix.dirname(oldNorm);
     const folderChanged =
-      folderNorm !== oldFolder &&
-      folderNorm.toLowerCase() !== oldFolder.toLowerCase();
+      folderNorm !== oldFolder && folderNorm.toLowerCase() !== oldFolder.toLowerCase();
     const attachmentMoves: {
       oldRel: string;
       newRel: string;
@@ -1527,9 +1619,9 @@ export class DocService {
     if (candidateFilenames.length === 0) return [];
     const shared = new Set<string>();
     const otherDocs = (
-      this.db
-        .prepare('SELECT doc_path FROM doc_index WHERE doc_path != ?')
-        .all(excludeDocPath) as { doc_path: string }[]
+      this.db.prepare('SELECT doc_path FROM doc_index WHERE doc_path != ?').all(excludeDocPath) as {
+        doc_path: string;
+      }[]
     ).map((r) => r.doc_path);
 
     for (const docPath of otherDocs) {
@@ -1572,9 +1664,7 @@ export class DocService {
   private static sanitizePdfStem(originalName: string): string {
     const basename = path.posix.basename(originalName.normalize('NFC'));
     const stem = basename.slice(0, basename.length - path.posix.extname(basename).length);
-    const sanitized = stem
-      .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
-      .replace(/^\.+/, '');
+    const sanitized = stem.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/^\.+/, '');
     return sanitized === '' ? 'document' : sanitized;
   }
 
@@ -1697,7 +1787,13 @@ export class DocService {
     // codeRangesは各パス実行時点のbodyに対して都度算出する(1つ目のreplaceで文字数が
     // 変わるため、2つ目のreplace時に古いrangesを使うとインデックスがずれてしまう)
     const makeReplacer = (ranges: { start: number; end: number }[]) => {
-      return (full: string, open: string, target: string, close: string, offset: number): string => {
+      return (
+        full: string,
+        open: string,
+        target: string,
+        close: string,
+        offset: number,
+      ): string => {
         if (isWithinCode(ranges, offset + open.length)) return full;
         const replaced = rewriteTarget(target);
         return replaced === null ? full : `${open}${replaced}${close}`;
@@ -1754,8 +1850,11 @@ export class DocService {
     // (moveDocの添付ロールバックと同じ流儀。中3)
     const oldBasename = path.posix.basename(normalized);
     const references = await this.findAttachmentReferences(normalized);
-    const rewrittenDocs: { path: string; updatedAt: string; replacements: { from: string; to: string }[] }[] =
-      [];
+    const rewrittenDocs: {
+      path: string;
+      updatedAt: string;
+      replacements: { from: string; to: string }[];
+    }[] = [];
     const backups: { docPath: string; docAbs: string; content: string }[] = [];
     // caseOnly時、一時名への退避が完了した(=元に戻す必要がある)かどうか
     let renamedToTmp = false;
@@ -2107,7 +2206,11 @@ export class DocService {
     const content = await this.contentAt(normalized, rev);
     await this.writeAtomic(abs, content);
     await this.tryCommit([normalized], `restore: ${normalized} @${rev.slice(0, 7)}`, author);
-    await this.tryUpdateIndex(() => this.indexer.indexFile(normalized), { path: normalized }, '文書');
+    await this.tryUpdateIndex(
+      () => this.indexer.indexFile(normalized),
+      { path: normalized },
+      '文書',
+    );
     this.drafts.removeOwn(normalized, userId);
     const after = await stat(abs);
     return { updatedAt: after.mtime.toISOString() };
@@ -2125,16 +2228,11 @@ export class DocService {
   ): Promise<{ path: string; updatedAt: string }> {
     const normalized = this.validateDocPath(relPath);
     const content = await this.contentAt(normalized, rev);
-    const { updatedAt } = await this.serializedMcpEdit(
-      normalized,
-      author,
-      baseUpdatedAt,
-      () => ({
-        body: '',
-        rawContent: content,
-        commitMessage: `restore: ${normalized} @${rev.slice(0, 7).toLowerCase()}`,
-      }),
-    );
+    const { updatedAt } = await this.serializedMcpEdit(normalized, author, baseUpdatedAt, () => ({
+      body: '',
+      rawContent: content,
+      commitMessage: `restore: ${normalized} @${rev.slice(0, 7).toLowerCase()}`,
+    }));
     return { path: normalized, updatedAt };
   }
 
@@ -2224,7 +2322,11 @@ export class DocService {
       'utf8',
     );
     await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}/`, author);
-    await this.tryUpdateIndex(() => this.indexer.scanAll(), { path: normalized }, 'フォルダ配下の全走査');
+    await this.tryUpdateIndex(
+      () => this.indexer.scanAll(),
+      { path: normalized },
+      'フォルダ配下の全走査',
+    );
     this.locks.removeUnder(normalized);
     this.drafts.removeUnder(normalized);
   }

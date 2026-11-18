@@ -69,7 +69,10 @@ describe('文書CRUD', () => {
       '議事録/週次ミーティング.md',
     );
 
-    const doc = await api('GET', '/api/docs?path=' + encodeURIComponent('議事録/週次ミーティング.md'));
+    const doc = await api(
+      'GET',
+      '/api/docs?path=' + encodeURIComponent('議事録/週次ミーティング.md'),
+    );
     expect(doc.statusCode).toBe(200);
     expect(doc.json().body.trim()).toBe(''); // 本文にフロントマターが混ざらない
     expect(doc.json().frontmatter.created).toBeTruthy();
@@ -934,7 +937,11 @@ describe('レビュー指摘の回帰テスト', () => {
   }, 20_000);
 
   it('CRLF文書を保存するとLFに統一される(NFR-COMP-03)', async () => {
-    await writeFile(join(lib, 'CRLF文書.md'), '---\r\ntags: [win]\r\n---\r\n\r\n本文行1\r\n本文行2\r\n', 'utf8');
+    await writeFile(
+      join(lib, 'CRLF文書.md'),
+      '---\r\ntags: [win]\r\n---\r\n\r\n本文行1\r\n本文行2\r\n',
+      'utf8',
+    );
     await app.indexerService.indexFile('CRLF文書.md');
 
     const got = await api('GET', `/api/docs?path=${encodeURIComponent('CRLF文書.md')}`);
@@ -976,7 +983,12 @@ describe('レビュー指摘の回帰テスト', () => {
     await api('DELETE', `/api/docs?path=${encodeURIComponent(created.json().path)}`);
 
     const { simpleGit } = await import('simple-git');
-    const show = await simpleGit({ baseDir: lib }).raw(['show', '--name-status', '--pretty=format:', 'HEAD']);
+    const show = await simpleGit({ baseDir: lib }).raw([
+      'show',
+      '--name-status',
+      '--pretty=format:',
+      'HEAD',
+    ]);
     expect(show).toContain('.trash/コミット確認.md');
   }, 20_000);
 
@@ -997,7 +1009,9 @@ describe('文書側索引反映のbest-effort化 (issue #203)', () => {
     const docPath = created.json().path;
     const got = await api('GET', `/api/docs?path=${encodeURIComponent(docPath)}`);
 
-    vi.spyOn(app.indexerService, 'indexFile').mockRejectedValueOnce(new Error('索引DB書き込み失敗'));
+    vi.spyOn(app.indexerService, 'indexFile').mockRejectedValueOnce(
+      new Error('索引DB書き込み失敗'),
+    );
 
     const saved = await saveDoc({
       path: docPath,
@@ -1092,3 +1106,65 @@ describe('文書側索引反映のbest-effort化 (issue #203)', () => {
   });
 });
 
+describe('GET /api/tree の添付ファイル一覧 (#318)', () => {
+  it('AT-01: インデックス済みの画像・PDFを attachments として返し、includeAttachments 未指定時は返さない', async () => {
+    await api('POST', '/api/folders', { path: 'a' });
+    await api('POST', '/api/folders', { path: 'a/sub' });
+    await api('POST', '/api/folders', { path: 'a%b' });
+    await api('POST', '/api/docs', { folder: 'a', title: 'ノート' });
+
+    const dummyPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await writeFile(join(lib, 'root.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>', 'utf8');
+    await writeFile(join(lib, 'a', 'fig.png'), dummyPng);
+    await writeFile(join(lib, 'a', 'sub', 'spec.pdf'), '%PDF-1.4\n', 'utf8');
+    await writeFile(join(lib, 'a%b', 'other.png'), dummyPng);
+
+    await app.indexerService.indexAttachment('root.svg');
+    await app.indexerService.indexAttachment('a/fig.png');
+    await app.indexerService.indexAttachment('a/sub/spec.pdf');
+    await app.indexerService.indexAttachment('a%b/other.png');
+
+    // GET /api/tree は attachments を含む
+    const res = await api('GET', '/api/tree');
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      attachments?: Array<{ path: string; name: string; folder: string; updatedAt: string }>;
+    };
+    expect(body.attachments).toBeDefined();
+    expect(body.attachments?.map((att) => att.path)).toEqual(
+      expect.arrayContaining(['root.svg', 'a/fig.png', 'a/sub/spec.pdf', 'a%b/other.png']),
+    );
+    const fig = body.attachments?.find((att) => att.path === 'a/fig.png');
+    expect(fig).toMatchObject({ path: 'a/fig.png', name: 'fig.png', folder: 'a' });
+    expect(fig?.updatedAt).toBeTruthy();
+
+    // folder 指定 + recursive: true で a%b へ LIKE 誤爆しない
+    const subRecursive = await app.docService.getTree({
+      folder: 'a',
+      recursive: true,
+      includeAttachments: true,
+    });
+    expect(subRecursive.attachments?.map((att) => att.path).sort()).toEqual([
+      'a/fig.png',
+      'a/sub/spec.pdf',
+    ]);
+
+    // folder 指定 + recursive: false は直下のみ
+    const subShallow = await app.docService.getTree({
+      folder: 'a',
+      recursive: false,
+      includeAttachments: true,
+    });
+    expect(subShallow.attachments?.map((att) => att.path)).toEqual(['a/fig.png']);
+
+    // foldersOnly: true または includeAttachments 未指定では attachments プロパティを含めない
+    const foldersOnlyTree = await app.docService.getTree({
+      foldersOnly: true,
+      includeAttachments: true,
+    });
+    expect('attachments' in foldersOnlyTree).toBe(false);
+
+    const mcpCompatTree = await app.docService.getTree();
+    expect('attachments' in mcpCompatTree).toBe(false);
+  }, 20_000);
+});

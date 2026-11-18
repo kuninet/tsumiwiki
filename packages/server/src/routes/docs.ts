@@ -58,8 +58,10 @@ export async function handling<T>(
 
 export function registerDocRoutes(app: FastifyInstance): void {
   app.get('/api/tree', async () => {
-    const { folders, docs } = await app.docService.getTree();
-    return { folders, docs };
+    const { folders, docs, attachments } = await app.docService.getTree({
+      includeAttachments: true,
+    });
+    return { folders, docs, attachments };
   });
 
   app.get('/api/docs', async (req, reply) => {
@@ -77,7 +79,6 @@ export function registerDocRoutes(app: FastifyInstance): void {
     }
     return handling(reply, () => app.docService.getBacklinks(docPath));
   });
-
 
   app.post('/api/docs', async (req, reply) => {
     const parsed = createDocRequestSchema.safeParse(req.body);

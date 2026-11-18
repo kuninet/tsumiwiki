@@ -18,6 +18,7 @@ describe('user-settings', () => {
       rightPanelTab: 'backlinks',
       backlinksSort: 'updated-desc',
       followActiveDocInTree: true,
+      showAttachmentsInTree: false,
     });
     useUserSettingsStore.persist.clearStorage();
   });
@@ -240,6 +241,43 @@ describe('user-settings', () => {
 
       await useUserSettingsStore.persist.rehydrate();
       expect(useUserSettingsStore.getState().followActiveDocInTree).toBe(true);
+    });
+  });
+
+  describe('showAttachmentsInTree (#318)', () => {
+    it('AT-02-1: 既定値は false で、キー欠落データの rehydrate 時も false にフォールバックする', async () => {
+      expect(useUserSettingsStore.getState().showAttachmentsInTree).toBe(false);
+
+      useUserSettingsStore.setState({ showAttachmentsInTree: true });
+      localStorage.setItem(
+        'tsumiwiki-user-settings',
+        JSON.stringify({ state: { contentWidth: 'wide' }, version: 0 }),
+      );
+      await useUserSettingsStore.persist.rehydrate();
+      expect(useUserSettingsStore.getState().showAttachmentsInTree).toBe(false);
+    });
+
+    it('AT-02-2: toggleShowAttachmentsInTree で切り替えられ、localStorage へ保存・復元される', async () => {
+      useUserSettingsStore.getState().toggleShowAttachmentsInTree();
+      expect(useUserSettingsStore.getState().showAttachmentsInTree).toBe(true);
+
+      const raw = localStorage.getItem('tsumiwiki-user-settings');
+      expect(raw).not.toBeNull();
+      expect(JSON.parse(raw!).state.showAttachmentsInTree).toBe(true);
+
+      useUserSettingsStore.setState({ showAttachmentsInTree: false });
+      localStorage.setItem('tsumiwiki-user-settings', raw!);
+      await useUserSettingsStore.persist.rehydrate();
+      expect(useUserSettingsStore.getState().showAttachmentsInTree).toBe(true);
+    });
+
+    it('AT-02-3: 不正値を seed して rehydrate すると既定値 false にフォールバックする', async () => {
+      localStorage.setItem(
+        'tsumiwiki-user-settings',
+        JSON.stringify({ state: { showAttachmentsInTree: 'yes' }, version: 0 }),
+      );
+      await useUserSettingsStore.persist.rehydrate();
+      expect(useUserSettingsStore.getState().showAttachmentsInTree).toBe(false);
     });
   });
 });

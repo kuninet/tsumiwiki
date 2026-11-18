@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { LocateFixed } from 'lucide-react';
+import { LocateFixed, Paperclip } from 'lucide-react';
 import type React from 'react';
 import { type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -19,13 +19,17 @@ import {
   useTree,
 } from '../api/docs';
 import { ApiRequestError } from '../api/client';
-import { buildTree, parentOf, type TreeNode } from '../lib/build-tree';
+import { getAttachmentGeneration, withCacheBuster } from '../lib/attachment-events';
+import { type AttachmentNode, buildTree, parentOf, type TreeNode } from '../lib/build-tree';
 import { copyTextWithToast } from '../lib/clipboard';
 import { docUrl } from '../lib/doc-path';
 import { confirmNavigationIfDirty } from '../lib/navigation-guard';
+import { toFilesUrl } from '../lib/resolve-embed-src';
 import { useTabsStore } from '../stores/tabs';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
+import { useUserSettingsStore } from '../stores/user-settings';
+import { AttachmentLightbox } from './AttachmentLightbox';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { PromptDialog } from './PromptDialog';
@@ -36,7 +40,8 @@ import { PromptDialog } from './PromptDialog';
 type MenuTarget =
   | { type: 'root' }
   | { type: 'folder'; path: string; name: string }
-  | { type: 'doc'; path: string; folder: string; title: string };
+  | { type: 'doc'; path: string; folder: string; title: string }
+  | { type: 'attachment'; path: string; name: string; kind: 'image' | 'pdf' };
 
 type DialogState =
   | { kind: 'createDoc'; folder: string }
@@ -108,6 +113,8 @@ export function FolderTree() {
   const createDocRequest = useUIStore((s) => s.createDocRequest);
   const revealRequest = useUIStore((s) => s.revealRequest);
   const consumeRevealRequest = useUIStore((s) => s.consumeRevealRequest);
+  const showAttachmentsInTree = useUserSettingsStore((s) => s.showAttachmentsInTree);
+  const toggleShowAttachmentsInTree = useUserSettingsStore((s) => s.toggleShowAttachmentsInTree);
 
   // AppShell の「+ 新規文書」/ Ctrl+N ショートカット / その他外部要求(#137)を拾って
   // 新規文書ダイアログを開く。初期フォルダは request payload に載って来る。
@@ -132,6 +139,7 @@ export function FolderTree() {
   const [menu, setMenu] = useState<{ x: number; y: number; target: MenuTarget } | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<AttachmentNode | null>(null);
   const [focusedPath, setFocusedPath] = useState<string | null>(null);
   // D&D 移動用の状態(#71)。draggedItem はドラッグ元・dragOverPath はハイライト対象。
   // dragOverPath は '' = ルート、'foo/bar' = 特定フォルダ、null = ハイライトなし
@@ -156,7 +164,7 @@ export function FolderTree() {
     prevRenamingRef.current = renamingPath;
     if (prev && !renamingPath) {
       // rename 終了。tree が非同期に更新されるまで path が変わっている可能性あり。
-      // 新 path(focusAfterRenameRef)→ 旧 path の順で 2 tick 試して、最初に見つかった
+      // 新 path(focusAfterRenameRef)→ 旧 path の順で 2 tick 試してみて、最初に見つかった
       // 行に focus を戻す。どちらも取れなければあきらめる(実害なしで矢印キーで戻せる)
       const newPath = focusAfterRenameRef.current;
       focusAfterRenameRef.current = null;
@@ -193,7 +201,10 @@ export function FolderTree() {
     consumeRevealRequest(revealRequest.nonce);
   }, [revealRequest, tree, consumeRevealRequest]);
 
-  const nodes = tree ? buildTree(tree) : [];
+  const nodes = useMemo(
+    () => (tree ? buildTree(tree, { showAttachments: showAttachmentsInTree }) : []),
+    [tree, showAttachmentsInTree],
+  );
   const flat = useMemo(() => flattenVisible(nodes, expandedFolders), [nodes, expandedFolders]);
 
   // #324: 「現在の文書をツリーで表示」ボタンの有効条件。
@@ -228,9 +239,37 @@ export function FolderTree() {
   }
 
   function menuItemsFor(target: MenuTarget): ContextMenuItem[] {
+    if (target.type === 'root') {
+      return [
+        { label: '新規文書', onSelect: () => setDialog({ kind: 'createDoc', folder: '' }) },
+        { label: '新規フォルダ', onSelect: () => setDialog({ kind: 'createFolder', parent: '' }) },
+      ];
+    }
+    if (target.type === 'attachment') {
+      return [
+        {
+          label: 'プレビュー',
+          onSelect: () => {
+            // メニューがアンマウントされた後にライトボックスを閉じた際、元の添付行へフォーカスを戻すため行へフォーカスしてから開く
+            focusEntry(target.path);
+            setPreviewAttachment({
+              type: 'attachment',
+              path: target.path,
+              name: target.name,
+              kind: target.kind,
+              updatedAt: '',
+            });
+          },
+        },
+        {
+          label: 'パスをコピー',
+          onSelect: () => copyTextWithToast(target.path, showToast),
+        },
+      ];
+    }
     // #73: 右クリック対象が選択中で 2件以上選ばれていれば「まとめる」を先頭に出す
     const groupItem: ContextMenuItem | null =
-      target.type !== 'root' && selectedPaths.has(target.path) && selectedPaths.size > 1
+      selectedPaths.has(target.path) && selectedPaths.size > 1
         ? {
             label: `選択したものを新規フォルダに移動(${selectedPaths.size}件)`,
             onSelect: () =>
@@ -241,13 +280,6 @@ export function FolderTree() {
               }),
           }
         : null;
-
-    if (target.type === 'root') {
-      return [
-        { label: '新規文書', onSelect: () => setDialog({ kind: 'createDoc', folder: '' }) },
-        { label: '新規フォルダ', onSelect: () => setDialog({ kind: 'createFolder', parent: '' }) },
-      ];
-    }
     if (target.type === 'folder') {
       const items: ContextMenuItem[] = [
         {
@@ -377,6 +409,7 @@ export function FolderTree() {
   }
   function commitInlineRename(node: TreeNode, newValue: string) {
     setRenamingPath(null);
+    if (node.type === 'attachment') return;
     const trimmed = newValue.trim();
     if (!trimmed) return; // 空はキャンセル扱い(focus は元 path に戻る)
     if (node.type === 'doc') {
@@ -388,7 +421,7 @@ export function FolderTree() {
       const newPath = folder ? `${folder}/${trimmed}.md` : `${trimmed}.md`;
       focusAfterRenameRef.current = newPath;
       performRenameDoc(node.path, folder, trimmed);
-    } else {
+    } else if (node.type === 'folder') {
       if (trimmed === node.name) return;
       const folder = parentOf(node.path);
       const newPath = folder ? `${folder}/${trimmed}` : trimmed;
@@ -567,7 +600,7 @@ export function FolderTree() {
     };
     return paths
       .map((p) => treeByPath.get(p))
-      .filter((n): n is TreeNode => !!n)
+      .filter((n): n is TreeNode => !!n && n.type !== 'attachment')
       .filter((node) => !isDescendantOfSelected(node.path))
       .filter((node) => {
         if (parentOf(node.path) === targetFolderPath) return false;
@@ -588,6 +621,7 @@ export function FolderTree() {
     let failed = 0;
     let lastError: string | null = null;
     for (const node of nodes) {
+      if (node.type === 'attachment') continue;
       try {
         let oldPath: string;
         let newPath: string;
@@ -703,17 +737,27 @@ export function FolderTree() {
 
     if (isShift && lastClickedPath) {
       e.preventDefault();
+      if (node.type === 'attachment') return;
       const startIdx = flat.findIndex((f) => f.node.path === lastClickedPath);
       const endIdx = flat.findIndex((f) => f.node.path === node.path);
       if (startIdx !== -1 && endIdx !== -1) {
         const [lo, hi] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
-        setSelectedPaths(new Set(flat.slice(lo, hi + 1).map((f) => f.node.path)));
+        setSelectedPaths(
+          new Set(
+            flat
+              .slice(lo, hi + 1)
+              .filter((f) => f.node.type !== 'attachment')
+              .map((f) => f.node.path),
+          ),
+        );
       }
       return;
     }
 
     if (isModifier) {
       e.preventDefault();
+      // 添付ファイルは移動対象外のため複数選択には含めない(#318)
+      if (node.type === 'attachment') return;
       setSelectedPaths((prev) => {
         const next = new Set(prev);
         if (next.has(node.path)) next.delete(node.path);
@@ -724,7 +768,16 @@ export function FolderTree() {
       return;
     }
 
-    // 通常クリック: 選択を単一化 + 従来の動作(フォルダ=展開、文書=遷移)
+    // 通常クリック: 添付行はプレビューを開き、選択対象にはしない(#318)
+    if (node.type === 'attachment') {
+      setSelectedPaths(new Set());
+      setLastClickedPath(null);
+      setFocusedPath(node.path);
+      setPreviewAttachment(node);
+      return;
+    }
+
+    // 選択を単一化 + 従来の動作(フォルダ=展開、文書=遷移)
     setSelectedPaths(new Set([node.path]));
     setLastClickedPath(node.path);
     if (node.type === 'folder') {
@@ -775,6 +828,8 @@ export function FolderTree() {
       e.preventDefault();
       if (entry.node.type === 'doc') {
         handleNavigateToDoc(entry.node.path);
+      } else if (entry.node.type === 'attachment') {
+        setPreviewAttachment(entry.node);
       } else {
         toggleFolderExpanded(entry.node.path);
       }
@@ -782,6 +837,7 @@ export function FolderTree() {
     }
     if (e.key === 'F2') {
       e.preventDefault();
+      if (entry.node.type === 'attachment') return;
       // #152: モーダルではなく inline リネームに切替
       startInlineRename(entry.node.path);
       return;
@@ -790,7 +846,7 @@ export function FolderTree() {
       e.preventDefault();
       if (entry.node.type === 'folder') {
         setConfirm({ kind: 'deleteFolder', path: entry.node.path, name: entry.node.name });
-      } else {
+      } else if (entry.node.type === 'doc') {
         setConfirm({ kind: 'deleteDoc', path: entry.node.path, title: entry.node.title });
       }
     }
@@ -835,7 +891,7 @@ export function FolderTree() {
         handleDropTarget('');
       }}
     >
-      <div className="mb-2 flex gap-2">
+      <div className="mb-2 flex gap-1.5">
         <button
           type="button"
           onClick={() => setDialog({ kind: 'createDoc', folder: '' })}
@@ -860,6 +916,25 @@ export function FolderTree() {
           className="flex flex-shrink-0 items-center justify-center rounded border border-line px-2 py-1 text-ink-soft hover:bg-hoverbg disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
         >
           <LocateFixed size={14} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          onClick={toggleShowAttachmentsInTree}
+          aria-label="添付ファイルも表示"
+          aria-pressed={showAttachmentsInTree}
+          title={
+            showAttachmentsInTree
+              ? '添付ファイルも表示中（クリックでノートのみ）'
+              : '添付ファイルも表示（オフ: ノートのみ）'
+          }
+          data-testid="toggle-attachments"
+          className={`flex flex-shrink-0 items-center justify-center rounded border px-2 py-1 ${
+            showAttachmentsInTree
+              ? 'border-accent/50 bg-active text-accent'
+              : 'border-line text-ink-soft hover:bg-hoverbg'
+          }`}
+        >
+          <Paperclip size={14} aria-hidden="true" />
         </button>
       </div>
 
@@ -993,6 +1068,18 @@ export function FolderTree() {
           onCancel={() => setConfirm(null)}
         />
       )}
+
+      {previewAttachment && (
+        <AttachmentLightbox
+          kind={previewAttachment.kind}
+          src={withCacheBuster(
+            toFilesUrl(previewAttachment.path),
+            getAttachmentGeneration(previewAttachment.name),
+          )}
+          alt={previewAttachment.name}
+          onClose={() => setPreviewAttachment(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1056,6 +1143,63 @@ function TreeItem({
   const isSelected = selectedPaths.has(node.path);
   // 選択行(かつ現在文書として色付けされていない)ときは accent-soft で塗る
   const selectedBgClass = isSelected ? 'bg-accent-soft' : '';
+
+  if (node.type === 'attachment') {
+    const parentDropFolder = parentOf(node.path);
+    const canAcceptParentDrop = dnd.draggedPath !== null && dnd.canDropOn(parentDropFolder);
+    const isParentDropTarget = dnd.dragOverPath === parentDropFolder && canAcceptParentDrop;
+    return (
+      <li role="none">
+        <button
+          type="button"
+          role="treeitem"
+          draggable={false}
+          tabIndex={isFocusTarget ? 0 : -1}
+          ref={(el) => registerRow(node.path, el)}
+          style={indent}
+          onClick={(e) => onRowClick(e, node)}
+          onKeyDown={(e) => onKeyDown(e, entry)}
+          onContextMenu={(e) =>
+            onContextMenu(e, {
+              type: 'attachment',
+              path: node.path,
+              name: node.name,
+              kind: node.kind,
+            })
+          }
+          onDragEnter={(e) => {
+            e.stopPropagation();
+            dnd.onDragEnter(parentDropFolder);
+            if (dnd.draggedPath !== null) {
+              e.preventDefault();
+              if (e.dataTransfer) e.dataTransfer.dropEffect = canAcceptParentDrop ? 'move' : 'none';
+            }
+          }}
+          onDragOver={(e) => {
+            if (dnd.draggedPath !== null) {
+              e.stopPropagation();
+              e.preventDefault();
+              if (e.dataTransfer) e.dataTransfer.dropEffect = canAcceptParentDrop ? 'move' : 'none';
+            }
+          }}
+          onDrop={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            dnd.onDrop(parentDropFolder);
+          }}
+          title={node.name}
+          data-testid={`attachment-${node.path}`}
+          className={`flex h-[30px] w-full items-center gap-1 px-2 text-left text-sm text-ink-soft hover:bg-hoverbg focus:outline-none focus-visible:bg-active ${
+            isParentDropTarget ? 'bg-accent-soft' : ''
+          }`}
+        >
+          <span className="inline-block w-3" aria-hidden="true" />
+          <span aria-hidden="true">{node.kind === 'image' ? '🖼️' : '📑'}</span>
+          <span className="truncate">{node.name}</span>
+        </button>
+      </li>
+    );
+  }
 
   const dragHandlers = {
     draggable: true,
