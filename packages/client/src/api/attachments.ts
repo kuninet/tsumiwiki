@@ -14,6 +14,7 @@ import { api } from './client';
 export interface AttachmentResult {
   fileName: string;
   path: string;
+  embedTarget?: string;
 }
 
 export async function uploadAttachment(docPath: string, file: File): Promise<AttachmentResult> {

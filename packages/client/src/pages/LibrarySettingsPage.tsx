@@ -1,5 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
-import type { LibrarySettings } from '@tsumiwiki/shared';
+import {
+  LIBRARY_SETTINGS_DEFAULTS,
+  librarySettingsSchema,
+  normalizeAttachmentFolder,
+  type AttachmentDirMode,
+  type LibrarySettings,
+} from '@tsumiwiki/shared';
 import { useEffect, useState } from 'react';
 import {
   LIBRARY_SETTINGS_QUERY_KEY,
@@ -7,8 +13,42 @@ import {
   useUpdateLibrarySettings,
 } from '../api/library-settings';
 
-// #84 Phase 1: ライブラリ全体のテンプレート・デイリーノート設定編集画面(admin専用)。
+// #84 Phase 1: ライブラリ全体のテンプレート・デイリーノート等設定編集画面(admin専用)。
 // 一般ユーザーからも API 経由で読み取れるが、更新は admin のみ。UI は RequireAdmin で保護。
+
+const ATTACHMENT_MODES: { value: AttachmentDirMode; label: string; description: string }[] = [
+  {
+    value: 'same-folder',
+    label: '文書と同じフォルダ（既定）',
+    description: '各文書と同じフォルダに直接保存します。',
+  },
+  {
+    value: 'vault-folder',
+    label: 'ライブラリ全体で 1 つのフォルダ',
+    description: 'すべての添付を指定した 1 つのフォルダへまとめて保存します。',
+  },
+  {
+    value: 'doc-subfolder',
+    label: '文書のフォルダ直下のサブフォルダ',
+    description: '文書があるフォルダの下にサブフォルダを作って保存します。',
+  },
+];
+
+function previewAttachmentPath(mode: AttachmentDirMode, folder: string): string {
+  const sample = 'image-20261118110000.png';
+  const norm = normalizeAttachmentFolder(folder) || '<フォルダ名>';
+  if (mode === 'same-folder') return `企画/${sample}`;
+  if (mode === 'vault-folder') return `${norm}/${sample}`;
+  return `企画/${norm}/${sample}`;
+}
+
+function validateAttachmentField(form: LibrarySettings | null): string | null {
+  if (!form) return null;
+  const parsed = librarySettingsSchema.safeParse(form);
+  if (parsed.success) return null;
+  const issue = parsed.error.issues.find((i) => i.path[0] === 'attachments');
+  return issue?.message ?? null;
+}
 
 export function LibrarySettingsPage() {
   const { data, isLoading } = useLibrarySettings();
@@ -22,7 +62,12 @@ export function LibrarySettingsPage() {
   }
 
   useEffect(() => {
-    if (data) setForm(data.settings);
+    if (data) {
+      setForm({
+        ...data.settings,
+        attachments: data.settings.attachments ?? LIBRARY_SETTINGS_DEFAULTS.attachments,
+      });
+    }
   }, [data]);
 
   function handleChange<K extends keyof LibrarySettings, F extends keyof LibrarySettings[K]>(
@@ -33,8 +78,10 @@ export function LibrarySettingsPage() {
     setForm((prev) => (prev ? { ...prev, [section]: { ...prev[section], [field]: value } } : prev));
   }
 
+  const attachmentFolderError = validateAttachmentField(form);
+
   function handleSave() {
-    if (!form) return;
+    if (!form || attachmentFolderError) return;
     update.mutate(form);
   }
 
@@ -42,7 +89,7 @@ export function LibrarySettingsPage() {
     <div className="mx-auto max-w-[720px] p-8">
       <h1 className="text-h1 font-bold text-ink">ライブラリ設定</h1>
       <p className="mt-2 text-sm text-ink-faint">
-        テンプレート・デイリーノートの共通設定です。ライブラリ全体で共有されます。
+        テンプレート・デイリーノート・添付ファイルの共通設定です。ライブラリ全体で共有されます。
       </p>
 
       {isLoading && <p className="mt-6 text-sm text-ink-faint">読み込み中...</p>}
@@ -134,11 +181,75 @@ export function LibrarySettingsPage() {
             </label>
           </section>
 
+          <section>
+            <h2 className="text-base font-bold text-ink">添付ファイル</h2>
+            <p className="mt-1 text-xs text-ink-faint">
+              画像や PDF
+              を貼り付け・ドロップしたときの保存先を設定します（既存の添付ファイルは移動しません）。
+            </p>
+            <fieldset className="mt-3 space-y-2">
+              <legend className="text-sm font-medium text-ink-soft">保存先の決め方</legend>
+              {ATTACHMENT_MODES.map((opt) => {
+                const selected = form.attachments.mode === opt.value;
+                return (
+                  <label
+                    key={opt.value}
+                    className={`flex cursor-pointer items-start gap-2.5 rounded border px-3 py-2.5 text-sm transition-colors ${
+                      selected
+                        ? 'border-accent bg-accent/10'
+                        : 'border-line bg-panel-2 hover:border-accent/60'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="attachment-dir-mode"
+                      value={opt.value}
+                      checked={selected}
+                      onChange={() => handleChange('attachments', 'mode', opt.value)}
+                      className="mt-0.5 accent-accent"
+                    />
+                    <span>
+                      <span className="block font-medium text-ink">{opt.label}</span>
+                      <span className="block text-xs text-ink-faint">{opt.description}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
+
+            <label className="mt-3 block text-sm font-medium text-ink-soft">
+              添付フォルダ名
+              <input
+                type="text"
+                value={form.attachments.folder}
+                onChange={(e) => handleChange('attachments', 'folder', e.target.value)}
+                disabled={form.attachments.mode === 'same-folder'}
+                placeholder="attachments"
+                className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+              />
+            </label>
+            {attachmentFolderError && (
+              <p data-testid="attachment-folder-error" className="mt-1 text-xs text-danger">
+                {attachmentFolderError}
+              </p>
+            )}
+
+            <p
+              data-testid="attachment-path-preview"
+              className="mt-2 rounded bg-panel-2 px-3 py-2 text-xs text-ink-soft"
+            >
+              例: <span className="font-mono">企画/メモ.md</span> に画像を添付 →{' '}
+              <span className="font-mono font-medium text-ink">
+                {previewAttachmentPath(form.attachments.mode, form.attachments.folder)}
+              </span>
+            </p>
+          </section>
+
           <div className="flex justify-end gap-2">
             <button
               type="button"
               onClick={handleSave}
-              disabled={update.isPending}
+              disabled={update.isPending || attachmentFolderError !== null}
               className="rounded bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
               保存

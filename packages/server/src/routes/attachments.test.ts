@@ -1448,3 +1448,167 @@ describe('保存時リサイズ Opusレビュー2周目の回帰テスト(issue 
     expect(saved.equals(adversarial)).toBe(true);
   }, 20_000);
 });
+
+describe('ライブラリ設定による添付保存先モード切替 (issue #160)', () => {
+  const upload = (name: string, content: Buffer, target = docPath) => {
+    const mp = multipart({}, { name, content });
+    return app.inject({
+      method: 'POST',
+      url: `/api/attachments?docPath=${encodeURIComponent(target)}`,
+      headers: { ...CSRF, cookie, ...mp.headers },
+      payload: mp.payload,
+    });
+  };
+
+  it('same-folder -> vault-folder -> doc-subfolder の切替がサーバー再起動なしで即座に反映され /api/embed で取得できる', async () => {
+    // ルート直下文書も作成しておく
+    const createdRoot = await app.inject({
+      method: 'POST',
+      url: '/api/docs',
+      headers: { ...CSRF, cookie },
+      payload: { folder: '', title: 'トップ' },
+    });
+    const rootDoc = createdRoot.json().path as string;
+
+    // 管理者でログイン
+    app.userService.create({
+      username: 'admin',
+      displayName: '管理者',
+      password: 'p',
+      role: 'admin',
+    });
+    const loginAdmin = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: CSRF,
+      payload: { username: 'admin', password: 'p' },
+    });
+    const adminCookie = (loginAdmin.headers['set-cookie'] as string).split(';')[0];
+
+    const putSettings = (attachments: { mode: string; folder: string }) =>
+      app.inject({
+        method: 'PUT',
+        url: '/api/library/settings',
+        headers: { ...CSRF, cookie: adminCookie },
+        payload: {
+          templates: { folder: '_templates' },
+          dailyNotes: { folder: '日記', template: '', filenamePattern: 'YYYY-MM-DD' },
+          attachments,
+        },
+      });
+
+    // 1. same-folder（初期状態）: サブフォルダ文書は 議事録/<file>、ルート文書は <file>
+    const sameRes = await upload('same.png', PNG, docPath);
+    expect(sameRes.statusCode).toBe(201);
+    expect(sameRes.json().path).toBe(`議事録/${sameRes.json().fileName}`);
+
+    // 2. vault-folder (attachments): いずれの文書でも attachments/<file>
+    const vaultSetRes = await putSettings({ mode: 'vault-folder', folder: 'attachments' });
+    expect(vaultSetRes.statusCode).toBe(200);
+    const vaultRes1 = await upload('vault1.png', PNG, docPath);
+    expect(vaultRes1.statusCode).toBe(201);
+    expect(vaultRes1.json().path).toBe(`attachments/${vaultRes1.json().fileName}`);
+
+    const vaultRes2 = await upload('vault2.png', PNG, rootDoc);
+    expect(vaultRes2.statusCode).toBe(201);
+    expect(vaultRes2.json().path).toBe(`attachments/${vaultRes2.json().fileName}`);
+
+    // 3. doc-subfolder (media): サブフォルダ文書は 議事録/media/<file>、ルート文書は media/<file>
+    expect((await putSettings({ mode: 'doc-subfolder', folder: 'media' })).statusCode).toBe(200);
+    const subRes1 = await upload('sub1.png', PNG, docPath);
+    expect(subRes1.statusCode).toBe(201);
+    expect(subRes1.json().path).toBe(`議事録/media/${subRes1.json().fileName}`);
+
+    const subRes2 = await upload('sub2.png', PNG, rootDoc);
+    expect(subRes2.statusCode).toBe(201);
+    expect(subRes2.json().path).toBe(`media/${subRes2.json().fileName}`);
+
+    // いずれも GET /api/embed で 200 取得できる
+    for (const [targetFile, fromDoc] of [
+      [sameRes.json().embedTarget, docPath],
+      [vaultRes1.json().embedTarget, docPath],
+      [vaultRes2.json().embedTarget, rootDoc],
+      [subRes1.json().embedTarget, docPath],
+      [subRes2.json().embedTarget, rootDoc],
+    ] as const) {
+      const embedRes = await app.inject({
+        method: 'GET',
+        url: `/api/embed?target=${encodeURIComponent(targetFile)}&from=${encodeURIComponent(fromDoc)}`,
+        headers: { cookie },
+      });
+      expect(embedRes.statusCode).toBe(200);
+      expect(embedRes.rawPayload.equals(PNG)).toBe(true);
+    }
+  }, 30_000);
+
+  it('既存と同名の PDF を doc-subfolder / vault-folder に追加した場合でも embedTarget が新ファイルへ解決される', async () => {
+    app.userService.create({
+      username: 'admin',
+      displayName: '管理者',
+      password: 'p',
+      role: 'admin',
+    });
+    const loginAdmin = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: CSRF,
+      payload: { username: 'admin', password: 'p' },
+    });
+    const adminCookie = (loginAdmin.headers['set-cookie'] as string).split(';')[0];
+
+    const putSettings = (attachments: { mode: string; folder: string }) =>
+      app.inject({
+        method: 'PUT',
+        url: '/api/library/settings',
+        headers: { ...CSRF, cookie: adminCookie },
+        payload: {
+          templates: { folder: '_templates' },
+          dailyNotes: { folder: '日記', template: '', filenamePattern: 'YYYY-MM-DD' },
+          attachments,
+        },
+      });
+
+    // 1. same-folder 時に 議事録/見積書.pdf を作成
+    const oldPdf = Buffer.from('%PDF-1.4\n% old-same-folder\n%%EOF');
+    const first = await upload('見積書.pdf', oldPdf, docPath);
+    expect(first.statusCode).toBe(201);
+    expect(first.json().path).toBe('議事録/見積書.pdf');
+    expect(first.json().embedTarget).toBe('見積書.pdf');
+
+    // 2. doc-subfolder (attachments) へ切替えて同名の 見積書.pdf を追加
+    expect((await putSettings({ mode: 'doc-subfolder', folder: 'attachments' })).statusCode).toBe(
+      200,
+    );
+    const newSubPdf = Buffer.from('%PDF-1.4\n% new-doc-subfolder\n%%EOF');
+    const second = await upload('見積書.pdf', newSubPdf, docPath);
+    expect(second.statusCode).toBe(201);
+    expect(second.json().path).toBe('議事録/attachments/見積書.pdf');
+    expect(second.json().embedTarget).toBe('attachments/見積書.pdf');
+
+    const resolvedSub = await app.inject({
+      method: 'GET',
+      url: `/api/embed?target=${encodeURIComponent(second.json().embedTarget)}&from=${encodeURIComponent(docPath)}`,
+      headers: { cookie },
+    });
+    expect(resolvedSub.statusCode).toBe(200);
+    expect(resolvedSub.rawPayload.equals(newSubPdf)).toBe(true);
+
+    // 3. vault-folder (shared-files) へ切替えて同名の 見積書.pdf を追加
+    expect((await putSettings({ mode: 'vault-folder', folder: 'shared-files' })).statusCode).toBe(
+      200,
+    );
+    const newVaultPdf = Buffer.from('%PDF-1.4\n% new-vault-folder\n%%EOF');
+    const third = await upload('見積書.pdf', newVaultPdf, docPath);
+    expect(third.statusCode).toBe(201);
+    expect(third.json().path).toBe('shared-files/見積書.pdf');
+    expect(third.json().embedTarget).toBe('shared-files/見積書.pdf');
+
+    const resolvedVault = await app.inject({
+      method: 'GET',
+      url: `/api/embed?target=${encodeURIComponent(third.json().embedTarget)}&from=${encodeURIComponent(docPath)}`,
+      headers: { cookie },
+    });
+    expect(resolvedVault.statusCode).toBe(200);
+    expect(resolvedVault.rawPayload.equals(newVaultPdf)).toBe(true);
+  }, 30_000);
+});

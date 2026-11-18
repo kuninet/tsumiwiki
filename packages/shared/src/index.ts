@@ -247,7 +247,7 @@ export const tagCountSchema = z.object({
 });
 export type TagCount = z.infer<typeof tagCountSchema>;
 
-// ---- ライブラリ設定(#84 テンプレート機能・デイリーノート) ----
+// ---- ライブラリ設定(#84 テンプレート機能・デイリーノート・#160 添付ファイル保存先) ----
 // ライブラリルート直下の .tsumiwiki/settings.yaml に保存し、gitでバックアップする
 // 全社(=ライブラリ)共通の設定。個人別化は将来検討(ライブラリを個人別にした段階)
 
@@ -275,25 +275,117 @@ function isSafeFilenamePattern(v: string): boolean {
   return true;
 }
 
-export const librarySettingsSchema = z.object({
-  templates: z.object({
-    // .md をテンプレとして扱うフォルダ(ライブラリ直下からの相対パス。空でルート)
-    folder: z.string().refine(isSafeSubPath, 'フォルダパスが不正です'),
-  }),
-  dailyNotes: z.object({
-    // 「今日の日誌」を作る先のフォルダ
-    folder: z.string().refine(isSafeSubPath, 'フォルダパスが不正です'),
-    // デイリーノートに適用するテンプレのパス(空文字で空白ノート作成)
-    template: z.string().refine(isSafeSubPath, 'テンプレートパスが不正です'),
-    // ファイル名パターン(日付フォーマット)。既定 'YYYY-MM-DD'。{{...}} 変数は不可
-    filenamePattern: z.string().refine(isSafeFilenamePattern, 'ファイル名パターンが不正です'),
-  }),
-});
+const WINDOWS_RESERVED_NAME_RE = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
+
+export const ATTACHMENT_FOLDER_DEFAULT = 'attachments';
+
+export const attachmentDirModeSchema = z.enum(['same-folder', 'vault-folder', 'doc-subfolder']);
+export type AttachmentDirMode = z.infer<typeof attachmentDirModeSchema>;
+
+// 添付フォルダパスの正規化(NFC・前後空白と末尾スラッシュの除去)
+export function normalizeAttachmentFolder(raw: string): string {
+  return raw.normalize('NFC').trim().replace(/\/+$/, '');
+}
+
+// 添付保存先フォルダとしての安全性を検証する(トラバーサル・隠しフォルダ・禁止文字・予約名を禁止)
+export function isSafeAttachmentFolder(raw: string): boolean {
+  const v = normalizeAttachmentFolder(raw);
+  if (!v) return false;
+  if (v.startsWith('/')) return false;
+  if (/[\\:*?"<>|\u0000-\u001f\u007f]/.test(v)) return false;
+  const segments = v.split('/');
+  return segments.every(
+    (s) =>
+      s !== '' &&
+      s !== '.' &&
+      s !== '..' &&
+      !s.startsWith('.') &&
+      !/[. ]$/.test(s) &&
+      !WINDOWS_RESERVED_NAME_RE.test(s.split('.')[0] ?? ''),
+  );
+}
+
+export const attachmentSettingsSchema = z
+  .object({
+    mode: attachmentDirModeSchema,
+    folder: z.string().transform((v) => normalizeAttachmentFolder(v)),
+  })
+  .superRefine((val, ctx) => {
+    if (val.mode === 'same-folder') {
+      if (val.folder !== '' && !isSafeAttachmentFolder(val.folder)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['folder'],
+          message: '添付フォルダパスが不正です',
+        });
+      }
+      return;
+    }
+    if (!isSafeAttachmentFolder(val.folder)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['folder'],
+        message: '添付フォルダパスが不正です（空欄・ドット始まり・禁止文字・.. は使用できません）',
+      });
+    }
+  });
+export type AttachmentSettings = z.infer<typeof attachmentSettingsSchema>;
+
+// 環境変数 ATTACHMENT_DIR_MODE の値を LibrarySettings.attachments 形式へ変換する(#160)
+export function attachmentSettingsFromEnv(mode: string): AttachmentSettings {
+  if (mode === 'same-folder') {
+    return { mode: 'same-folder', folder: ATTACHMENT_FOLDER_DEFAULT };
+  }
+  const normalized = normalizeAttachmentFolder(mode);
+  return {
+    mode: 'vault-folder',
+    folder:
+      normalized && isSafeAttachmentFolder(normalized) ? normalized : ATTACHMENT_FOLDER_DEFAULT,
+  };
+}
+
+export const librarySettingsSchema = z
+  .object({
+    templates: z.object({
+      // .md をテンプレとして扱うフォルダ(ライブラリ直下からの相対パス。空でルート)
+      folder: z.string().refine(isSafeSubPath, 'フォルダパスが不正です'),
+    }),
+    dailyNotes: z.object({
+      // 「今日の日誌」を作る先のフォルダ
+      folder: z.string().refine(isSafeSubPath, 'フォルダパスが不正です'),
+      // デイリーノートに適用するテンプレのパス(空文字で空白ノート作成)
+      template: z.string().refine(isSafeSubPath, 'テンプレートパスが不正です'),
+      // ファイル名パターン(日付フォーマット)。既定 'YYYY-MM-DD'。{{...}} 変数は不可
+      filenamePattern: z.string().refine(isSafeFilenamePattern, 'ファイル名パターンが不正です'),
+    }),
+    // 既存の settings.yaml / 旧クライアントとの後方互換のため省略時は既定値へフォールバックする
+    attachments: attachmentSettingsSchema.default(() => ({
+      mode: 'same-folder' as const,
+      folder: ATTACHMENT_FOLDER_DEFAULT,
+    })),
+  })
+  .superRefine((val, ctx) => {
+    if (val.attachments.mode !== 'vault-folder') return;
+    const tplFolder = val.templates.folder
+      .normalize('NFC')
+      .replaceAll('\\', '/')
+      .trim()
+      .replace(/^\/+|\/+$/g, '');
+    if (!tplFolder) return;
+    if (val.attachments.folder.toLowerCase() === tplFolder.toLowerCase()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['attachments', 'folder'],
+        message: '添付フォルダにテンプレートフォルダと同じパスは指定できません',
+      });
+    }
+  });
 export type LibrarySettings = z.infer<typeof librarySettingsSchema>;
 
 export const LIBRARY_SETTINGS_DEFAULTS: LibrarySettings = {
   templates: { folder: '_templates' },
   dailyNotes: { folder: '日記', template: '', filenamePattern: 'YYYY-MM-DD' },
+  attachments: { mode: 'same-folder', folder: ATTACHMENT_FOLDER_DEFAULT },
 };
 
 // ---- #189: 日付指定日誌 API ----

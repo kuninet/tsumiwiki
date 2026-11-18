@@ -81,6 +81,12 @@ export function buildApp(options: BuildAppOptions) {
   const indexerService = new IndexerService(db, config.libraryPath);
   const lockService = new LockService(db, config.lockTimeoutMinutes);
   const draftService = new DraftService(db);
+  const librarySettingsService = new LibrarySettingsService(
+    config.libraryPath,
+    gitService,
+    logger === false ? undefined : logger,
+    config.attachmentDirMode,
+  );
   const docService = new DocService(
     db,
     config,
@@ -89,6 +95,7 @@ export function buildApp(options: BuildAppOptions) {
     lockService,
     draftService,
     logger === false ? undefined : logger,
+    librarySettingsService,
   );
   app.decorate('gitService', gitService);
   app.decorate('indexerService', indexerService);
@@ -104,10 +111,7 @@ export function buildApp(options: BuildAppOptions) {
   );
   app.decorate('draftService', draftService);
   app.decorate('docService', docService);
-  app.decorate(
-    'librarySettingsService',
-    new LibrarySettingsService(config.libraryPath, gitService, logger === false ? undefined : logger),
-  );
+  app.decorate('librarySettingsService', librarySettingsService);
 
   // ライブラリのGitリポジトリ初期化(未初期化なら git init。設計06章6.1)
   app.addHook('onReady', async () => {

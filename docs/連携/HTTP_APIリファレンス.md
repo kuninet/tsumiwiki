@@ -383,7 +383,7 @@ docPath=日記/2026-07-05.md
 file=<バイナリ>
 ```
 
-`日記/attachments/2026-07-05_<原名>` 相当に保存され、レスポンスの `fileName` を Obsidian embed 記法 `![[fileName]]` で本文に埋め込むと参照できる。
+`{ fileName, path, embedTarget }` を返し、レスポンスの `embedTarget`（通常は `fileName`、別フォルダに同名ファイルがある場合は最短のパス付き表記）を Obsidian embed 記法 `![[${embedTarget}]]` で本文に埋め込むと参照できる。保存先フォルダはライブラリ設定（`same-folder` / `vault-folder` / `doc-subfolder`）に従う。
 
 ### GET /api/files/*
 
