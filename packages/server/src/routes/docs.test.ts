@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1166,5 +1166,681 @@ describe('GET /api/tree の添付ファイル一覧 (#318)', () => {
 
     const mcpCompatTree = await app.docService.getTree();
     expect('attachments' in mcpCompatTree).toBe(false);
+  }, 20_000);
+});
+
+describe('文書一括移動・サブフォルダ添付同伴移動・共有通知 (#334)', () => {
+  const dummyImage = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  );
+
+  async function fileExists(rel: string): Promise<boolean> {
+    try {
+      const { stat } = await import('node:fs/promises');
+      await stat(join(lib, rel));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function loginAs(
+    username: string,
+    displayName: string,
+    role: 'admin' | 'user',
+  ): Promise<string> {
+    app.userService.create({ username, displayName, password: 'pass', role });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: CSRF,
+      payload: { username, password: 'pass' },
+    });
+    return (res.headers['set-cookie'] as string).split(';')[0];
+  }
+
+  function apiWithCookie(
+    c: string,
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+    url: string,
+    payload?: unknown,
+  ) {
+    return app.inject({
+      method,
+      url,
+      headers: { ...CSRF, cookie: c },
+      payload: payload as never,
+    });
+  }
+
+  it('一括移動(move-batch)でグループ内文書のみが共有する添付を一緒に移動し、単一コミットと索引更新を行う', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/docs', { folder: '元', title: '記事1' });
+    await api('POST', '/api/docs', { folder: '元', title: '記事2' });
+
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(lib, '元'), { recursive: true });
+    await writeFile(join(lib, '元', 'shared.png'), dummyImage);
+    await app.indexerService.indexAttachment('元/shared.png');
+
+    for (const docPath of ['元/記事1.md', '元/記事2.md']) {
+      const got = await api('GET', `/api/docs?path=${encodeURIComponent(docPath)}`);
+      await saveDoc({
+        path: docPath,
+        body: '![[shared.png]]\n',
+        tags: [],
+        baseUpdatedAt: got.json().updatedAt,
+      });
+    }
+
+    const res = await api('POST', '/api/docs/move-batch', {
+      moves: [
+        { path: '元/記事1.md', newFolder: '先', newTitle: '記事1' },
+        { path: '元/記事2.md', newFolder: '先', newTitle: '記事2' },
+      ],
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      moved: [
+        { oldPath: '元/記事1.md', path: '先/記事1.md' },
+        { oldPath: '元/記事2.md', path: '先/記事2.md' },
+      ],
+      skippedAttachments: [],
+    });
+
+    expect(await fileExists('先/記事1.md')).toBe(true);
+    expect(await fileExists('先/記事2.md')).toBe(true);
+    expect(await fileExists('先/shared.png')).toBe(true);
+    expect(await fileExists('元/shared.png')).toBe(false);
+
+    const idxOld = app.db
+      .prepare('SELECT rel_path FROM attachment_index WHERE rel_path = ?')
+      .get('元/shared.png');
+    const idxNew = app.db
+      .prepare('SELECT rel_path FROM attachment_index WHERE rel_path = ?')
+      .get('先/shared.png');
+    expect(idxOld).toBeUndefined();
+    expect(idxNew).toBeDefined();
+
+    const { simpleGit } = await import('simple-git');
+    const log = await simpleGit({ baseDir: lib }).log({ maxCount: 1 });
+    expect(log.latest?.message).toBe('move batch: 2 docs');
+  }, 20_000);
+
+  it('移動しない文書が参照している共有添付は元フォルダに残し、skippedAttachments と相対リンク追従を返す', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/folders', { path: '別' });
+    await api('POST', '/api/docs', { folder: '元', title: '記事1' });
+    await api('POST', '/api/docs', { folder: '元', title: '記事2' });
+    await api('POST', '/api/docs', { folder: '別', title: '外部参照' });
+
+    await writeFile(join(lib, '元', 'shared.png'), dummyImage);
+    await app.indexerService.indexAttachment('元/shared.png');
+
+    const got1 = await api('GET', `/api/docs?path=${encodeURIComponent('元/記事1.md')}`);
+    await saveDoc({
+      path: '元/記事1.md',
+      body: '![[shared.png]]\n![図](shared.png)\n',
+      tags: [],
+      baseUpdatedAt: got1.json().updatedAt,
+    });
+    const got2 = await api('GET', `/api/docs?path=${encodeURIComponent('元/記事2.md')}`);
+    await saveDoc({
+      path: '元/記事2.md',
+      body: '![[shared.png]]\n',
+      tags: [],
+      baseUpdatedAt: got2.json().updatedAt,
+    });
+    const got3 = await api('GET', `/api/docs?path=${encodeURIComponent('別/外部参照.md')}`);
+    await saveDoc({
+      path: '別/外部参照.md',
+      body: '![[shared.png]]\n',
+      tags: [],
+      baseUpdatedAt: got3.json().updatedAt,
+    });
+
+    const batchRes = await api('POST', '/api/docs/move-batch', {
+      moves: [
+        { path: '元/記事1.md', newFolder: '先', newTitle: '記事1' },
+        { path: '元/記事2.md', newFolder: '先', newTitle: '記事2' },
+      ],
+    });
+    expect(batchRes.statusCode).toBe(200);
+    expect(batchRes.json().skippedAttachments).toEqual([
+      { fileName: 'shared.png', reason: 'shared' },
+    ]);
+    expect(await fileExists('元/shared.png')).toBe(true);
+    expect(await fileExists('先/shared.png')).toBe(false);
+
+    const movedDoc = await readFile(join(lib, '先/記事1.md'), 'utf8');
+    expect(movedDoc).toContain('![図](../元/shared.png)');
+    expect(movedDoc).toContain('![[shared.png]]');
+
+    // 単体 /api/docs/move でも skippedAttachments が返る
+    const singleRes = await api('POST', '/api/docs/move', {
+      path: '先/記事2.md',
+      newFolder: '元',
+      newTitle: '記事2戻り',
+    });
+    expect(singleRes.statusCode).toBe(200);
+    expect(singleRes.json().skippedAttachments).toEqual([]);
+  }, 20_000);
+
+  it('移動先に同名ファイルがある場合は conflict として元フォルダに残し、skippedAttachments に含める', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/docs', { folder: '元', title: '衝突記事' });
+    await writeFile(join(lib, '元', 'dup.png'), dummyImage);
+    await writeFile(join(lib, '先', 'dup.png'), Buffer.from([1, 2, 3]));
+    await app.indexerService.indexAttachment('元/dup.png');
+    await app.indexerService.indexAttachment('先/dup.png');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('元/衝突記事.md')}`);
+    await saveDoc({
+      path: '元/衝突記事.md',
+      body: '![[dup.png]]\n',
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+
+    const moved = await api('POST', '/api/docs/move', {
+      path: '元/衝突記事.md',
+      newFolder: '先',
+      newTitle: '衝突記事',
+    });
+    expect(moved.statusCode).toBe(200);
+    expect(moved.json().skippedAttachments).toEqual([{ fileName: 'dup.png', reason: 'conflict' }]);
+    expect(await fileExists('元/dup.png')).toBe(true);
+    const preserved = await readFile(join(lib, '先', 'dup.png'));
+    expect(Array.from(preserved)).toEqual([1, 2, 3]);
+    // 移動先に同名があるため Wikilink も元の添付を指すようにフルパスへ更新される
+    const movedDoc = await readFile(join(lib, '先/衝突記事.md'), 'utf8');
+    expect(movedDoc).toContain('![[元/dup.png]]');
+  }, 20_000);
+
+  it('doc-subfolder 設定時はサブフォルダ配下の専属添付を同伴移動し、他フォルダの同名画像に誤爆せずリンクも追従する', async () => {
+    const adminCookie = await loginAs('admin_reorg', '管理者', 'admin');
+    const setRes = await apiWithCookie(adminCookie, 'PUT', '/api/library/settings', {
+      templates: { folder: 'テンプレート' },
+      dailyNotes: { folder: 'デイリーノート', filenamePattern: 'YYYY-MM-DD', template: '' },
+      attachments: { mode: 'doc-subfolder', folder: 'attachments' },
+    });
+    expect(setRes.statusCode).toBe(200);
+
+    await api('POST', '/api/folders', { path: '元/attachments' });
+    await api('POST', '/api/folders', { path: '他/attachments' });
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/docs', { folder: '元', title: 'サブフォルダ文書' });
+    await api('POST', '/api/docs', { folder: '他', title: '他フォルダ文書' });
+
+    for (const name of ['pic1.png', 'pic2.png', 'pic3.png', 'pic4.png']) {
+      await writeFile(join(lib, '元', 'attachments', name), dummyImage);
+      await app.indexerService.indexAttachment(`元/attachments/${name}`);
+    }
+    // 他フォルダにも同名の pic1.png がある(各自のサブフォルダ固有ファイル)
+    await writeFile(join(lib, '他', 'attachments', 'pic1.png'), dummyImage);
+    await app.indexerService.indexAttachment('他/attachments/pic1.png');
+
+    const gotOther = await api(
+      'GET',
+      `/api/docs?path=${encodeURIComponent('他/他フォルダ文書.md')}`,
+    );
+    await saveDoc({
+      path: '他/他フォルダ文書.md',
+      body: '![[pic1.png]]\n',
+      tags: [],
+      baseUpdatedAt: gotOther.json().updatedAt,
+    });
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('元/サブフォルダ文書.md')}`);
+    await saveDoc({
+      path: '元/サブフォルダ文書.md',
+      body:
+        [
+          '![[pic1.png]]',
+          '![[./attachments/pic2.png]]',
+          '![図3](attachments/pic3.png)',
+          '![[元/attachments/pic4.png]]',
+        ].join('\n') + '\n',
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+
+    const res = await api('POST', '/api/docs/move', {
+      path: '元/サブフォルダ文書.md',
+      newFolder: '先',
+      newTitle: 'サブフォルダ文書',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().skippedAttachments).toEqual([]);
+
+    for (const name of ['pic1.png', 'pic2.png', 'pic3.png', 'pic4.png']) {
+      expect(await fileExists(`先/attachments/${name}`)).toBe(true);
+      expect(await fileExists(`元/attachments/${name}`)).toBe(false);
+    }
+    expect(await fileExists('他/attachments/pic1.png')).toBe(true);
+
+    const movedBody = await readFile(join(lib, '先/サブフォルダ文書.md'), 'utf8');
+    expect(movedBody).toContain('![図3](attachments/pic3.png)');
+    expect(movedBody).toContain('![[pic4.png]]');
+    expect(movedBody).not.toContain('![[元/attachments/pic4.png]]');
+
+    const idxNew = app.db
+      .prepare('SELECT rel_path FROM attachment_index WHERE rel_path = ?')
+      .get('先/attachments/pic1.png');
+    expect(idxNew).toBeDefined();
+  }, 20_000);
+
+  it('vault-folder 設定時は添付を移動せず、移動に伴う Markdown 相対リンクのみ追従する', async () => {
+    const adminCookie = await loginAs('admin_vault', '管理者V', 'admin');
+    const vaultSetRes = await apiWithCookie(adminCookie, 'PUT', '/api/library/settings', {
+      templates: { folder: 'テンプレート' },
+      dailyNotes: { folder: 'デイリーノート', filenamePattern: 'YYYY-MM-DD', template: '' },
+      attachments: { mode: 'vault-folder', folder: '_attachments' },
+    });
+    expect(vaultSetRes.statusCode).toBe(200);
+
+    await api('POST', '/api/folders', { path: 'a/b' });
+    await api('POST', '/api/folders', { path: 'c' });
+    await api('POST', '/api/folders', { path: '_attachments' });
+    await api('POST', '/api/docs', { folder: 'a/b', title: '集約記事' });
+    await writeFile(join(lib, '_attachments', 'v.png'), dummyImage);
+    await app.indexerService.indexAttachment('_attachments/v.png');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('a/b/集約記事.md')}`);
+    await saveDoc({
+      path: 'a/b/集約記事.md',
+      body: '![[v.png]]\n![図](../../_attachments/v.png)\n',
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+
+    const moved = await api('POST', '/api/docs/move', {
+      path: 'a/b/集約記事.md',
+      newFolder: 'c',
+      newTitle: '集約記事',
+    });
+    expect(moved.statusCode).toBe(200);
+    expect(moved.json().skippedAttachments).toEqual([]);
+    expect(await fileExists('_attachments/v.png')).toBe(true);
+
+    const raw = await readFile(join(lib, 'c/集約記事.md'), 'utf8');
+    expect(raw).toContain('![[v.png]]');
+    expect(raw).toContain('![図](../_attachments/v.png)');
+  }, 20_000);
+
+  it('same-folder 設定で `![[./image.png]]` や `![図](./md.png)` の相対パス表記も同伴移動する', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/docs', { folder: '元', title: 'ドットスラッシュ' });
+    await writeFile(join(lib, '元', 'dot-wiki.png'), dummyImage);
+    await writeFile(join(lib, '元', 'dot-md.png'), dummyImage);
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('元/ドットスラッシュ.md')}`);
+    await saveDoc({
+      path: '元/ドットスラッシュ.md',
+      body: '![[./dot-wiki.png]]\n![図](./dot-md.png)\n',
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+
+    const res = await api('POST', '/api/docs/move', {
+      path: '元/ドットスラッシュ.md',
+      newFolder: '先',
+      newTitle: 'ドットスラッシュ',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await fileExists('先/dot-wiki.png')).toBe(true);
+    expect(await fileExists('先/dot-md.png')).toBe(true);
+    expect(await fileExists('元/dot-wiki.png')).toBe(false);
+    expect(await fileExists('元/dot-md.png')).toBe(false);
+  }, 20_000);
+
+  it('一括移動の事前検証(ロック中・移動先衝突・空配列)で部分移動せずエラーを返す', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/docs', { folder: '元', title: '文書1' });
+    await api('POST', '/api/docs', { folder: '元', title: '文書2' });
+
+    const emptyRes = await api('POST', '/api/docs/move-batch', { moves: [] });
+    expect(emptyRes.statusCode).toBe(400);
+    expect(emptyRes.json().error.code).toBe('VALIDATION_ERROR');
+
+    // 別ユーザーが 文書2 をロックしている場合、1件目も動かない
+    const satoCookie = await loginAs('sato_batch', '佐藤', 'user');
+    await apiWithCookie(satoCookie, 'POST', '/api/locks', { path: '元/文書2.md' });
+
+    const lockedRes = await api('POST', '/api/docs/move-batch', {
+      moves: [
+        { path: '元/文書1.md', newFolder: '先', newTitle: '文書1' },
+        { path: '元/文書2.md', newFolder: '先', newTitle: '文書2' },
+      ],
+    });
+    expect(lockedRes.statusCode).toBe(409);
+    expect(lockedRes.json().error.code).toBe('DOC_LOCKED');
+    expect(await fileExists('元/文書1.md')).toBe(true);
+    expect(await fileExists('先/文書1.md')).toBe(false);
+  }, 20_000);
+
+  it('添付の連鎖移動で後続が conflict 残置となった場合、先行移動がその残置ファイルを上書きしない(#334 M1)', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/folders', { path: '他' });
+    await api('POST', '/api/docs', { folder: '元', title: 'A' });
+    await api('POST', '/api/docs', { folder: '先', title: 'B' });
+
+    const imgA = Buffer.from('IMAGE-A');
+    const imgB = Buffer.from('IMAGE-B');
+    const imgOther = Buffer.from('IMAGE-OTHER');
+    await writeFile(join(lib, '元', 'x.png'), imgA);
+    await writeFile(join(lib, '先', 'x.png'), imgB);
+    await writeFile(join(lib, '他', 'x.png'), imgOther);
+    await app.indexerService.indexAttachment('元/x.png');
+    await app.indexerService.indexAttachment('先/x.png');
+    await app.indexerService.indexAttachment('他/x.png');
+
+    const gotA = await api('GET', `/api/docs?path=${encodeURIComponent('元/A.md')}`);
+    await saveDoc({
+      path: '元/A.md',
+      body: '![A画像](x.png)\n',
+      tags: [],
+      baseUpdatedAt: gotA.json().updatedAt,
+    });
+    const gotB = await api('GET', `/api/docs?path=${encodeURIComponent('先/B.md')}`);
+    await saveDoc({
+      path: '先/B.md',
+      body: '![B画像](x.png)\n',
+      tags: [],
+      baseUpdatedAt: gotB.json().updatedAt,
+    });
+
+    // A(元→先) と B(先→他) を一括移動。他/x.png が既存のため B 側 x.png は conflict で 先/x.png に残る。
+    // よって A 側の 元/x.png も 先/x.png へ上書き移動せず conflict として 元/x.png に残るべき。
+    const res = await api('POST', '/api/docs/move-batch', {
+      moves: [
+        { path: '元/A.md', newFolder: '先', newTitle: 'A' },
+        { path: '先/B.md', newFolder: '他', newTitle: 'B' },
+      ],
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().skippedAttachments).toEqual([{ fileName: 'x.png', reason: 'conflict' }]);
+
+    expect(await readFile(join(lib, '元', 'x.png'))).toEqual(imgA);
+    expect(await readFile(join(lib, '先', 'x.png'))).toEqual(imgB);
+    expect(await readFile(join(lib, '他', 'x.png'))).toEqual(imgOther);
+
+    const movedA = await readFile(join(lib, '先/A.md'), 'utf8');
+    const movedB = await readFile(join(lib, '他/B.md'), 'utf8');
+    expect(movedA).toContain('![A画像](../元/x.png)');
+    expect(movedB).toContain('![B画像](../先/x.png)');
+  }, 20_000);
+
+  it('連鎖移動・入れ替え移動でも文書索引・ロック・下書きが取り違えられず追従する(#334 M2)', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/folders', { path: '他' });
+    await api('POST', '/api/docs', { folder: '元', title: '連鎖' });
+    await api('POST', '/api/docs', { folder: '先', title: '連鎖' });
+
+    const got1 = await api('GET', `/api/docs?path=${encodeURIComponent('元/連鎖.md')}`);
+    await saveDoc({
+      path: '元/連鎖.md',
+      body: 'CHAIN_BODY_ALPHA_UNIQUE\n',
+      tags: [],
+      baseUpdatedAt: got1.json().updatedAt,
+    });
+    const got2 = await api('GET', `/api/docs?path=${encodeURIComponent('先/連鎖.md')}`);
+    await saveDoc({
+      path: '先/連鎖.md',
+      body: 'CHAIN_BODY_BETA_UNIQUE\n',
+      tags: [],
+      baseUpdatedAt: got2.json().updatedAt,
+    });
+
+    // saveDoc が 先/連鎖.md に取得した yamada のロックを一旦解放してから user2 の下書きを保存
+    await api('DELETE', `/api/locks?path=${encodeURIComponent('先/連鎖.md')}`);
+
+    // 両文書に下書きを設定し、元/連鎖.md だけに編集ロックを設定しておく（入れ替え時もロック有無が取り違えられないことを検証）
+    const user2Cookie = await loginAs('draft_user_2', '下書き2', 'user');
+    const lockRes = await api('POST', '/api/locks', { path: '元/連鎖.md' });
+    expect(lockRes.statusCode).toBe(200);
+    const putAlpha = await api('PUT', '/api/drafts', {
+      path: '元/連鎖.md',
+      content: 'DRAFT_ALPHA',
+    });
+    expect(putAlpha.statusCode).toBe(200);
+    const putBeta = await apiWithCookie(user2Cookie, 'PUT', '/api/drafts', {
+      path: '先/連鎖.md',
+      content: 'DRAFT_BETA',
+    });
+    expect(putBeta.statusCode).toBe(200);
+
+    const chainRes = await api('POST', '/api/docs/move-batch', {
+      moves: [
+        { path: '元/連鎖.md', newFolder: '先', newTitle: '連鎖' },
+        { path: '先/連鎖.md', newFolder: '他', newTitle: '連鎖' },
+      ],
+    });
+    expect(chainRes.statusCode).toBe(200);
+
+    // 索引に両方残っていること（先/連鎖.md が消えていないこと）
+    const idx1 = app.db
+      .prepare('SELECT doc_path FROM doc_index WHERE doc_path = ?')
+      .get('先/連鎖.md');
+    const idx2 = app.db
+      .prepare('SELECT doc_path FROM doc_index WHERE doc_path = ?')
+      .get('他/連鎖.md');
+    expect(idx1).toBeDefined();
+    expect(idx2).toBeDefined();
+
+    // 下書き・ロックがそれぞれ正しい文書へ追従していること
+    const draftAlpha = await api('GET', `/api/drafts?path=${encodeURIComponent('先/連鎖.md')}`);
+    expect(draftAlpha.json().draft?.content).toBe('DRAFT_ALPHA');
+    const draftBeta = await apiWithCookie(
+      user2Cookie,
+      'GET',
+      `/api/drafts?path=${encodeURIComponent('他/連鎖.md')}`,
+    );
+    expect(draftBeta.json().draft?.content).toBe('DRAFT_BETA');
+    expect(app.lockService.getActive('先/連鎖.md')).not.toBeNull();
+    expect(app.lockService.getActive('他/連鎖.md')).toBeNull();
+
+    // 続いて 先/連鎖.md と 他/連鎖.md を直接スワップ
+    const swapRes = await api('POST', '/api/docs/move-batch', {
+      moves: [
+        { path: '先/連鎖.md', newFolder: '他', newTitle: '連鎖' },
+        { path: '他/連鎖.md', newFolder: '先', newTitle: '連鎖' },
+      ],
+    });
+    expect(swapRes.statusCode).toBe(200);
+    expect(
+      (await api('GET', `/api/drafts?path=${encodeURIComponent('他/連鎖.md')}`)).json().draft
+        ?.content,
+    ).toBe('DRAFT_ALPHA');
+    expect(
+      (
+        await apiWithCookie(
+          user2Cookie,
+          'GET',
+          `/api/drafts?path=${encodeURIComponent('先/連鎖.md')}`,
+        )
+      ).json().draft?.content,
+    ).toBe('DRAFT_BETA');
+    expect(app.lockService.getActive('他/連鎖.md')).not.toBeNull();
+    expect(app.lockService.getActive('先/連鎖.md')).toBeNull();
+    expect(
+      app.db.prepare('SELECT doc_path FROM doc_index WHERE doc_path = ?').get('他/連鎖.md'),
+    ).toBeDefined();
+    expect(
+      app.db.prepare('SELECT doc_path FROM doc_index WHERE doc_path = ?').get('先/連鎖.md'),
+    ).toBeDefined();
+  }, 20_000);
+
+  it('一括移動の途中でファイル操作が失敗すると文書本文と添付をすべてロールバックする(#334)', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/docs', { folder: '元', title: 'A' });
+    await api('POST', '/api/docs', { folder: '元', title: 'B' });
+    await writeFile(join(lib, '元', 'rb.png'), dummyImage);
+    await app.indexerService.indexAttachment('元/rb.png');
+
+    const gotA = await api('GET', `/api/docs?path=${encodeURIComponent('元/A.md')}`);
+    const origA = '# A\n\n![図](rb.png)\n';
+    await saveDoc({
+      path: '元/A.md',
+      body: origA,
+      tags: [],
+      baseUpdatedAt: gotA.json().updatedAt,
+    });
+    const gotB = await api('GET', `/api/docs?path=${encodeURIComponent('元/B.md')}`);
+    await saveDoc({
+      path: '元/B.md',
+      body: '# B\n\n![[rb.png]]\n',
+      tags: [],
+      baseUpdatedAt: gotB.json().updatedAt,
+    });
+
+    // DocService.moveFile の 6 回目（Phase 2 で rb.png を tmp→先 へ移すタイミング）に I/O 失敗を注入
+    const origMoveFile = (
+      app.docService as unknown as { moveFile: (a: string, b: string) => Promise<void> }
+    ).moveFile.bind(app.docService);
+    let callCount = 0;
+    const spy = vi
+      .spyOn(
+        app.docService as unknown as { moveFile: (a: string, b: string) => Promise<void> },
+        'moveFile',
+      )
+      .mockImplementation(async (from: string, to: string) => {
+        callCount++;
+        if (
+          callCount === 6 &&
+          !to.includes('.tsumiwiki-tmp-move-') &&
+          from.includes('.tsumiwiki-tmp-move-')
+        ) {
+          throw new Error('injected disk error');
+        }
+        return origMoveFile(from, to);
+      });
+
+    try {
+      const res = await api('POST', '/api/docs/move-batch', {
+        moves: [
+          { path: '元/A.md', newFolder: '先', newTitle: 'A' },
+          { path: '元/B.md', newFolder: '先', newTitle: 'B' },
+        ],
+      });
+      expect(res.statusCode).toBe(500);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await fileExists('元/A.md')).toBe(true);
+    expect(await fileExists('元/B.md')).toBe(true);
+    expect(await fileExists('元/rb.png')).toBe(true);
+    expect(await fileExists('先/A.md')).toBe(false);
+    expect(await fileExists('先/B.md')).toBe(false);
+    expect(await fileExists('先/rb.png')).toBe(false);
+    expect(await readFile(join(lib, '元/A.md'), 'utf8')).toContain(origA);
+  }, 20_000);
+
+  it('バッチ内で移動先フォルダが異なる共有添付は shared として残置し相対パスが追従する(#334)', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先A' });
+    await api('POST', '/api/folders', { path: '先B' });
+    await api('POST', '/api/docs', { folder: '元', title: '記事A' });
+    await api('POST', '/api/docs', { folder: '元', title: '記事B' });
+    await writeFile(join(lib, '元', 'split.png'), dummyImage);
+    await app.indexerService.indexAttachment('元/split.png');
+
+    const gotA = await api('GET', `/api/docs?path=${encodeURIComponent('元/記事A.md')}`);
+    await saveDoc({
+      path: '元/記事A.md',
+      body: '![図](split.png)\n',
+      tags: [],
+      baseUpdatedAt: gotA.json().updatedAt,
+    });
+    const gotB = await api('GET', `/api/docs?path=${encodeURIComponent('元/記事B.md')}`);
+    await saveDoc({
+      path: '元/記事B.md',
+      body: '![図](split.png)\n',
+      tags: [],
+      baseUpdatedAt: gotB.json().updatedAt,
+    });
+
+    const res = await api('POST', '/api/docs/move-batch', {
+      moves: [
+        { path: '元/記事A.md', newFolder: '先A', newTitle: '記事A' },
+        { path: '元/記事B.md', newFolder: '先B', newTitle: '記事B' },
+      ],
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().skippedAttachments).toEqual([{ fileName: 'split.png', reason: 'shared' }]);
+    expect(await fileExists('元/split.png')).toBe(true);
+    expect(await readFile(join(lib, '先A/記事A.md'), 'utf8')).toContain('![図](../元/split.png)');
+    expect(await readFile(join(lib, '先B/記事B.md'), 'utf8')).toContain('![図](../元/split.png)');
+  }, 20_000);
+
+  it('doc-subfolder 設定でルート直下文書を移動しても attachments/ 配下の専属添付が追従する(#334)', async () => {
+    const adminCookie = await loginAs('admin_root_sub', '管理者RS', 'admin');
+    const setRes = await apiWithCookie(adminCookie, 'PUT', '/api/library/settings', {
+      templates: { folder: 'テンプレート' },
+      dailyNotes: { folder: 'デイリーノート', filenamePattern: 'YYYY-MM-DD', template: '' },
+      attachments: { mode: 'doc-subfolder', folder: 'attachments' },
+    });
+    expect(setRes.statusCode).toBe(200);
+
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/docs', { folder: '', title: 'ルート文書' });
+    await mkdir(join(lib, 'attachments'), { recursive: true });
+    await writeFile(join(lib, 'attachments', 'rootpic.png'), dummyImage);
+    await app.indexerService.indexAttachment('attachments/rootpic.png');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('ルート文書.md')}`);
+    await saveDoc({
+      path: 'ルート文書.md',
+      body: '![[rootpic.png]]\n![図](attachments/rootpic.png)\n',
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+
+    const moveRes = await api('POST', '/api/docs/move', {
+      path: 'ルート文書.md',
+      newFolder: '先',
+      newTitle: 'ルート文書',
+    });
+    expect(moveRes.statusCode).toBe(200);
+    expect(await fileExists('先/attachments/rootpic.png')).toBe(true);
+    expect(await fileExists('attachments/rootpic.png')).toBe(false);
+    const content = await readFile(join(lib, '先/ルート文書.md'), 'utf8');
+    expect(content).toContain('![[rootpic.png]]');
+    expect(content).toContain('![図](attachments/rootpic.png)');
+  }, 20_000);
+
+  it('文書内に不正パスリンクが1つ含まれても他の有効な添付同伴は継続する(#334 Minor 8)', async () => {
+    await api('POST', '/api/folders', { path: '元' });
+    await api('POST', '/api/folders', { path: '先' });
+    await api('POST', '/api/docs', { folder: '元', title: '混在' });
+    await writeFile(join(lib, '元', 'valid.png'), dummyImage);
+    await app.indexerService.indexAttachment('元/valid.png');
+
+    const got = await api('GET', `/api/docs?path=${encodeURIComponent('元/混在.md')}`);
+    await saveDoc({
+      path: '元/混在.md',
+      body: '![[\u0007invalid.png]]\n![不正](\u0007bad.png)\n![[valid.png]]\n',
+      tags: [],
+      baseUpdatedAt: got.json().updatedAt,
+    });
+
+    const res = await api('POST', '/api/docs/move', {
+      path: '元/混在.md',
+      newFolder: '先',
+      newTitle: '混在',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await fileExists('先/valid.png')).toBe(true);
+    expect(await fileExists('元/valid.png')).toBe(false);
   }, 20_000);
 });

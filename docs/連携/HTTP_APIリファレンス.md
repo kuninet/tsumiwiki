@@ -198,6 +198,22 @@ Cookie を無効化。
 - ロック必須(自分がロック取得済みなら OK)
 - git ログには `move: old -> new` として1コミットで表現され、`git log --follow` で追跡可能
 - 移動先に同名文書があると 409
+- 添付保存先設定が `same-folder` または `doc-subfolder` の場合は専属添付（`./` やサブフォルダ相対パス参照を含む）も同伴移動し、他文書と共有中（`shared`）または移動先に同名ファイルがある（`conflict`）ため元フォルダへ残した添付があれば `skippedAttachments: [{ fileName, reason }]` として返却する（#334）
+
+### POST /api/docs/move-batch — 複数文書の一括移動
+
+```json
+{
+  "moves": [
+    { "path": "元/記事1.md", "newFolder": "先", "newTitle": "記事1" },
+    { "path": "元/記事2.md", "newFolder": "先", "newTitle": "記事2" }
+  ]
+}
+```
+
+- 複数文書（1 リクエスト最大 200 件。UI で 201 件以上選択時は 200 件ごとに分割実行）を事前検証（存在・ロック・移動先衝突）のうえで一括移動し、単一の Git コミットに記録する（#334）。1 件でもロック中や移動先衝突がある場合はそのバッチ単位全体が失敗（`409` 等）し、1 件も移動しない
+- 移動対象グループ内の文書のみが共有している添付も同伴移動し、リンク先変更に伴う Markdown 相対パスやフルパス Wikilink を追従書き換えする
+- 返却値: `{ moved: [{ oldPath, path }], skippedAttachments: [{ fileName, reason }] }`（`reason`: `'shared' | 'conflict'`）
 
 ### 6.1 編集ロックの取得と解放
 

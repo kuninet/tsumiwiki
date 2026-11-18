@@ -112,7 +112,10 @@ describe('GitService', () => {
     expect(await svc.hasExternalChanges()).toBe(false);
     await writeFile(join(lib, '外部作成.md'), 'AIが直接書いた\n', 'utf8');
     expect(await svc.hasExternalChanges()).toBe(true);
-    await svc.commitAll('sync: external changes', { name: 'TsumiWiki', email: 'system@tsumiwiki.local' });
+    await svc.commitAll('sync: external changes', {
+      name: 'TsumiWiki',
+      email: 'system@tsumiwiki.local',
+    });
     expect(await svc.hasExternalChanges()).toBe(false);
   }, 20_000);
 
@@ -188,4 +191,23 @@ describe('GitService', () => {
     const out2 = await simpleGit({ baseDir: bare }).raw(['log', '--pretty=format:%s', 'main']);
     expect(out2).toContain('edit: バックアップ対象.md');
   }, 30_000);
+
+  it('未追跡ファイルの移動で旧パスが消えていても追跡中パスを含めてコミットできる(#334)', async () => {
+    await writeFile(join(lib, '文書.md'), '# 本文\n', 'utf8');
+    await svc.commit(['文書.md'], 'add: 文書.md', AUTHOR);
+
+    // 移動前に一度も git add されていない未追跡ファイルを別パスへ移動した想定
+    await mkdir(join(lib, '先'), { recursive: true });
+    await writeFile(join(lib, '先', 'untracked.png'), 'png', 'utf8');
+    await rename(join(lib, '文書.md'), join(lib, '先', '文書.md'));
+
+    await svc.commit(
+      ['文書.md', '先/文書.md', '元/untracked.png', '先/untracked.png'],
+      'move: 文書+未追跡添付',
+      AUTHOR,
+    );
+
+    const log = await simpleGit({ baseDir: lib }).log({ maxCount: 1 });
+    expect(log.latest?.message).toBe('move: 文書+未追跡添付');
+  }, 20_000);
 });

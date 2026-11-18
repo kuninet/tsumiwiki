@@ -4,12 +4,16 @@ import type {
   CreateFolderRequest,
   DocResponse,
   MoveDocRequest,
+  MoveDocsBatchRequest,
+  MoveDocsBatchResponse,
+  MovedDocResponse,
   MoveFolderRequest,
   SaveDocRequest,
   SaveDocResponse,
+  SkippedAttachment,
   TreeResponse,
 } from '@tsumiwiki/shared';
-import { useToastStore } from '../stores/toast';
+import { type ToastKind, useToastStore } from '../stores/toast';
 import { ApiRequestError, api } from './client';
 import { ALL_HISTORY_QUERY_KEY } from './history';
 
@@ -96,20 +100,57 @@ export function useDeleteDoc() {
 
 // 移動系のレスポンスは正規化後の新パス。sanitizeTitle 等でサーバー側で名前が変わる
 // ケースがあるため、rename の追従はクライアントで組み立てず必ずこの path を使う
-export interface MovedResponse {
-  path: string;
+export type MovedResponse = MovedDocResponse;
+
+// #334: 共有・同名衝突で元のフォルダに残した添付がある場合、1つのトーストへ統合して通知する
+export function formatMoveToastMessage(
+  baseMessage: string,
+  skippedAttachments?: SkippedAttachment[],
+): { kind: ToastKind; message: string } {
+  if (!skippedAttachments || skippedAttachments.length === 0) {
+    return { kind: 'success', message: baseMessage };
+  }
+  const sharedCount = skippedAttachments.filter((a) => a.reason === 'shared').length;
+  const conflictCount = skippedAttachments.filter((a) => a.reason === 'conflict').length;
+  const notes: string[] = [];
+  if (sharedCount > 0) {
+    notes.push(`共有中の添付 ${sharedCount} 件は元のフォルダに残しました`);
+  }
+  if (conflictCount > 0) {
+    notes.push(`移動先に同名ファイルがあるため添付 ${conflictCount} 件は元のフォルダに残しました`);
+  }
+  if (notes.length === 0) {
+    return { kind: 'success', message: baseMessage };
+  }
+  return { kind: 'info', message: `${baseMessage}（${notes.join('・')}）` };
 }
 
 export function useMoveDoc() {
-  return useLibraryMutation(
-    (body: MoveDocRequest) => api<MovedResponse>('POST', '/api/docs/move', body),
-    '文書を移動しました',
-  );
+  const queryClient = useQueryClient();
+  const showToast = useToastStore((s) => s.show);
+  return useMutation<MovedResponse, Error, MoveDocRequest>({
+    mutationFn: (body: MoveDocRequest) => api<MovedResponse>('POST', '/api/docs/move', body),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: BACKLINKS_QUERY_KEY });
+      const formatted = formatMoveToastMessage('文書を移動しました', data.skippedAttachments);
+      showToast(formatted.kind, formatted.message);
+    },
+    onError: (err) => {
+      showToast('error', err instanceof ApiRequestError ? err.message : '操作に失敗しました');
+    },
+  });
 }
 
-// 素の移動関数(#72 一括移動用)。個別トースト・invalidateを避けたい場面で使う
+// 素の移動関数(#72 / #334 一括移動用)。個別トースト・invalidateを避けたい場面で使う
 export function moveDoc(body: MoveDocRequest): Promise<MovedResponse> {
   return api<MovedResponse>('POST', '/api/docs/move', body);
+}
+
+export function moveDocsBatch(body: MoveDocsBatchRequest): Promise<MoveDocsBatchResponse> {
+  return api<MoveDocsBatchResponse>('POST', '/api/docs/move-batch', body);
 }
 
 export function moveFolder(body: MoveFolderRequest): Promise<MovedResponse> {

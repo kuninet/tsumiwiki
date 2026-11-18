@@ -150,3 +150,39 @@ export function resolveShortestEmbedTargetWith(
   }
   return relPath;
 }
+
+// 標準 Markdown リンクの相対パスを文書フォルダ基準で正規化する(#333 / #334)。
+// 先頭 '/' はライブラリルート基準とし、'..' でルート外に出る場合は null を返す。
+export function resolveMarkdownRelPath(docFolder: string, rawPathPart: string): string | null {
+  const unified = rawPathPart.normalize('NFC').replaceAll('\\', '/');
+  const isRoot = unified.startsWith('/');
+  const baseParts = isRoot || !docFolder ? [] : docFolder.split('/');
+  const relParts = unified.split('/');
+  const stack = [...baseParts];
+  for (const seg of relParts) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') {
+      if (stack.length === 0) return null;
+      stack.pop();
+    } else {
+      stack.push(seg);
+    }
+  }
+  if (stack.length === 0) return null;
+  return stack.join('/');
+}
+
+export function buildByNameIndex(paths: string[]): Map<string, AttachmentCandidate[]> {
+  const byName = new Map<string, AttachmentCandidate[]>();
+  for (const relPath of paths) {
+    const name = path.posix.basename(relPath);
+    const nameKey = name.toLowerCase();
+    const dir = path.posix.dirname(relPath);
+    const folder = dir === '.' ? '' : dir;
+    const list = byName.get(nameKey);
+    const entry: AttachmentCandidate = { rel_path: relPath, folder };
+    if (list) list.push(entry);
+    else byName.set(nameKey, [entry]);
+  }
+  return byName;
+}

@@ -159,6 +159,41 @@ export const moveDocRequestSchema = z.object({
 });
 export type MoveDocRequest = z.infer<typeof moveDocRequestSchema>;
 
+// #334: 移動時に共有・同名衝突で元フォルダに残した添付の理由・一覧
+export const moveAttachmentSkipReasonSchema = z.enum(['shared', 'conflict']);
+export type MoveAttachmentSkipReason = z.infer<typeof moveAttachmentSkipReasonSchema>;
+
+export const skippedAttachmentSchema = z.object({
+  fileName: z.string(),
+  reason: moveAttachmentSkipReasonSchema,
+});
+export type SkippedAttachment = z.infer<typeof skippedAttachmentSchema>;
+
+export const movedDocResponseSchema = z.object({
+  path: z.string(),
+  skippedAttachments: z.array(skippedAttachmentSchema).optional(),
+});
+export type MovedDocResponse = z.infer<typeof movedDocResponseSchema>;
+
+export const MOVE_DOCS_BATCH_MAX = 200;
+
+export const moveDocsBatchRequestSchema = z.object({
+  moves: z.array(moveDocRequestSchema).min(1).max(MOVE_DOCS_BATCH_MAX),
+});
+export type MoveDocsBatchRequest = z.infer<typeof moveDocsBatchRequestSchema>;
+
+export const movedDocItemSchema = z.object({
+  oldPath: z.string(),
+  path: z.string(),
+});
+export type MovedDocItem = z.infer<typeof movedDocItemSchema>;
+
+export const moveDocsBatchResponseSchema = z.object({
+  moved: z.array(movedDocItemSchema),
+  skippedAttachments: z.array(skippedAttachmentSchema),
+});
+export type MoveDocsBatchResponse = z.infer<typeof moveDocsBatchResponseSchema>;
+
 export const createFolderRequestSchema = z.object({
   path: z.string().min(1),
 });

@@ -28,7 +28,6 @@ export function isPdfFile(file: string): boolean {
   return PDF_EXTENSIONS.has(extOf(file));
 }
 
-// #211: 添付管理メニューの「拡大表示」でも resolved.path から直接URLを組み立てるため公開する
 export function toFilesUrl(relPath: string): string {
   return `/api/files/${relPath.split('/').map(encodeURIComponent).join('/')}`;
 }
@@ -85,11 +84,26 @@ export function normalizeRelSegments(path: string): string {
   return stack.join('/');
 }
 
+function decodeUriPathSegments(rawPath: string): string {
+  return rawPath
+    .split('/')
+    .map((seg) => {
+      try {
+        return decodeURIComponent(seg);
+      } catch {
+        return seg;
+      }
+    })
+    .join('/');
+}
+
 // 標準画像記法 ![alt](src) の解決。絶対URL(http/https/data)はそのまま、
 // 相対パスは文書フォルダ基準で結合後に`.`/`..`を正規化して/api/files/...に解決する
+// markdown-it 経由の URI エンコード済み src を扱うため、セグメント単位で安全にデコードしてから渡す
 export function resolveImageSrc(src: string, docFolder: string): string {
   if (isAbsoluteUrl(src)) return src;
-  const joined = docFolder ? `${docFolder}/${src}` : src;
+  const decodedSrc = decodeUriPathSegments(src);
+  const joined = docFolder ? `${docFolder}/${decodedSrc}` : decodedSrc;
   return toFilesUrl(normalizeRelSegments(joined));
 }
 

@@ -39,7 +39,8 @@
 | POST | `/api/docs` | 新規作成 `{folder, title}` → 空文書作成+コミット。作成後パスを返す |
 | PUT | `/api/docs` | 保存 `{path, body, tags?, frontmatterOps?, baseUpdatedAt}`。ロック保持者のみ。保存+コミット(06章)。`frontmatterOps`（set/delete/renameの操作列）をYAML ASTに外科的保全適用し、応答に `{updatedAt, frontmatter}` を返す(#282)。キー名不正や解釈不能な場合は `FRONTMATTER_INVALID`(400)。`baseUpdatedAt` 不一致は `CONFLICT`(外部変更との衝突検知) |
 | DELETE | `/api/docs?path=` | ごみ箱(`.trash/`)へ移動+コミット(FR-DOC-07) |
-| POST | `/api/docs/move` | `{path, newFolder, newTitle}` リネーム/移動+コミット。ロック中は不可 |
+| POST | `/api/docs/move` | `{path, newFolder, newTitle}` リネーム/移動+コミット。ロック中は不可。`same-folder` / `doc-subfolder` 設定時は移動元フォルダ配下の専属添付も同伴移動し、共有・同名衝突で残置した添付は `skippedAttachments` で返す(#334) |
+| POST | `/api/docs/move-batch` | `{moves: [{path, newFolder, newTitle}]}` 複数文書の一括移動（#334・1 リクエスト最大 200 件）。事前検証で 1 件でもロック中や移動先衝突がある場合はバッチ全体を拒否（`409` 等、1 件も移動しない）し、グループ内のみで共有する添付を同伴移動・リンク追従して単一 Git コミットに記録する。残置添付は `skippedAttachments` で返す |
 | GET | `/api/docs/backlinks?path=` | 指定文書へのバックリンク一覧取得(#267)。`{backlinks:[{sourcePath, sourceTitle, sourceFolder, sourceUpdatedAt, links:[{line, context, anchor, alias}]}], truncated}`。自己リンク除外、更新日時降順・パス昇順。上限200件 |
 
 ### フォルダ(FR-DOC-04)

@@ -473,6 +473,18 @@ describe('FolderTree', () => {
               json: () => Promise.resolve({ path: newPath }),
             });
           }
+          if (method === 'POST' && reqPath === '/api/docs/move-batch') {
+            const b = body as { moves: { path: string; newFolder: string; newTitle: string }[] };
+            const moved = b.moves.map((m) => ({
+              oldPath: m.path,
+              path: m.newFolder ? `${m.newFolder}/${m.newTitle}.md` : `${m.newTitle}.md`,
+            }));
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve({ moved, skippedAttachments: [] }),
+            });
+          }
           if (method === 'POST' && reqPath === '/api/folders/move') {
             const b = body as { newPath: string };
             return Promise.resolve({
@@ -557,25 +569,11 @@ describe('FolderTree', () => {
       // Ctrl+クリックで「フォルダA」+「フォルダA/子文書」を選択(親と子孫の同時選択)
       fireEvent.click(folderA, { ctrlKey: true });
       fireEvent.click(childInA, { ctrlKey: true });
-
-      // ルート文書へドラッグ&ドロップ先にする...のではなく、
-      // rootDoc は doc なので行き先ではない。代わりに空白領域(ルート)へドロップ相当を検証:
-      // フォルダAをドラッグして root へ落とすと、A/子文書 は付いてくるので個別APIには含まれないこと
       fireEvent.dragStart(folderA);
-      // rootDoc 上でリリース ≒ ラッパへバブル。しかし fix-forward で e.target !== e.currentTarget 判定
-      // で無視される。ここでは filterMovable の子孫除外を確認するために fallback として
-      // performBatchMove を直接期待する形にはできないので、handleDropTarget を通す代わりに
-      // group-into-new-folder の分岐で検証する
       fireEvent.dragEnd(folderA);
 
-      // フォルダに直接ドラッグ&ドロップして isBatch を発火させる
       // ルート文書 rootDoc を Ctrl+選択して合計3件に、そのうえで rootDoc をドラッグしてフォルダAへ
       fireEvent.click(rootDoc, { ctrlKey: true });
-      // 選択: フォルダA / フォルダA/子文書 / ルート文書.md、ドラッグ元はルート文書
-      // dropTarget = folderA。filterMovable は:
-      //   フォルダA → 自分自身へのドロップなので除外
-      //   フォルダA/子文書 → 親も選択されているので子孫除外
-      //   ルート文書 → parent が '' で targetFolderPath === 'フォルダA' なので有効
       fireEvent.dragStart(rootDoc);
       fireEvent.dragEnter(folderA);
       fireEvent.dragOver(folderA);
@@ -583,11 +581,15 @@ describe('FolderTree', () => {
       fireEvent.dragEnd(rootDoc);
 
       await waitFor(() => {
-        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
-        expect(moves.length).toBe(1);
+        const batchCalls = calls.filter(
+          (c) => c.method === 'POST' && c.path === '/api/docs/move-batch',
+        );
+        expect(batchCalls.length).toBe(1);
       });
-      const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
-      const movedPaths = new Set(moves.map((m) => (m.body as { path: string }).path));
+      const batch = calls.find((c) => c.method === 'POST' && c.path === '/api/docs/move-batch')!;
+      const movedPaths = new Set(
+        (batch.body as { moves: { path: string }[] }).moves.map((m) => m.path),
+      );
       expect(movedPaths.has('ルート文書.md')).toBe(true);
       // 子文書は 親と一緒に fs 上ついてくるので個別移動 API では叩かれない
       expect(movedPaths.has('フォルダA/子文書.md')).toBe(false);
@@ -611,7 +613,7 @@ describe('FolderTree', () => {
       fireEvent.change(input, { target: { value: 'まとめ' } });
       fireEvent.click(screen.getByRole('button', { name: '作成して移動' }));
 
-      // POST /api/folders → POST /api/docs/move x2 の順で呼ばれる
+      // POST /api/folders → POST /api/docs/move-batch の順で呼ばれる
       await waitFor(() => {
         expect(calls.some((c) => c.method === 'POST' && c.path === '/api/folders')).toBe(true);
       });
@@ -619,18 +621,18 @@ describe('FolderTree', () => {
       expect(createFolderCall?.body).toEqual({ path: 'まとめ' });
 
       await waitFor(() => {
-        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
-        expect(moves.length).toBe(2);
+        const batches = calls.filter(
+          (c) => c.method === 'POST' && c.path === '/api/docs/move-batch',
+        );
+        expect(batches.length).toBe(1);
       });
-      const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
-      const movedPaths = new Set(moves.map((m) => (m.body as { path: string }).path));
-      expect(movedPaths.has('ルート文書.md')).toBe(true);
-      expect(movedPaths.has('見出し#1.md')).toBe(true);
-      const targets = new Set(moves.map((m) => (m.body as { newFolder: string }).newFolder));
-      expect(targets).toEqual(new Set(['まとめ']));
+      const batch = calls.find((c) => c.method === 'POST' && c.path === '/api/docs/move-batch')!;
+      const moves = (batch.body as { moves: { path: string; newFolder: string }[] }).moves;
+      expect(new Set(moves.map((m) => m.path))).toEqual(new Set(['ルート文書.md', '見出し#1.md']));
+      expect(new Set(moves.map((m) => m.newFolder))).toEqual(new Set(['まとめ']));
     });
 
-    it('Ctrl+クリックで複数選択し、選択中の1つを別フォルダへドラッグすると全件が一括移動される(#72)', async () => {
+    it('Ctrl+クリックで複数選択し、選択中の1つを別フォルダへドラッグすると一括移動APIが1回呼ばれる(#72 / #334)', async () => {
       const calls = stubFetchRecording();
       renderRecording();
       const doc1 = (await screen.findByText('ルート文書')).closest('button')!;
@@ -649,49 +651,66 @@ describe('FolderTree', () => {
       fireEvent.dragEnd(doc1);
 
       await waitFor(() => {
-        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
-        expect(moves.length).toBe(2);
+        const batches = calls.filter(
+          (c) => c.method === 'POST' && c.path === '/api/docs/move-batch',
+        );
+        expect(batches.length).toBe(1);
       });
-      const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
-      const movedPaths = new Set(moves.map((m) => (m.body as { path: string }).path));
+      const batch = calls.find((c) => c.method === 'POST' && c.path === '/api/docs/move-batch')!;
+      const movedPaths = new Set(
+        (batch.body as { moves: { path: string }[] }).moves.map((m) => m.path),
+      );
       expect(movedPaths.has('ルート文書.md')).toBe(true);
       expect(movedPaths.has('見出し#1.md')).toBe(true);
+      expect(calls.some((c) => c.method === 'POST' && c.path === '/api/docs/move')).toBe(false);
     });
 
-    it('一括移動は1件成功するごとにツリー refetch を挟む(#163)', async () => {
-      const calls = stubFetchRecording();
-      renderRecording();
-      const doc1 = (await screen.findByText('ルート文書')).closest('button')!;
-      const doc2 = (await screen.findByText('見出し#1')).closest('button')!;
-      const folder = (await screen.findByText('フォルダA')).closest('button')!;
+    it('文書バッチ＋フォルダの一括移動ではステップ成功ごとにツリー refetch を挟む(#163)', async () => {
+      const TREE_WITH_B = {
+        folders: ['フォルダA', 'フォルダB'],
+        docs: [
+          {
+            path: 'ルート文書.md',
+            title: 'ルート文書',
+            folder: '',
+            updatedAt: '2026-07-01T00:00:00+09:00',
+          },
+        ],
+      };
+      const calls = stubFetchWithTree(TREE_WITH_B);
+      renderWithProbeAt('/doc/ルート文書.md');
+      const folderA = (await screen.findByText('フォルダA')).closest('button')!;
+      const rootDoc = (await screen.findByText('ルート文書')).closest('button')!;
+      const folderB = (await screen.findByText('フォルダB')).closest('button')!;
 
-      fireEvent.click(doc1, { ctrlKey: true });
-      fireEvent.click(doc2, { ctrlKey: true });
-      fireEvent.dragStart(doc1);
-      fireEvent.dragEnter(folder);
-      fireEvent.dragOver(folder);
-      fireEvent.drop(folder);
-      fireEvent.dragEnd(doc1);
+      fireEvent.click(rootDoc, { ctrlKey: true });
+      fireEvent.click(folderA, { ctrlKey: true });
+      fireEvent.dragStart(rootDoc);
+      fireEvent.dragEnter(folderB);
+      fireEvent.dragOver(folderB);
+      fireEvent.drop(folderB);
+      fireEvent.dragEnd(rootDoc);
 
-      // 2件の移動 POST が完了するまで待ち、その間にツリー GET が挟まっていることを確認する
       await waitFor(() => {
-        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
-        expect(moves.length).toBe(2);
+        const docBatch = calls.some(
+          (c) => c.method === 'POST' && c.path === '/api/docs/move-batch',
+        );
+        const folderMove = calls.some((c) => c.method === 'POST' && c.path === '/api/folders/move');
+        expect(docBatch && folderMove).toBe(true);
       });
-      // ツリー refetch が2件目の POST より前に少なくとも1回追加で走っていること。
-      // 旧実装では末尾1回だけだが、#163 で1件成功ごとに走るようになるため
-      // 「1件目のPOSTと2件目のPOSTの間に GET /api/tree が挟まる」ことを検証する。
-      const moveIdxs = calls
-        .map((c, i) => (c.method === 'POST' && c.path === '/api/docs/move' ? i : -1))
-        .filter((i) => i >= 0);
+      const batchIdx = calls.findIndex(
+        (c) => c.method === 'POST' && c.path === '/api/docs/move-batch',
+      );
+      const folderIdx = calls.findIndex(
+        (c) => c.method === 'POST' && c.path === '/api/folders/move',
+      );
       const treeBetween = calls
-        .slice(moveIdxs[0] + 1, moveIdxs[1])
+        .slice(batchIdx + 1, folderIdx)
         .some((c) => c.method === 'GET' && c.path === '/api/tree');
       expect(treeBetween).toBe(true);
     });
 
     it('#163 全件失敗時でも末尾で TREE invalidate をフォールバックする', async () => {
-      // 全 doc の move を失敗させる。ツリー GET が最低1回は末尾で追加される(フォールバック)
       const TREE_ALL = {
         folders: ['先'],
         docs: [
@@ -699,8 +718,6 @@ describe('FolderTree', () => {
           { path: 'b.md', title: 'b', folder: '', updatedAt: '2026-07-01T00:00:00+09:00' },
         ],
       };
-      const calls = stubFetchWithTree(TREE_ALL, { failMoveDocPath: '__all__' });
-      // 上の failMoveDocPath は any-match しないので、明示的に全件失敗の別 stub を建てる
       vi.unstubAllGlobals();
       const calls2: Call[] = [];
       vi.stubGlobal(
@@ -717,7 +734,7 @@ describe('FolderTree', () => {
               json: () => Promise.resolve(TREE_ALL),
             });
           }
-          if (method === 'POST' && reqPath === '/api/docs/move') {
+          if (method === 'POST' && reqPath === '/api/docs/move-batch') {
             return Promise.resolve({
               ok: false,
               status: 500,
@@ -753,12 +770,13 @@ describe('FolderTree', () => {
       fireEvent.dragEnd(docA);
 
       await waitFor(() => {
-        const moves = calls2.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
-        expect(moves.length).toBe(2);
+        const batches = calls2.filter(
+          (c) => c.method === 'POST' && c.path === '/api/docs/move-batch',
+        );
+        expect(batches.length).toBe(1);
       });
-      // 全件失敗しても末尾フォールバックで最終 tree GET が走る(2件目の POST 後の tree GET が存在)
       const lastMoveIdx = calls2
-        .map((c, i) => (c.method === 'POST' && c.path === '/api/docs/move' ? i : -1))
+        .map((c, i) => (c.method === 'POST' && c.path === '/api/docs/move-batch' ? i : -1))
         .filter((i) => i >= 0)
         .pop()!;
       await waitFor(() => {
@@ -767,8 +785,6 @@ describe('FolderTree', () => {
           .some((c) => c.method === 'GET' && c.path === '/api/tree');
         expect(treeAfterAllMoves).toBe(true);
       });
-      // TS の未使用警告回避(stubFetchWithTree の戻り値 calls は使わないためのタイプチェック)
-      expect(calls).toBeDefined();
     });
 
     // #97 URL追従テスト群: 表示中文書のURLがバッチ移動でどう変わる/変わらないか
@@ -798,8 +814,14 @@ describe('FolderTree', () => {
       );
     }
 
-    // 任意ツリー・任意の失敗パス指定に対応した fetch スタブ(URL追従テスト群用)
-    function stubFetchWithTree(customTree: unknown, opts?: { failMoveDocPath?: string }): Call[] {
+    // 任意ツリー・任意の失敗パス指定・skippedAttachments に対応した fetch スタブ
+    function stubFetchWithTree(
+      customTree: unknown,
+      opts?: {
+        failMoveDocPath?: string;
+        skippedAttachments?: { fileName: string; reason: 'shared' | 'conflict' }[];
+      },
+    ): Call[] {
       const calls: Call[] = [];
       vi.stubGlobal(
         'fetch',
@@ -829,7 +851,35 @@ describe('FolderTree', () => {
             return Promise.resolve({
               ok: true,
               status: 200,
-              json: () => Promise.resolve({ path: newPath }),
+              json: () =>
+                Promise.resolve({
+                  path: newPath,
+                  skippedAttachments: opts?.skippedAttachments ?? [],
+                }),
+            });
+          }
+          if (method === 'POST' && reqPath === '/api/docs/move-batch') {
+            const b = body as { moves: { path: string; newFolder: string; newTitle: string }[] };
+            if (opts?.failMoveDocPath && b.moves.some((m) => m.path === opts.failMoveDocPath)) {
+              return Promise.resolve({
+                ok: false,
+                status: 500,
+                json: () =>
+                  Promise.resolve({ error: { code: 'INTERNAL_ERROR', message: 'server error' } }),
+              });
+            }
+            const moved = b.moves.map((m) => ({
+              oldPath: m.path,
+              path: m.newFolder ? `${m.newFolder}/${m.newTitle}.md` : `${m.newTitle}.md`,
+            }));
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () =>
+                Promise.resolve({
+                  moved,
+                  skippedAttachments: opts?.skippedAttachments ?? [],
+                }),
             });
           }
           if (method === 'POST' && reqPath === '/api/folders/move') {
@@ -875,8 +925,6 @@ describe('FolderTree', () => {
     });
 
     it('フォルダごとバッチ移動して、配下に表示中docがあると URL が「移動先/oldFolder/子doc」に追従する(#97)', async () => {
-      // フォルダA を フォルダB 配下へ丸ごと移動。表示中の「フォルダA/子文書.md」が
-      // 追従して「フォルダB/フォルダA/子文書.md」になることを検証(folder 分岐の rewritten)
       const TREE_WITH_B = {
         folders: ['フォルダA', 'フォルダB'],
         docs: [
@@ -912,12 +960,14 @@ describe('FolderTree', () => {
       fireEvent.drop(folderB);
       fireEvent.dragEnd(folderA);
 
-      // 移動APIが叩かれた(folder + doc の2件)ことを待ってから URL 追従を確認
+      // 移動APIが叩かれた(folder + docバッチ)ことを待ってから URL 追従を確認
       await waitFor(() => {
         const folderMoves = calls.filter(
           (c) => c.method === 'POST' && c.path === '/api/folders/move',
         );
-        const docMoves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
+        const docMoves = calls.filter(
+          (c) => c.method === 'POST' && c.path === '/api/docs/move-batch',
+        );
         expect(folderMoves.length).toBe(1);
         expect(docMoves.length).toBe(1);
       });
@@ -946,17 +996,17 @@ describe('FolderTree', () => {
       fireEvent.drop(folder);
       fireEvent.dragEnd(rootDoc);
 
-      // 移動APIが叩き終わったことを待つ(バッチ完了の目印)
       await waitFor(() => {
-        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
-        expect(moves.length).toBe(2);
+        const batches = calls.filter(
+          (c) => c.method === 'POST' && c.path === '/api/docs/move-batch',
+        );
+        expect(batches.length).toBe(1);
       });
       // 表示中文書は選択に含まれていないので URL は初期値のまま
       expect(screen.getByTestId('location-probe').textContent).toBe(initial);
     });
 
-    it('表示中docの移動が失敗したときは URL が変わらない(#97)', async () => {
-      // 単発 move と同じく、失敗した対象については URL 追従しない(古い URL のまま = 安全側)
+    it('表示中docを含むバッチ移動が失敗したときは URL が変わらない(#97)', async () => {
       const initial = '/doc/ルート文書.md';
       const calls = stubFetchWithTree(TREE, { failMoveDocPath: 'ルート文書.md' });
       renderWithProbeAt(initial);
@@ -974,13 +1024,108 @@ describe('FolderTree', () => {
       fireEvent.drop(folder);
       fireEvent.dragEnd(rootDoc);
 
-      // 移動APIが2件叩き終わったことを待つ(1件は500, 1件は成功)
       await waitFor(() => {
-        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
-        expect(moves.length).toBe(2);
+        const batches = calls.filter(
+          (c) => c.method === 'POST' && c.path === '/api/docs/move-batch',
+        );
+        expect(batches.length).toBe(1);
       });
       // 表示中 doc の移動は失敗したので URL は初期値のまま
       expect(screen.getByTestId('location-probe').textContent).toBe(initial);
+    });
+
+    it('一括移動で共有添付が残置された場合、統合トーストで件数を通知する(#334)', async () => {
+      useToastStore.setState({ toast: null });
+      stubFetchWithTree(TREE, {
+        skippedAttachments: [{ fileName: 'shared.png', reason: 'shared' }],
+      });
+      renderWithProbeAt('/doc/ルート文書.md');
+
+      const doc1 = (await screen.findByText('ルート文書')).closest('button')!;
+      const doc2 = (await screen.findByText('見出し#1')).closest('button')!;
+      const folder = (await screen.findByText('フォルダA')).closest('button')!;
+
+      fireEvent.click(doc1, { ctrlKey: true });
+      fireEvent.click(doc2, { ctrlKey: true });
+      fireEvent.dragStart(doc1);
+      fireEvent.dragEnter(folder);
+      fireEvent.dragOver(folder);
+      fireEvent.drop(folder);
+      fireEvent.dragEnd(doc1);
+
+      await waitFor(() => {
+        const toast = useToastStore.getState().toast;
+        expect(toast?.kind).toBe('info');
+        expect(toast?.message).toContain('2件を移動しました');
+        expect(toast?.message).toContain('共有中の添付 1 件は元のフォルダに残しました');
+      });
+    });
+
+    it('単体移動でも共有・衝突添付が残置された場合、トーストで件数を通知する(#334)', async () => {
+      useToastStore.setState({ toast: null });
+      stubFetchWithTree(TREE, {
+        skippedAttachments: [
+          { fileName: 'shared.png', reason: 'shared' },
+          { fileName: 'dup.png', reason: 'conflict' },
+        ],
+      });
+      renderWithProbeAt('/doc/ルート文書.md');
+
+      const doc1 = (await screen.findByText('ルート文書')).closest('button')!;
+      const folder = (await screen.findByText('フォルダA')).closest('button')!;
+
+      fireEvent.dragStart(doc1);
+      fireEvent.dragEnter(folder);
+      fireEvent.dragOver(folder);
+      fireEvent.drop(folder);
+      fireEvent.dragEnd(doc1);
+
+      await waitFor(() => {
+        const toast = useToastStore.getState().toast;
+        expect(toast?.kind).toBe('info');
+        expect(toast?.message).toContain('共有中の添付 1 件は元のフォルダに残しました');
+        expect(toast?.message).toContain(
+          '移動先に同名ファイルがあるため添付 1 件は元のフォルダに残しました',
+        );
+      });
+    });
+
+    it('201件以上の文書を一括移動すると 200 件単位に分割して /api/docs/move-batch を呼ぶ(#334 M3)', async () => {
+      useToastStore.setState({ toast: null });
+      const docs201 = Array.from({ length: 201 }, (_, idx) => ({
+        path: `doc-${String(idx).padStart(3, '0')}.md`,
+        title: `doc-${String(idx).padStart(3, '0')}`,
+        folder: '',
+        updatedAt: '2026-07-01T00:00:00+09:00',
+      }));
+      const calls = stubFetchWithTree({ folders: ['移動先'], docs: docs201 });
+      renderWithProbeAt('/doc/doc-000.md');
+
+      const firstDoc = (await screen.findByText('doc-000')).closest('button')!;
+      const lastDoc = (await screen.findByText('doc-200')).closest('button')!;
+      const destFolder = (await screen.findByText('移動先')).closest('button')!;
+
+      fireEvent.click(firstDoc);
+      fireEvent.click(lastDoc, { shiftKey: true });
+      fireEvent.dragStart(firstDoc);
+      fireEvent.dragEnter(destFolder);
+      fireEvent.dragOver(destFolder);
+      fireEvent.drop(destFolder);
+      fireEvent.dragEnd(firstDoc);
+
+      await waitFor(() => {
+        const batches = calls.filter(
+          (c) => c.method === 'POST' && c.path === '/api/docs/move-batch',
+        );
+        expect(batches.length).toBe(2);
+        expect((batches[0].body as { moves: unknown[] }).moves.length).toBe(200);
+        expect((batches[1].body as { moves: unknown[] }).moves.length).toBe(1);
+      });
+      await waitFor(() => {
+        const toast = useToastStore.getState().toast;
+        expect(toast?.kind).toBe('success');
+        expect(toast?.message).toBe('201件を移動しました');
+      });
     });
 
     describe('#169: 文書行へのドロップで親フォルダに移動', () => {
@@ -1212,15 +1357,17 @@ describe('FolderTree', () => {
         fireEvent.dragEnd(doc1);
 
         await waitFor(() => {
-          const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
-          expect(moves.length).toBe(2);
+          const batches = calls.filter(
+            (c) => c.method === 'POST' && c.path === '/api/docs/move-batch',
+          );
+          expect(batches.length).toBe(1);
         });
-        const moves = calls.filter((c) => c.method === 'POST' && c.path === '/api/docs/move');
-        const movedPaths = new Set(moves.map((m) => (m.body as { path: string }).path));
-        expect(movedPaths.has('ルート文書.md')).toBe(true);
-        expect(movedPaths.has('見出し#1.md')).toBe(true);
-        const targets = new Set(moves.map((m) => (m.body as { newFolder: string }).newFolder));
-        expect(targets).toEqual(new Set(['フォルダA']));
+        const batch = calls.find((c) => c.method === 'POST' && c.path === '/api/docs/move-batch')!;
+        const moves = (batch.body as { moves: { path: string; newFolder: string }[] }).moves;
+        expect(new Set(moves.map((m) => m.path))).toEqual(
+          new Set(['ルート文書.md', '見出し#1.md']),
+        );
+        expect(new Set(moves.map((m) => m.newFolder))).toEqual(new Set(['フォルダA']));
       });
     });
   });

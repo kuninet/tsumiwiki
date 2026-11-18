@@ -1,12 +1,15 @@
+import { MOVE_DOCS_BATCH_MAX, type SkippedAttachment } from '@tsumiwiki/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { LocateFixed, Paperclip } from 'lucide-react';
 import type React from 'react';
 import { type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  BACKLINKS_QUERY_KEY,
   createFolder as createFolderApi,
   docQueryKey,
-  moveDoc as moveDocApi,
+  formatMoveToastMessage,
+  moveDocsBatch as moveDocsBatchApi,
   moveFolder as moveFolderApi,
   TAGS_QUERY_KEY,
   TREE_QUERY_KEY,
@@ -18,6 +21,7 @@ import {
   useMoveFolder,
   useTree,
 } from '../api/docs';
+import { ALL_HISTORY_QUERY_KEY } from '../api/history';
 import { ApiRequestError } from '../api/client';
 import { getAttachmentGeneration, withCacheBuster } from '../lib/attachment-events';
 import { type AttachmentNode, buildTree, parentOf, type TreeNode } from '../lib/build-tree';
@@ -612,49 +616,101 @@ export function FolderTree() {
       });
   }
 
-  // 選択された複数アイテムを targetFolderPath へ移動する(#72)。
-  // useMoveDoc/useMoveFolder は個別トーストを出すため、生API + 一括サマリートーストで対応する
-  // #163: 1件移動が成功するたびに TREE を invalidate してツリーを追従更新し、URL 追従も
-  // 該当ファイルが動いた時点で前倒しする(進捗が視覚的に分かる)
+  // 選択された複数アイテムを targetFolderPath へ移動する(#72 / #334)。
+  // 文書群は POST /api/docs/move-batch で一括移動し、グループ内共有添付も同伴移動する。
   async function performBatchMove(nodes: TreeNode[], targetFolderPath: string) {
     let succeeded = 0;
     let failed = 0;
     let lastError: string | null = null;
-    for (const node of nodes) {
-      if (node.type === 'attachment') continue;
-      try {
-        let oldPath: string;
-        let newPath: string;
-        let kind: 'doc' | 'folder';
-        if (node.type === 'doc') {
-          const data = await moveDocApi({
-            path: node.path,
-            newFolder: targetFolderPath,
-            newTitle: node.title,
+    const skippedAttachments: SkippedAttachment[] = [];
+    const seenSkipped = new Set<string>();
+    const appendSkipped = (items: SkippedAttachment[] | undefined) => {
+      if (!items) return;
+      for (const item of items) {
+        const key = `${item.reason}:${item.fileName}`;
+        if (seenSkipped.has(key)) continue;
+        seenSkipped.add(key);
+        skippedAttachments.push(item);
+      }
+    };
+
+    const docNodes = nodes.filter((n): n is Extract<TreeNode, { type: 'doc' }> => n.type === 'doc');
+    const folderNodes = nodes.filter(
+      (n): n is Extract<TreeNode, { type: 'folder' }> => n.type === 'folder',
+    );
+
+    if (docNodes.length > 0) {
+      const allMoved: { oldPath: string; path: string }[] = [];
+      let shouldInvalidateTree = false;
+      for (let i = 0; i < docNodes.length; i += MOVE_DOCS_BATCH_MAX) {
+        const chunk = docNodes.slice(i, i + MOVE_DOCS_BATCH_MAX);
+        try {
+          const data = await moveDocsBatchApi({
+            moves: chunk.map((node) => ({
+              path: node.path,
+              newFolder: targetFolderPath,
+              newTitle: node.title,
+            })),
           });
-          oldPath = node.path;
-          newPath = data.path;
-          kind = 'doc';
-        } else {
-          const folderName = node.path.split('/').pop()!;
-          const rawNew = targetFolderPath ? `${targetFolderPath}/${folderName}` : folderName;
-          const data = await moveFolderApi({ path: node.path, newPath: rawNew });
-          oldPath = node.path;
-          newPath = data.path;
-          kind = 'folder';
-          // #216 展開状態を新パスに付け替える(一括移動経路)
-          repathExpandedFolder(oldPath, newPath);
+          succeeded += data.moved.length;
+          appendSkipped(data.skippedAttachments);
+          allMoved.push(...data.moved);
+          shouldInvalidateTree = true;
+        } catch (err) {
+          failed += chunk.length;
+          if (err instanceof ApiRequestError) lastError = err.message;
         }
+      }
+
+      if (allMoved.length > 0) {
+        const nowPath = currentPathRef.current;
+        const movedOldPaths: string[] = [];
+        for (const m of allMoved) {
+          if (m.oldPath !== m.path) {
+            movedOldPaths.push(m.oldPath);
+          }
+        }
+        if (nowPath) {
+          const hitItem = allMoved.find((m) => m.oldPath === nowPath);
+          if (hitItem && hitItem.oldPath !== hitItem.path) {
+            useTabsStore.getState().openDoc(hitItem.path);
+            navigate(docUrl(hitItem.path), { replace: true });
+          }
+        }
+        for (const oldPath of movedOldPaths) {
+          useTabsStore.getState().closeTab(oldPath);
+        }
+        // React が旧 DocTab をアンマウントした後にキャッシュを削除しないと、
+        // マウント中の useDoc が旧パスを即再取得して 404 になるため次ティックに回す
+        if (movedOldPaths.length > 0) {
+          setTimeout(() => {
+            for (const oldPath of movedOldPaths) {
+              queryClient.removeQueries({ queryKey: docQueryKey(oldPath) });
+            }
+          }, 0);
+        }
+      }
+
+      if (shouldInvalidateTree) {
+        // 文書バッチ完了後にツリーを refetch(await して後続フォルダ移動より前にツリー反映を待つ)
+        await queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
+      }
+    }
+
+    for (const node of folderNodes) {
+      try {
+        const folderName = node.path.split('/').pop()!;
+        const rawNew = targetFolderPath ? `${targetFolderPath}/${folderName}` : folderName;
+        const data = await moveFolderApi({ path: node.path, newPath: rawNew });
+        const oldPath = node.path;
+        const newPath = data.path;
+        // #216 展開状態を新パスに付け替える(一括移動経路)
+        repathExpandedFolder(oldPath, newPath);
         succeeded++;
 
-        // #97: 表示中文書が今動いたファイル(またはその配下)なら、この時点で URL を追従する。
-        // filterMovable が同一選択集合内の子孫を除外しているため、iteration k で nowPath を
-        // 新パスに書き換えた後の iteration k+1 で「更新前の古い nowPath」と偶然マッチする
-        // ケースは発生しない(祖先が既に動いた後の子孫は選択から除外されている)
+        // #97: 表示中文書が今動いたフォルダ配下なら、この時点で URL を追従する
         const nowPath = currentPathRef.current;
-        const hit =
-          !!nowPath &&
-          (nowPath === oldPath || (kind === 'folder' && nowPath.startsWith(`${oldPath}/`)));
+        const hit = !!nowPath && (nowPath === oldPath || nowPath.startsWith(`${oldPath}/`));
         if (nowPath && hit) {
           const rewritten = newPath + nowPath.slice(oldPath.length);
           queryClient.removeQueries({
@@ -668,28 +724,34 @@ export function FolderTree() {
           navigate(docUrl(rewritten), { replace: true });
         }
 
-        // 1件成功ごとにツリーを refetch(await して次の移動より先にツリー反映を待つ)
+        // 1件成功ごとにツリーを refetch(await して次の移動より前にツリー反映を待つ)
         await queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       } catch (err) {
         failed++;
         if (err instanceof ApiRequestError) lastError = err.message;
       }
     }
+
     // 全件失敗時はループ内 invalidate が一度も走らないため、フォールバックとして
     // 末尾でもう1回 TREE を invalidate する(冪等)。並行編集で古い状態を残さないため
     if (succeeded === 0) {
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
     }
-    // タグはコンテンツ由来で folder 移動では変化しないため、末尾で1回だけ invalidate すれば足りる
     queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+    queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
+    queryClient.invalidateQueries({ queryKey: BACKLINKS_QUERY_KEY });
     if (failed === 0) {
-      showToast('success', succeeded === 1 ? '移動しました' : `${succeeded}件を移動しました`);
+      const base = succeeded === 1 ? '移動しました' : `${succeeded}件を移動しました`;
+      const formatted = formatMoveToastMessage(base, skippedAttachments);
+      showToast(formatted.kind, formatted.message);
     } else if (succeeded === 0) {
       showToast('error', lastError ?? '移動に失敗しました');
     } else {
+      const base = `${succeeded}件を移動しました`;
+      const formatted = formatMoveToastMessage(base, skippedAttachments);
       showToast(
         'warning',
-        `${succeeded}件を移動しました。${failed}件が失敗しました${lastError ? `: ${lastError}` : ''}`,
+        `${formatted.message}。${failed}件が失敗しました${lastError ? `: ${lastError}` : ''}`,
       );
     }
   }
