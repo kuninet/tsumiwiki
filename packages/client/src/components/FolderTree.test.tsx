@@ -15,6 +15,7 @@ import { docUrl } from '../lib/doc-path';
 import { useEditStore } from '../stores/edit';
 import { useToastStore } from '../stores/toast';
 import { useUIStore } from '../stores/ui';
+import { useUserSettingsStore } from '../stores/user-settings';
 import { FolderTree } from './FolderTree';
 
 const TREE = {
@@ -60,6 +61,9 @@ describe('FolderTree', () => {
     cleanup();
     useUIStore.setState({ expandedFolders: new Set(), revealRequest: null, sidebarTab: 'folder' });
     useEditStore.setState({ dirty: false });
+    localStorage.clear();
+    useUserSettingsStore.setState({ showAttachmentsInTree: false });
+    useUserSettingsStore.persist.clearStorage();
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
     delete (document as unknown as { execCommand?: unknown }).execCommand;
     useToastStore.setState({ toast: null });
@@ -1711,6 +1715,173 @@ describe('FolderTree', () => {
 
       await screen.findByText('A');
       expect(btn.disabled).toBe(false);
+    });
+  });
+
+  describe('添付ファイル表示トグルとプレビュー (#318)', () => {
+    const TREE_WITH_ATTACHMENTS: TreeResponse = {
+      folders: ['sub'],
+      docs: [
+        {
+          path: 'sub/note.md',
+          title: 'サブノート',
+          folder: 'sub',
+          updatedAt: '2026-07-01T00:00:00+09:00',
+        },
+        {
+          path: 'root.md',
+          title: 'ルートノート',
+          folder: '',
+          updatedAt: '2026-07-01T00:00:00+09:00',
+        },
+      ],
+      attachments: [
+        {
+          path: 'sub/photo.png',
+          name: 'photo.png',
+          folder: 'sub',
+          updatedAt: '2026-07-01T00:00:00+09:00',
+        },
+        {
+          path: 'diagram.svg',
+          name: 'diagram.svg',
+          folder: '',
+          updatedAt: '2026-07-01T00:00:00+09:00',
+        },
+        {
+          path: 'manual.pdf',
+          name: 'manual.pdf',
+          folder: '',
+          updatedAt: '2026-07-01T00:00:00+09:00',
+        },
+      ],
+    };
+
+    it('AT-04: 初期状態では添付ファイルが非表示で、トグル ON/OFF と localStorage 永続化・再マウント復元ができる', async () => {
+      const { unmount } = renderFolderTree('/', TREE_WITH_ATTACHMENTS);
+      await screen.findByText('ルートノート');
+
+      const toggleBtn = screen.getByTestId('toggle-attachments');
+      expect(toggleBtn.getAttribute('aria-pressed')).toBe('false');
+      expect(screen.queryByTestId('attachment-diagram.svg')).toBeNull();
+      expect(screen.queryByTestId('attachment-manual.pdf')).toBeNull();
+
+      // ON にするとルート直下の添付が表示される
+      fireEvent.click(toggleBtn);
+      expect(toggleBtn.getAttribute('aria-pressed')).toBe('true');
+      expect(await screen.findByTestId('attachment-diagram.svg')).toBeTruthy();
+      expect(screen.getByTestId('attachment-manual.pdf')).toBeTruthy();
+      expect(screen.queryByTestId('attachment-sub/photo.png')).toBeNull();
+
+      // サブフォルダを展開すると配下の添付も表示される
+      fireEvent.click(screen.getByText('sub'));
+      expect(await screen.findByTestId('attachment-sub/photo.png')).toBeTruthy();
+
+      // localStorage に保存され、再マウント後も ON が復元される
+      const stored = JSON.parse(localStorage.getItem('tsumiwiki-user-settings') ?? '{}');
+      expect(stored.state?.showAttachmentsInTree).toBe(true);
+
+      unmount();
+      renderFolderTree('/', TREE_WITH_ATTACHMENTS);
+      const remountedToggle = await screen.findByTestId('toggle-attachments');
+      expect(remountedToggle.getAttribute('aria-pressed')).toBe('true');
+      expect(await screen.findByTestId('attachment-diagram.svg')).toBeTruthy();
+      expect(screen.getByTestId('attachment-sub/photo.png')).toBeTruthy();
+
+      // 再度 OFF にすると即座に消える
+      fireEvent.click(remountedToggle);
+      expect(remountedToggle.getAttribute('aria-pressed')).toBe('false');
+      expect(screen.queryByTestId('attachment-diagram.svg')).toBeNull();
+      expect(screen.queryByTestId('attachment-sub/photo.png')).toBeNull();
+    });
+
+    it('AT-05: 画像(SVG/PNG)・PDF のクリックおよび Enter でライトボックスが開き、Escape で閉じて元の行へフォーカスが戻る', async () => {
+      useUserSettingsStore.setState({ showAttachmentsInTree: true });
+      useUIStore.setState({ expandedFolders: new Set(['sub']) });
+      renderFolderTree('/', TREE_WITH_ATTACHMENTS);
+
+      const svgRow = (await screen.findByTestId('attachment-diagram.svg')) as HTMLButtonElement;
+      svgRow.focus();
+      fireEvent.click(svgRow);
+
+      const imgDialog = await screen.findByRole('dialog');
+      expect(imgDialog.getAttribute('aria-label')).toBe('diagram.svg');
+      const img = imgDialog.querySelector('img');
+      expect(img?.getAttribute('src')).toBe('/api/files/diagram.svg');
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(document.activeElement).toBe(svgRow);
+
+      // サブフォルダ内の PNG をクリック
+      const pngRow = screen.getByTestId('attachment-sub/photo.png') as HTMLButtonElement;
+      pngRow.focus();
+      fireEvent.click(pngRow);
+      const pngDialog = await screen.findByRole('dialog');
+      expect(pngDialog.querySelector('img')?.getAttribute('src')).toBe('/api/files/sub/photo.png');
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(document.activeElement).toBe(pngRow);
+
+      // PDF 行にフォーカスして Enter でプレビュー
+      const pdfRow = screen.getByTestId('attachment-manual.pdf') as HTMLButtonElement;
+      pdfRow.focus();
+      fireEvent.keyDown(pdfRow, { key: 'Enter' });
+
+      const pdfDialog = await screen.findByRole('dialog');
+      expect(pdfDialog.getAttribute('aria-label')).toBe('manual.pdf');
+      const iframe = pdfDialog.querySelector('iframe');
+      expect(iframe?.getAttribute('src')).toBe('/api/files/manual.pdf');
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(document.activeElement).toBe(pdfRow);
+    });
+
+    it('AT-06: 添付行は F2/Delete/ダブルクリック/複数選択/ドラッグを無効化し、専用コンテキストメニューのみ表示する', async () => {
+      useUserSettingsStore.setState({ showAttachmentsInTree: true });
+      renderFolderTree('/', TREE_WITH_ATTACHMENTS);
+
+      const pdfRow = (await screen.findByTestId('attachment-manual.pdf')) as HTMLButtonElement;
+      const docRow = screen.getByTestId('doc-root.md') as HTMLButtonElement;
+
+      // ドラッグ無効
+      expect(pdfRow.draggable).toBe(false);
+
+      // F2 / Delete / ダブルクリック でリネーム入力や削除確認ダイアログが開かない
+      pdfRow.focus();
+      fireEvent.keyDown(pdfRow, { key: 'F2' });
+      expect(document.querySelector('input[aria-label="名称変更"]')).toBeNull();
+
+      fireEvent.keyDown(pdfRow, { key: 'Delete' });
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      fireEvent.doubleClick(pdfRow);
+      expect(document.querySelector('input[aria-label="名称変更"]')).toBeNull();
+
+      // Ctrl/Shift クリックでも複数選択に混入しない
+      fireEvent.click(docRow);
+      fireEvent.click(pdfRow, { ctrlKey: true });
+      expect(screen.queryByText(/件選択中/)).toBeNull();
+
+      fireEvent.click(pdfRow, { shiftKey: true });
+      expect(screen.queryByText(/件選択中/)).toBeNull();
+
+      // 右クリックで「プレビュー」「パスをコピー」のみ表示し、ルートメニューへ伝播しない
+      fireEvent.contextMenu(pdfRow, { clientX: 50, clientY: 80 });
+      const menu = await screen.findByRole('menu');
+      const menuItems = Array.from(menu.querySelectorAll('[role="menuitem"]')).map(
+        (el) => el.textContent,
+      );
+      expect(menuItems).toEqual(['プレビュー', 'パスをコピー']);
+
+      // コンテキストメニューからプレビューを開き、Escape で元の添付行へフォーカス復帰する
+      fireEvent.click(screen.getByRole('menuitem', { name: 'プレビュー' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(dialog.querySelector('iframe')?.getAttribute('src')).toBe('/api/files/manual.pdf');
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(document.activeElement).toBe(pdfRow);
     });
   });
 });

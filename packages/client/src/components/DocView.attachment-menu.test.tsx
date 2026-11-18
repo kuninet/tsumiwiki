@@ -46,9 +46,17 @@ function stubFetch(overrides: Record<string, unknown> = {}) {
 
     const key = `${method} ${path}`;
     if (key in overrides) {
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(overrides[key]) });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(overrides[key]),
+      });
     }
-    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, draft: null }) });
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ok: true, draft: null }),
+    });
   });
   vi.stubGlobal('fetch', fetchMock);
   return calls;
@@ -400,7 +408,11 @@ describe('DocView の画像管理メニュー(#199)', () => {
           json: () => Promise.resolve({ lock: { userId: 1, displayName: '太郎' } }),
         });
       }
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ draft: null }) });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ draft: null }),
+      });
     });
     vi.stubGlobal('fetch', fetchMock);
     renderDocView();
@@ -444,9 +456,17 @@ describe('DocView の画像管理メニュー(#199)', () => {
         });
       }
       if (url.startsWith('/api/attachments') && method === 'DELETE') {
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ ok: true }),
+        });
       }
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ draft: null }) });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ draft: null }),
+      });
     });
     vi.stubGlobal('fetch', fetchMock);
     renderDocView();
@@ -548,8 +568,7 @@ describe('DocView の画像管理メニュー(#199)', () => {
         return Promise.resolve({
           ok: false,
           status: 404,
-          json: () =>
-            Promise.resolve({ error: { code: 'NOT_FOUND', message: '見つかりません' } }),
+          json: () => Promise.resolve({ error: { code: 'NOT_FOUND', message: '見つかりません' } }),
         });
       }
       if (url.startsWith('/api/locks') && (init?.method ?? 'GET') === 'POST') {
@@ -559,7 +578,11 @@ describe('DocView の画像管理メニュー(#199)', () => {
           json: () => Promise.resolve({ lock: { userId: 1, displayName: '太郎' } }),
         });
       }
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ draft: null }) });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ draft: null }),
+      });
     });
     vi.stubGlobal('fetch', fetchMock);
     renderDocView();
@@ -588,7 +611,9 @@ describe('DocView の画像管理メニュー(#199)', () => {
 
     await screen.findByRole('button', { name: /保存/ });
     const pdfFrame = await waitFor(() => {
-      const el = document.querySelector('.obsidian-embed-pdf-wrapper .attachment-frame--persistent');
+      const el = document.querySelector(
+        '.obsidian-embed-pdf-wrapper .attachment-frame--persistent',
+      );
       expect(el).toBeTruthy();
       return el as HTMLElement;
     });
@@ -611,7 +636,9 @@ describe('DocView の画像管理メニュー(#199)', () => {
 
     await screen.findByRole('button', { name: /保存/ });
     const pdfFrame = await waitFor(() => {
-      const el = document.querySelector('.obsidian-embed-pdf-wrapper .attachment-frame--persistent');
+      const el = document.querySelector(
+        '.obsidian-embed-pdf-wrapper .attachment-frame--persistent',
+      );
       expect(el).toBeTruthy();
       return el as HTMLElement;
     });
@@ -643,5 +670,79 @@ describe('DocView の画像管理メニュー(#199)', () => {
     const lightboxImg = dialog.querySelector('img');
     expect(lightboxImg).toBeTruthy();
     expect(lightboxImg!.getAttribute('src')).toBe(originalSrc);
+  });
+
+  it('AT-07: 添付の削除・リネーム・アップロード時にツリーキャッシュ(TREE_QUERY_KEY)が無効化される(#318)', async () => {
+    const { TREE_QUERY_KEY } = await import('../api/docs');
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    stubFetch({
+      'POST /api/locks': { lock: { userId: 1, displayName: '太郎' } },
+      'GET /api/drafts': { draft: null },
+      'GET /api/attachments/resolve': { path: 'old.png', name: 'old.png' },
+      'GET /api/attachments/references': { docs: ['メモ.md'] },
+      'DELETE /api/attachments': { ok: true },
+      'POST /api/attachments/rename': {
+        path: 'new.png',
+        name: 'new.png',
+        rewrittenDocs: [
+          {
+            path: 'メモ.md',
+            updatedAt: '2026-08-23T00:00:00+09:00',
+            replacements: [{ from: 'old.png', to: 'new.png' }],
+          },
+        ],
+      },
+      'GET /api/docs': {
+        ...DOC,
+        body: '![[new.png|300]]\n\n![](sub/old.png)\n',
+        updatedAt: '2026-08-23T00:00:00+09:00',
+      },
+      'POST /api/attachments': { fileName: 'uploaded.png', path: 'uploaded.png' },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <DocView doc={DOC} currentUser={CURRENT_USER} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // 1. リネームで TREE_QUERY_KEY が invalidate される
+    await openEmbedMenuAndClick('名前を変更');
+    const input = await screen.findByLabelText('新しいファイル名');
+    fireEvent.change(input, { target: { value: 'new.png' } });
+    fireEvent.click(screen.getByRole('button', { name: '変更' }));
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: TREE_QUERY_KEY });
+    });
+
+    invalidateSpy.mockClear();
+
+    // 2. 削除で TREE_QUERY_KEY が invalidate される
+    await openEmbedMenuAndClick('削除');
+    const delBtn = await waitFor(() => {
+      const b = screen.getByRole('button', { name: '削除' }) as HTMLButtonElement;
+      expect(b.disabled).toBe(false);
+      return b;
+    });
+    fireEvent.click(delBtn);
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: TREE_QUERY_KEY });
+    });
+
+    invalidateSpy.mockClear();
+
+    // 3. 画像ファイル貼り付け(アップロード)で TREE_QUERY_KEY が invalidate される
+    const editorEl = document.querySelector('.ProseMirror') as HTMLElement;
+    const pngFile = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'paste.png', {
+      type: 'image/png',
+    });
+    fireEvent.paste(editorEl, { clipboardData: { files: [pngFile], getData: () => '' } });
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: TREE_QUERY_KEY });
+    });
   });
 });

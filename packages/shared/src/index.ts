@@ -79,9 +79,18 @@ export const docSummarySchema = z.object({
 });
 export type DocSummary = z.infer<typeof docSummarySchema>;
 
+export const attachmentSummarySchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  folder: z.string(),
+  updatedAt: z.string(),
+});
+export type AttachmentSummary = z.infer<typeof attachmentSummarySchema>;
+
 export const treeResponseSchema = z.object({
   folders: z.array(z.string()),
   docs: z.array(docSummarySchema),
+  attachments: z.array(attachmentSummarySchema).optional(),
 });
 export type TreeResponse = z.infer<typeof treeResponseSchema>;
 
@@ -464,7 +473,6 @@ export const backlinksResponseSchema = z.object({
   truncated: z.boolean(),
 });
 export type BacklinksResponse = z.infer<typeof backlinksResponseSchema>;
-
 
 // APIエラー共通形式(設計03章3.1)
 export const apiErrorSchema = z.object({

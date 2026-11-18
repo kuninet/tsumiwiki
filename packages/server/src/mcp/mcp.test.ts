@@ -334,7 +334,10 @@ describe('POST /mcp JSON-RPC', () => {
       jsonrpc: '2.0',
       id: 23,
       method: 'tools/call',
-      params: { name: 'move_note', arguments: { path: 'locked.md', newFolder: '', newTitle: 'locked2' } },
+      params: {
+        name: 'move_note',
+        arguments: { path: 'locked.md', newFolder: '', newTitle: 'locked2' },
+      },
     });
     expect(moveRes.json().result.isError).toBe(true);
   });
@@ -593,7 +596,8 @@ describe('POST /mcp JSON-RPC', () => {
         },
       },
     });
-    const isProtoRejected = resProto.statusCode === 400 || resProto.json()?.result?.isError === true;
+    const isProtoRejected =
+      resProto.statusCode === 400 || resProto.json()?.result?.isError === true;
     expect(isProtoRejected).toBe(true);
 
     const resConstructor = await mcpRequest({
@@ -1126,7 +1130,9 @@ describe('append_to_daily_note', () => {
   it('同時に6回呼んでも6件すべて残る', async () => {
     await callTool('create_daily_note', {});
     const results = await Promise.all(
-      [1, 2, 3, 4, 5, 6].map((n) => callTool('append_to_daily_note', { text: `c${n}`, source: 'S' })),
+      [1, 2, 3, 4, 5, 6].map((n) =>
+        callTool('append_to_daily_note', { text: `c${n}`, source: 'S' }),
+      ),
     );
     for (const r of results) expect(r.isError).toBeFalsy();
     const raw = await rawNote();
@@ -1207,7 +1213,9 @@ describe('append_to_daily_note', () => {
 
   it('text が空白だけ・source に改行・heading が不正な場合はエラーになる', async () => {
     expect((await callTool('append_to_daily_note', { text: '  \n ' })).isError).toBe(true);
-    expect((await callTool('append_to_daily_note', { text: 'a', source: 'x\ny' })).isError).toBe(true);
+    expect((await callTool('append_to_daily_note', { text: 'a', source: 'x\ny' })).isError).toBe(
+      true,
+    );
     const bad = await callTool('append_to_daily_note', { text: 'a', heading: 'メモ' });
     expect(bad.isError).toBe(true);
     expect(bad.structuredContent.code).toBe('INVALID_HEADING');
@@ -1305,14 +1313,22 @@ describe('append_to_note (issue #309)', () => {
     it('中身のない節に見出し直後に追記される', async () => {
       const orig = '# ノート\n\n## メモ\n\n## 連絡\n';
       await callTool('create_note', { path: 'empty-sec.md', content: orig });
-      await callTool('append_to_note', { path: 'empty-sec.md', heading: '## メモ', text: '最初の項目' });
+      await callTool('append_to_note', {
+        path: 'empty-sec.md',
+        heading: '## メモ',
+        text: '最初の項目',
+      });
       const c = await readFile(join(lib, 'empty-sec.md'), 'utf8');
       expect(c).toContain('## メモ\n\n最初の項目\n\n## 連絡');
     });
 
     it('存在しない見出しの場合は本文末尾に見出し新設して追記される', async () => {
       await callTool('create_note', { path: 'new-sec.md', content: '既存本文\n' });
-      await callTool('append_to_note', { path: 'new-sec.md', heading: '## 追記見出し', text: '内容' });
+      await callTool('append_to_note', {
+        path: 'new-sec.md',
+        heading: '## 追記見出し',
+        text: '内容',
+      });
       const c = await readFile(join(lib, 'new-sec.md'), 'utf8');
       expect(c).toContain('既存本文\n\n## 追記見出し\n\n内容\n');
     });
@@ -1320,7 +1336,11 @@ describe('append_to_note (issue #309)', () => {
     it('コードフェンス内の見出しを無視して正しい位置に追記または新設される', async () => {
       const orig = '```md\n## メモ\n```\n本文\n';
       await callTool('create_note', { path: 'fence-h.md', content: orig });
-      await callTool('append_to_note', { path: 'fence-h.md', heading: '## メモ', text: 'フェンス外' });
+      await callTool('append_to_note', {
+        path: 'fence-h.md',
+        heading: '## メモ',
+        text: 'フェンス外',
+      });
       const c = await readFile(join(lib, 'fence-h.md'), 'utf8');
       expect(c).toContain('```md\n## メモ\n```\n本文\n\n## メモ\n\nフェンス外\n');
     });
@@ -1336,18 +1356,30 @@ describe('append_to_note (issue #309)', () => {
     it('子見出し(###)を含む節の末尾に追記される', async () => {
       const orig = '## メモ\n\n親本文\n\n### 詳細\n\n子本文\n\n## 次節\n';
       await callTool('create_note', { path: 'sub-sec.md', content: orig });
-      await callTool('append_to_note', { path: 'sub-sec.md', heading: '## メモ', text: '親節の末尾' });
+      await callTool('append_to_note', {
+        path: 'sub-sec.md',
+        heading: '## メモ',
+        text: '親節の末尾',
+      });
       const c = await readFile(join(lib, 'sub-sec.md'), 'utf8');
       expect(c).toContain('### 詳細\n\n子本文\n\n親節の末尾\n\n## 次節');
     });
 
     it('不正な見出し(#なし、改行入り等)は INVALID_HEADING エラーになる', async () => {
       await callTool('create_note', { path: 'memo.md', content: '本文\n' });
-      const bad1 = await callTool('append_to_note', { path: 'memo.md', heading: '見出し', text: '追記' });
+      const bad1 = await callTool('append_to_note', {
+        path: 'memo.md',
+        heading: '見出し',
+        text: '追記',
+      });
       expect(bad1.isError).toBe(true);
       expect(bad1.structuredContent.code).toBe('INVALID_HEADING');
 
-      const bad2 = await callTool('append_to_note', { path: 'memo.md', heading: '## 見出し\n不正', text: '追記' });
+      const bad2 = await callTool('append_to_note', {
+        path: 'memo.md',
+        heading: '## 見出し\n不正',
+        text: '追記',
+      });
       expect(bad2.isError).toBe(true);
       expect(bad2.structuredContent.code).toBe('INVALID_HEADING');
     });
@@ -1356,21 +1388,34 @@ describe('append_to_note (issue #309)', () => {
   describe('timestamp と source', () => {
     it('timestamp: true で先頭に HH:MM が付与される', async () => {
       await callTool('create_note', { path: 'time.md', content: '本文\n' });
-      await callTool('append_to_note', { path: 'time.md', text: 'ログ', timestamp: true, source: 'テスト' });
+      await callTool('append_to_note', {
+        path: 'time.md',
+        text: 'ログ',
+        timestamp: true,
+        source: 'テスト',
+      });
       const c = await readFile(join(lib, 'time.md'), 'utf8');
       expect(c).toContain('14:30 [テスト] ログ\n');
     });
 
     it('timestamp: true かつリスト記号で始まる場合、記号の直後に時刻が付く', async () => {
       await callTool('create_note', { path: 'time-list.md', content: '本文\n' });
-      await callTool('append_to_note', { path: 'time-list.md', text: '- [ ] タスク', timestamp: true });
+      await callTool('append_to_note', {
+        path: 'time-list.md',
+        text: '- [ ] タスク',
+        timestamp: true,
+      });
       const c = await readFile(join(lib, 'time-list.md'), 'utf8');
       expect(c).toContain('- [ ] 14:30 タスク\n');
     });
 
     it('source に改行が含まれる場合はバリデーションエラーになる', async () => {
       await callTool('create_note', { path: 'memo.md', content: '本文\n' });
-      const res = await callTool('append_to_note', { path: 'memo.md', text: '内容', source: 'bad\nsource' });
+      const res = await callTool('append_to_note', {
+        path: 'memo.md',
+        text: '内容',
+        source: 'bad\nsource',
+      });
       expect(res.isError).toBe(true);
     });
 
@@ -1728,7 +1773,10 @@ describe('update_frontmatter', () => {
   });
 
   it('addTags / removeTags が効く', async () => {
-    await callTool('create_note', { path: 't.md', content: '---\ntags:\n  - a\n  - b\n---\n本文\n' });
+    await callTool('create_note', {
+      path: 't.md',
+      content: '---\ntags:\n  - a\n  - b\n---\n本文\n',
+    });
     const r = await callTool('update_frontmatter', {
       path: 't.md',
       addTags: ['c', '#a', ' d '],
@@ -1763,7 +1811,11 @@ describe('update_frontmatter', () => {
 
   it('tags と addTags の同時指定は INVALID_ARGUMENTS、何も指定しないと NOTHING_TO_UPDATE', async () => {
     await callTool('create_note', { path: 'e.md', content: '本文' });
-    const both = await callTool('update_frontmatter', { path: 'e.md', tags: ['a'], addTags: ['b'] });
+    const both = await callTool('update_frontmatter', {
+      path: 'e.md',
+      tags: ['a'],
+      addTags: ['b'],
+    });
     expect(both.isError).toBe(true);
     expect(both.structuredContent.code).toBe('INVALID_ARGUMENTS');
     const bothRemove = await callTool('update_frontmatter', {
@@ -1910,9 +1962,17 @@ describe('update_frontmatter', () => {
     await callTool('create_daily_note', {});
     const results = await Promise.all([
       callTool('append_to_daily_note', { text: '追記A', source: 'S' }),
-      callTool('update_frontmatter', { path: NOTE, frontmatter: { mood: 'good' }, addTags: ['t1'] }),
+      callTool('update_frontmatter', {
+        path: NOTE,
+        frontmatter: { mood: 'good' },
+        addTags: ['t1'],
+      }),
       callTool('append_to_daily_note', { text: '追記B', source: 'S' }),
-      callTool('update_frontmatter', { path: NOTE, frontmatter: { weather: 'sunny' }, addTags: ['t2'] }),
+      callTool('update_frontmatter', {
+        path: NOTE,
+        frontmatter: { weather: 'sunny' },
+        addTags: ['t2'],
+      }),
     ]);
     for (const r of results) expect(r.isError).toBeFalsy();
     const raw = await readFile(join(lib, NOTE), 'utf8');
@@ -1984,9 +2044,9 @@ describe('プロパティ検索(find_notes_by_property / list_properties)', () =
     expect(paths(await callTool('find_notes_by_property', { key: 'priority', value: 1 }))).toEqual([
       'a.md',
     ]);
-    expect(paths(await callTool('find_notes_by_property', { key: 'priority', value: '1' }))).toEqual([
-      'a.md',
-    ]);
+    expect(
+      paths(await callTool('find_notes_by_property', { key: 'priority', value: '1' })),
+    ).toEqual(['a.md']);
     expect(
       paths(await callTool('find_notes_by_property', { key: 'due', value: '2026-10-31' })),
     ).toEqual(['a.md']);
@@ -2009,14 +2069,14 @@ describe('プロパティ検索(find_notes_by_property / list_properties)', () =
     expect(
       paths(await callTool('find_notes_by_property', { key: 'status', value: 'done' })),
     ).toEqual(['a.md', 'b.md']);
-    expect(paths(await callTool('find_notes_by_property', { key: 'owner', value: '山田' }))).toEqual([
-      'a.md',
-    ]);
+    expect(
+      paths(await callTool('find_notes_by_property', { key: 'owner', value: '山田' })),
+    ).toEqual(['a.md']);
 
     await callTool('update_frontmatter', { path: 'a.md', frontmatter: { owner: null } });
-    expect((await callTool('find_notes_by_property', { key: 'owner' })).structuredContent.items).toEqual(
-      [],
-    );
+    expect(
+      (await callTool('find_notes_by_property', { key: 'owner' })).structuredContent.items,
+    ).toEqual([]);
   });
 
   it('ノートを削除すると検索に出なくなる', async () => {
@@ -2030,9 +2090,9 @@ describe('プロパティ検索(find_notes_by_property / list_properties)', () =
     await seed();
     const r = await callTool('move_note', { path: 'a.md', newFolder: '移動先', newTitle: 'a2' });
     expect(r.isError).toBeFalsy();
-    expect(paths(await callTool('find_notes_by_property', { key: 'status', value: 'todo' }))).toEqual([
-      '移動先/a2.md',
-    ]);
+    expect(
+      paths(await callTool('find_notes_by_property', { key: 'status', value: 'todo' })),
+    ).toEqual(['移動先/a2.md']);
     expect(paths(await callTool('find_notes_by_property', { key: 'status' }))).toEqual([
       'b.md',
       '移動先/a2.md',
@@ -2043,9 +2103,9 @@ describe('プロパティ検索(find_notes_by_property / list_properties)', () =
     await callTool('create_note', { path: 'dir/a.md', content: '---\nstatus: todo\n---\n本文' });
     const r = await callTool('move_folder', { path: 'dir', newPath: 'dir2' });
     expect(r.isError).toBeFalsy();
-    expect(paths(await callTool('find_notes_by_property', { key: 'status', value: 'todo' }))).toEqual([
-      'dir2/a.md',
-    ]);
+    expect(
+      paths(await callTool('find_notes_by_property', { key: 'status', value: 'todo' })),
+    ).toEqual(['dir2/a.md']);
   });
 
   it('reindex --full 相当の全削除と再走査のあと、消えた文書の分は list_properties に残らない', async () => {
@@ -2055,16 +2115,18 @@ describe('プロパティ検索(find_notes_by_property / list_properties)', () =
     app.indexerService.clearIndex();
     const counts = (db: { key: string; count: number }[]) =>
       Object.fromEntries(db.map((i) => [i.key, i.count]));
-    expect(
-      (app.db.prepare('SELECT COUNT(*) AS n FROM doc_props').get() as { n: number }).n,
-    ).toBe(0);
+    expect((app.db.prepare('SELECT COUNT(*) AS n FROM doc_props').get() as { n: number }).n).toBe(
+      0,
+    );
     await app.indexerService.scanAll();
     const r = await callTool('list_properties', {});
     expect(counts(r.structuredContent.items).status).toBe(1);
     expect(
-      (app.db.prepare("SELECT COUNT(*) AS n FROM doc_props WHERE doc_path = 'b.md'").get() as {
-        n: number;
-      }).n,
+      (
+        app.db.prepare("SELECT COUNT(*) AS n FROM doc_props WHERE doc_path = 'b.md'").get() as {
+          n: number;
+        }
+      ).n,
     ).toBe(0);
   });
 
@@ -2117,7 +2179,11 @@ describe('プロパティ検索(find_notes_by_property / list_properties)', () =
     expect(counts).toEqual([...counts].sort((a, b) => b - a));
     expect(items[0].count).toBe(2);
     expect(items.map((i) => i.key).slice(0, 2)).toEqual(
-      items.filter((i) => i.count === 2).map((i) => i.key).sort().slice(0, 2),
+      items
+        .filter((i) => i.count === 2)
+        .map((i) => i.key)
+        .sort()
+        .slice(0, 2),
     );
   });
 });
@@ -2238,9 +2304,9 @@ describe('loadConfig: MCP_AUTH', () => {
 
   it('MCP_AUTH不正値はthrow', async () => {
     await withLib((tmpLib) => {
-      expect(() => loadConfig({ LIBRARY_PATH: tmpLib, MCP_ENABLED: 'true', MCP_AUTH: 'foo' })).toThrow(
-        /MCP_AUTH は token \/ none/,
-      );
+      expect(() =>
+        loadConfig({ LIBRARY_PATH: tmpLib, MCP_ENABLED: 'true', MCP_AUTH: 'foo' }),
+      ).toThrow(/MCP_AUTH は token \/ none/);
     });
   });
 
@@ -2488,7 +2554,8 @@ describe('プロンプト work_log(issue #296)', () => {
         name: 'create_note',
         arguments: {
           path: RECIPE_PATH,
-          content: '---\ntags: [運用]\n---\n# 作業ログの書き方\n\n保存先は 作業ログ/{プロジェクト}/ にする。\n',
+          content:
+            '---\ntags: [運用]\n---\n# 作業ログの書き方\n\n保存先は 作業ログ/{プロジェクト}/ にする。\n',
         },
       },
     });
@@ -2533,7 +2600,10 @@ describe('プロンプト work_log(issue #296)', () => {
       jsonrpc: '2.0',
       id: ++seq,
       method: 'tools/call',
-      params: { name: 'create_note', arguments: { path: '運用/レシピ.md', content: '独自の決まり' } },
+      params: {
+        name: 'create_note',
+        arguments: { path: '運用/レシピ.md', content: '独自の決まり' },
+      },
     });
     const text = (await getPrompt()).result.messages[0].content.text as string;
     expect(text).toContain('## レシピ(運用/レシピ.md)');
@@ -2575,7 +2645,11 @@ describe('プロンプト daily_journal / ツール get_record_instructions(issu
 
   it('prompts/list に daily_journal が1件あり、引数は持たない', async () => {
     const res = await request('prompts/list', {});
-    const prompts = res.json().result.prompts as { name: string; title?: string; arguments?: unknown[] }[];
+    const prompts = res.json().result.prompts as {
+      name: string;
+      title?: string;
+      arguments?: unknown[];
+    }[];
     const found = prompts.filter((p) => p.name === 'daily_journal');
     expect(found).toHaveLength(1);
     expect(found[0].title).toBe('今日の振り返りを書く');
@@ -2596,7 +2670,10 @@ describe('プロンプト daily_journal / ツール get_record_instructions(issu
   });
 
   it('prompts/get daily_journal にレシピノートの本文が差し込まれる', async () => {
-    await callTool('create_note', { path: RECIPE_PATH, content: '振り返りの見出しは ## 今日のまとめ にする。' });
+    await callTool('create_note', {
+      path: RECIPE_PATH,
+      content: '振り返りの見出しは ## 今日のまとめ にする。',
+    });
     const res = await request('prompts/get', { name: 'daily_journal' });
     const text = res.json().result.messages[0].content.text as string;
     expect(text).toContain(`## レシピ(${RECIPE_PATH})`);
@@ -2720,7 +2797,8 @@ describe('ごみ箱(list_trash / restore_from_trash)', () => {
 
     const beforeTrash = await callTool('list_trash');
     expect(beforeTrash.structuredContent.items).toHaveLength(1);
-    const trashPath = (beforeTrash.structuredContent.items as Array<{ trashPath: string }>)[0].trashPath;
+    const trashPath = (beforeTrash.structuredContent.items as Array<{ trashPath: string }>)[0]
+      .trashPath;
 
     const restoreRes = await callTool('restore_from_trash', { trashPath });
     expect(restoreRes.isError).toBeFalsy();
@@ -2763,9 +2841,9 @@ describe('ごみ箱(list_trash / restore_from_trash)', () => {
     });
 
     const listRes = await callTool('list_trash');
-    const folderEntry = (listRes.structuredContent.items as Array<{ trashPath: string; isFolder: boolean }>).find(
-      (e) => e.isFolder,
-    );
+    const folderEntry = (
+      listRes.structuredContent.items as Array<{ trashPath: string; isFolder: boolean }>
+    ).find((e) => e.isFolder);
     expect(folderEntry).toBeDefined();
 
     const restoreRes = await callTool('restore_from_trash', { trashPath: folderEntry!.trashPath });
@@ -3073,11 +3151,7 @@ describe('docError 単体テスト', () => {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(
-            { code: 'INVALID_PATH', message: 'パス形式が無効です' },
-            null,
-            2,
-          ),
+          text: JSON.stringify({ code: 'INVALID_PATH', message: 'パス形式が無効です' }, null, 2),
         },
       ],
       structuredContent: { code: 'INVALID_PATH', message: 'パス形式が無効です' },
@@ -3114,11 +3188,7 @@ describe('docError 単体テスト', () => {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(
-            { code: 'CONFLICT', message: '競合が発生しました' },
-            null,
-            2,
-          ),
+          text: JSON.stringify({ code: 'CONFLICT', message: '競合が発生しました' }, null, 2),
         },
       ],
       structuredContent: { code: 'CONFLICT', message: '競合が発生しました' },
@@ -3196,17 +3266,23 @@ describe('get_tree のフォルダ指定 (issue #310)', () => {
 
   describe('A: 後方互換性', () => {
     it('引数なしで従来通りライブラリ全体のツリーを取得できる', async () => {
-      // Given: 複数のノートとフォルダが存在する
+      // Given: 複数のノートとフォルダと添付ファイルが存在する
       await callTool('create_note', { path: 'root.md', content: '# ルート' });
       await callTool('create_note', { path: 'projects/alpha.md', content: '# Alpha' });
+      await callTool('upload_attachment', {
+        docPath: 'projects/alpha.md',
+        fileName: 'diagram.png',
+        base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64'),
+      });
 
       // When: 引数なしで get_tree を呼び出す
       const res = await callTool('get_tree', {});
 
-      // Then: 成功し、folder は空文字で全フォルダ・全ノートが含まれる
+      // Then: 成功し、folder は空文字で全フォルダ・全ノートが含まれる(添付一覧は含めない)
       expect(res.isError).toBeFalsy();
       expect(res.structuredContent.folder).toBe('');
       expect(res.structuredContent.folders).toContain('projects');
+      expect(res.structuredContent.attachments).toBeUndefined();
       const docPaths = (res.structuredContent.docs as { path: string }[]).map((d) => d.path);
       expect(docPaths).toContain('root.md');
       expect(docPaths).toContain('projects/alpha.md');
@@ -3258,12 +3334,16 @@ describe('get_tree のフォルダ指定 (issue #310)', () => {
     it('アンダースコアやパーセントを含むフォルダ名でもワイルドカード化せず厳密一致する', async () => {
       const resUnderscore = await callTool('get_tree', { folder: 'dir_special' });
       expect(resUnderscore.isError).toBeFalsy();
-      const docsUnderscore = (resUnderscore.structuredContent.docs as { path: string }[]).map((d) => d.path);
+      const docsUnderscore = (resUnderscore.structuredContent.docs as { path: string }[]).map(
+        (d) => d.path,
+      );
       expect(docsUnderscore).toEqual(['dir_special/doc4.md']);
 
       const resPercent = await callTool('get_tree', { folder: 'dir%special' });
       expect(resPercent.isError).toBeFalsy();
-      const docsPercent = (resPercent.structuredContent.docs as { path: string }[]).map((d) => d.path);
+      const docsPercent = (resPercent.structuredContent.docs as { path: string }[]).map(
+        (d) => d.path,
+      );
       expect(docsPercent).toEqual(['dir%special/doc5.md']);
     });
 
@@ -3382,7 +3462,9 @@ describe('get_tree のフォルダ指定 (issue #310)', () => {
       // 1. ノート作成
       await callTool('create_note', { path: 'work/memo.md', content: '# メモ' });
       let tree = await callTool('get_tree', { folder: 'work' });
-      expect((tree.structuredContent.docs as { path: string }[]).map((d) => d.path)).toEqual(['work/memo.md']);
+      expect((tree.structuredContent.docs as { path: string }[]).map((d) => d.path)).toEqual([
+        'work/memo.md',
+      ]);
 
       // 2. サブフォルダ作成
       await callTool('create_folder', { path: 'work/archive' });
@@ -3398,7 +3480,9 @@ describe('get_tree のフォルダ指定 (issue #310)', () => {
       const newTree = await callTool('get_tree', { folder: 'tasks' });
       expect(newTree.isError).toBeFalsy();
       expect(newTree.structuredContent.folders).toContain('tasks/archive');
-      expect((newTree.structuredContent.docs as { path: string }[]).map((d) => d.path)).toEqual(['tasks/memo.md']);
+      expect((newTree.structuredContent.docs as { path: string }[]).map((d) => d.path)).toEqual([
+        'tasks/memo.md',
+      ]);
 
       // 4. ノート削除 (delete_note)
       await callTool('delete_note', { path: 'tasks/memo.md' });
@@ -3520,7 +3604,11 @@ describe('patch_note (issue #311)', () => {
 
       // バックリンク
       const bl = await callTool('get_backlinks', { path: 'リンク先ノート.md' });
-      expect(bl.structuredContent.backlinks.some((i: { sourcePath: string }) => i.sourcePath === 'note.md')).toBe(true);
+      expect(
+        bl.structuredContent.backlinks.some(
+          (i: { sourcePath: string }) => i.sourcePath === 'note.md',
+        ),
+      ).toBe(true);
     });
   });
 
@@ -3850,7 +3938,9 @@ describe('patch_note (issue #311)', () => {
       ]);
 
       const successCount = [res1, res2].filter((r) => !r.isError).length;
-      const errorCount = [res1, res2].filter((r) => r.isError && r.structuredContent.code === 'PATCH_NOT_FOUND').length;
+      const errorCount = [res1, res2].filter(
+        (r) => r.isError && r.structuredContent.code === 'PATCH_NOT_FOUND',
+      ).length;
 
       expect(successCount).toBe(1);
       expect(errorCount).toBe(1);
@@ -3882,7 +3972,6 @@ describe('patch_note (issue #311)', () => {
     });
   });
 });
-
 
 describe('restore_history (issue #312)', () => {
   let seq = 10000;
@@ -3919,7 +4008,11 @@ describe('restore_history (issue #312)', () => {
     await callTool('create_note', { path: P, content: 'v1\n' });
     // rev2: save_note で v2 に
     const r1 = await callTool('read_note', { path: P });
-    await callTool('save_note', { path: P, body: 'v2\n', baseUpdatedAt: r1.structuredContent.updatedAt });
+    await callTool('save_note', {
+      path: P,
+      body: 'v2\n',
+      baseUpdatedAt: r1.structuredContent.updatedAt,
+    });
     // rev3: append_to_note で 追記
     await callTool('append_to_note', { path: P, text: '追記' });
 
@@ -3958,7 +4051,9 @@ describe('restore_history (issue #312)', () => {
       await callTool('restore_history', { path: P, rev: rev2 });
 
       const log = execSync('git log -1 --format="%an|%ae|%s"', { cwd: lib }).toString().trim();
-      expect(log).toBe(`MCP Agent|mcp@tsumiwiki.local|restore: ${P} @${rev2.slice(0, 7).toLowerCase()}`);
+      expect(log).toBe(
+        `MCP Agent|mcp@tsumiwiki.local|restore: ${P} @${rev2.slice(0, 7).toLowerCase()}`,
+      );
 
       const status = execSync('git status --porcelain', { cwd: lib }).toString().trim();
       expect(status).toBe('');
@@ -4051,30 +4146,48 @@ describe('restore_history (issue #312)', () => {
 
       // 復元前はタグ・リンク・キーワードが消えている
       let tagsRes = await callTool('list_tags', {});
-      expect((tagsRes.structuredContent.items as { tag: string }[]).some((t) => t.tag === '旧タグ')).toBe(false);
+      expect(
+        (tagsRes.structuredContent.items as { tag: string }[]).some((t) => t.tag === '旧タグ'),
+      ).toBe(false);
 
       // 過去版へ復元
       await callTool('restore_history', { path: 'indexed_note.md', rev: revOriginal });
 
       // 復元後はタグ・バックリンク・全文検索が復活
       tagsRes = await callTool('list_tags', {});
-      expect((tagsRes.structuredContent.items as { tag: string }[]).some((t) => t.tag === '旧タグ')).toBe(true);
+      expect(
+        (tagsRes.structuredContent.items as { tag: string }[]).some((t) => t.tag === '旧タグ'),
+      ).toBe(true);
 
       const bl = await callTool('get_backlinks', { path: 'target.md' });
-      expect(bl.structuredContent.backlinks.some((b: { sourcePath: string }) => b.sourcePath === 'indexed_note.md')).toBe(true);
+      expect(
+        bl.structuredContent.backlinks.some(
+          (b: { sourcePath: string }) => b.sourcePath === 'indexed_note.md',
+        ),
+      ).toBe(true);
 
       const search = await callTool('search_notes', { query: '独自キーワード123' });
-      expect((search.structuredContent.items as { path: string }[]).some((i) => i.path === 'indexed_note.md')).toBe(true);
+      expect(
+        (search.structuredContent.items as { path: string }[]).some(
+          (i) => i.path === 'indexed_note.md',
+        ),
+      ).toBe(true);
     });
 
     it('A8: 今と同じ内容の版を指定した場合はコミットが増えない', async () => {
       const { rev3 } = await setupHistory();
 
-      const countBefore = parseInt(execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(), 10);
+      const countBefore = parseInt(
+        execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(),
+        10,
+      );
       const res = await callTool('restore_history', { path: P, rev: rev3 });
       expect(res.isError).toBeFalsy();
 
-      const countAfter = parseInt(execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(), 10);
+      const countAfter = parseInt(
+        execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(),
+        10,
+      );
       expect(countAfter).toBe(countBefore);
     });
 
@@ -4131,9 +4244,9 @@ describe('restore_history (issue #312)', () => {
       await callTool('restore_from_trash', { trashPath: '.trash/q.md' });
 
       const histQ = await callTool('get_history', { path: 'q.md' });
-      const trashCommit = (histQ.structuredContent.history as { rev: string; message: string }[]).find((h) =>
-        h.message.startsWith('trash:'),
-      );
+      const trashCommit = (
+        histQ.structuredContent.history as { rev: string; message: string }[]
+      ).find((h) => h.message.startsWith('trash:'));
       expect(trashCommit).toBeDefined();
 
       const res = await callTool('restore_history', { path: 'q.md', rev: trashCommit!.rev });
@@ -4144,13 +4257,17 @@ describe('restore_history (issue #312)', () => {
     it('B5: 失敗してもファイル内容・mtime・コミット数が変わらない', async () => {
       const beforeContent = readFileSync(path.join(lib, P), 'utf8');
       const beforeStat = statSync(path.join(lib, P));
-      const beforeCommitCount = execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim();
+      const beforeCommitCount = execSync('git rev-list --count HEAD', { cwd: lib })
+        .toString()
+        .trim();
 
       await callTool('restore_history', { path: P, rev: 'deadbeef' });
 
       const afterContent = readFileSync(path.join(lib, P), 'utf8');
       const afterStat = statSync(path.join(lib, P));
-      const afterCommitCount = execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim();
+      const afterCommitCount = execSync('git rev-list --count HEAD', { cwd: lib })
+        .toString()
+        .trim();
 
       expect(afterContent).toBe(beforeContent);
       expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
@@ -4274,7 +4391,10 @@ describe('restore_history (issue #312)', () => {
   describe('E: 並列実行', () => {
     it('E1: restore_history と append_to_note の同時実行が両方成功しコミットが2件増える', async () => {
       const { rev2 } = await setupHistory();
-      const countBefore = parseInt(execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(), 10);
+      const countBefore = parseInt(
+        execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(),
+        10,
+      );
 
       const [resRestore, resAppend] = await Promise.all([
         callTool('restore_history', { path: P, rev: rev2 }),
@@ -4284,18 +4404,25 @@ describe('restore_history (issue #312)', () => {
       expect(resRestore.isError).toBeFalsy();
       expect(resAppend.isError).toBeFalsy();
 
-      const countAfter = parseInt(execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(), 10);
+      const countAfter = parseInt(
+        execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(),
+        10,
+      );
       expect(countAfter).toBe(countBefore + 2);
 
       const current = readFileSync(path.join(lib, P), 'utf8');
-      const expectedRev2 = (await callTool('get_history_content', { path: P, rev: rev2 })).structuredContent.content;
+      const expectedRev2 = (await callTool('get_history_content', { path: P, rev: rev2 }))
+        .structuredContent.content;
       const isValid = current.includes('並列追記') || current === expectedRev2;
       expect(isValid).toBe(true);
     });
 
     it('E2: 2件の restore_history を同時に実行すると両方成功し、コミットが2件増え混ざらない', async () => {
       const { rev1, rev2 } = await setupHistory();
-      const countBefore = parseInt(execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(), 10);
+      const countBefore = parseInt(
+        execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(),
+        10,
+      );
 
       const [res1, res2] = await Promise.all([
         callTool('restore_history', { path: P, rev: rev1 }),
@@ -4305,19 +4432,29 @@ describe('restore_history (issue #312)', () => {
       expect(res1.isError).toBeFalsy();
       expect(res2.isError).toBeFalsy();
 
-      const countAfter = parseInt(execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(), 10);
+      const countAfter = parseInt(
+        execSync('git rev-list --count HEAD', { cwd: lib }).toString().trim(),
+        10,
+      );
       expect(countAfter).toBe(countBefore + 2);
 
       const current = readFileSync(path.join(lib, P), 'utf8');
-      const content1 = (await callTool('get_history_content', { path: P, rev: rev1 })).structuredContent.content;
-      const content2 = (await callTool('get_history_content', { path: P, rev: rev2 })).structuredContent.content;
+      const content1 = (await callTool('get_history_content', { path: P, rev: rev1 }))
+        .structuredContent.content;
+      const content2 = (await callTool('get_history_content', { path: P, rev: rev2 }))
+        .structuredContent.content;
       expect(current === content1 || current === content2).toBe(true);
     });
   });
 
   describe('F: 登録', () => {
     it('F1 & F2: tools/list に restore_history が含まれ、required に path と rev が入り rev に pattern がある', async () => {
-      const listRes = await mcpRequest({ jsonrpc: '2.0', id: seq++, method: 'tools/list', params: {} });
+      const listRes = await mcpRequest({
+        jsonrpc: '2.0',
+        id: seq++,
+        method: 'tools/list',
+        params: {},
+      });
       const tools = listRes.json().result.tools as {
         name: string;
         inputSchema: { required: string[]; properties: Record<string, unknown> };

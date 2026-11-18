@@ -31,6 +31,7 @@ export type UnresolvedLinkFolder = 'same-folder' | 'root';
 export type RightPanelTab = 'backlinks' | 'history';
 
 // #324: 開いている文書の位置に文書ツリーを追従させるか(#323 の自動追従)。既定 true
+// #318: ファイルツリーに添付ファイル(画像・PDF)を表示するか。既定 false
 
 interface UserSettingsState {
   newDocPolicy: NewDocPolicy;
@@ -42,6 +43,7 @@ interface UserSettingsState {
   rightPanelWidth: number;
   rightPanelTab: RightPanelTab;
   followActiveDocInTree: boolean;
+  showAttachmentsInTree: boolean;
   setNewDocPolicy: (policy: NewDocPolicy) => void;
   setFixedFolder: (folder: string) => void;
   setContentWidth: (width: ContentWidth) => void;
@@ -52,6 +54,8 @@ interface UserSettingsState {
   setRightPanelWidth: (width: number) => void;
   setRightPanelTab: (tab: RightPanelTab) => void;
   setFollowActiveDocInTree: (follow: boolean) => void;
+  setShowAttachmentsInTree: (show: boolean) => void;
+  toggleShowAttachmentsInTree: () => void;
 }
 
 function clampRightPanelWidth(width: number): number {
@@ -70,6 +74,7 @@ export const useUserSettingsStore = create<UserSettingsState>()(
       rightPanelWidth: RIGHT_PANEL_DEFAULT_WIDTH,
       rightPanelTab: 'backlinks',
       followActiveDocInTree: true,
+      showAttachmentsInTree: false,
       setNewDocPolicy: (newDocPolicy) => set({ newDocPolicy }),
       setFixedFolder: (fixedFolder) => set({ fixedFolder }),
       setContentWidth: (contentWidth) => set({ contentWidth }),
@@ -80,6 +85,9 @@ export const useUserSettingsStore = create<UserSettingsState>()(
       setRightPanelWidth: (width) => set({ rightPanelWidth: clampRightPanelWidth(width) }),
       setRightPanelTab: (rightPanelTab) => set({ rightPanelTab }),
       setFollowActiveDocInTree: (followActiveDocInTree) => set({ followActiveDocInTree }),
+      setShowAttachmentsInTree: (showAttachmentsInTree) => set({ showAttachmentsInTree }),
+      toggleShowAttachmentsInTree: () =>
+        set((s) => ({ showAttachmentsInTree: !s.showAttachmentsInTree })),
     }),
     {
       name: 'tsumiwiki-user-settings',
@@ -105,6 +113,10 @@ export const useUserSettingsStore = create<UserSettingsState>()(
         const followActiveDocInTree =
           typeof rest.followActiveDocInTree === 'boolean' ? rest.followActiveDocInTree : true;
 
+        // #318: キーが無い場合や不正値は既定のオフ(ノートのみ表示)
+        const showAttachmentsInTree =
+          typeof rest.showAttachmentsInTree === 'boolean' ? rest.showAttachmentsInTree : false;
+
         return {
           ...currentState,
           ...rest,
@@ -112,6 +124,7 @@ export const useUserSettingsStore = create<UserSettingsState>()(
           rightPanelWidth,
           rightPanelTab,
           followActiveDocInTree,
+          showAttachmentsInTree,
         };
       },
     },

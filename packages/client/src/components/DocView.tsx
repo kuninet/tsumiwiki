@@ -21,7 +21,7 @@ import {
 } from '../api/attachments';
 import { ApiRequestError } from '../api/client';
 import { isAllowedLinkUrl } from '../lib/allowed-link';
-import { docQueryKey, fetchDoc, useTree } from '../api/docs';
+import { docQueryKey, fetchDoc, TREE_QUERY_KEY, useTree } from '../api/docs';
 import { useExpandTemplate } from '../api/templates';
 import type { AttachmentLightboxRequest, AttachmentMenuRequest } from '../editor/doc-storage';
 import { createEditorExtensions } from '../editor/markdown';
@@ -727,6 +727,7 @@ export function DocView({
       }
     }
     if (inserted > 0) {
+      queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       showToast(
         'success',
         inserted === 1 ? 'ファイルを挿入しました' : `${inserted}件のファイルを挿入しました`,
@@ -806,6 +807,7 @@ export function DocView({
       // ただしブラウザは一度成功した<img src>を再取得しないため、表示中のNodeViewには
       // 「実体が変わった」ことを明示的に伝えて再取得させる(実機確認の指摘対応)
       dispatchAttachmentChanged([resolved.name]);
+      queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
     } catch (err) {
       showToast('error', err instanceof ApiRequestError ? err.message : '削除に失敗しました');
     }
@@ -966,6 +968,7 @@ export function DocView({
     // ブラウザは一度成功した<img src>を再取得しないため、旧名のまま表示中の
     // 他のNodeView(別タブ・ペイン等)にも実体が変わったことを伝える(実機確認の指摘対応)
     dispatchAttachmentChanged([resolved.name]);
+    queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
 
     showToast('success', `名前を変更しました(${result.rewrittenDocs.length}件の文書の参照を更新)`);
   }
