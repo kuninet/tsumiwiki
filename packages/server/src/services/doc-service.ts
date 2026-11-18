@@ -14,14 +14,17 @@ import {
   stringify as yamlStringify,
   YAMLSeq,
 } from 'yaml';
-import { REV_PATTERN, attachmentSettingsFromEnv } from '@tsumiwiki/shared';
+import { LIBRARY_SETTINGS_DEFAULTS, REV_PATTERN, attachmentSettingsFromEnv } from '@tsumiwiki/shared';
 import type {
   AttachmentSummary,
   BacklinksResponse,
   DocResponse,
   DocSummary,
   FrontmatterOp,
+  LibrarySettings,
   RenameAttachmentResponse,
+  ReorganizeExecuteResponse,
+  ReorganizePreviewResponse,
   SaveDocResponse,
   TrashEntry,
   TreeResponse,
@@ -29,6 +32,16 @@ import type {
 import type { AppConfig } from '../config.js';
 import type { AppDatabase } from '../db/index.js';
 import { ATTACHMENT_EXTENSIONS, isIndexedFileName } from '../lib/attachments.js';
+import {
+  EXCLUDED_SCHEME_RE,
+  FM_BLOCK_RE,
+  MD_LINK_REWRITE_RE,
+  WIKILINK_REWRITE_RE,
+  extractLinkTargets,
+  resolveShortestEmbedTargetWith,
+  splitFrontmatter,
+  splitTargetSuffix,
+} from '../lib/attachment-links.js';
 import { computeCodeRanges, isWithinCode } from '../lib/code-ranges.js';
 import {
   InvalidPathError,
@@ -36,6 +49,7 @@ import {
   normalizeRelPath,
   resolveInLibrary,
 } from '../lib/paths.js';
+import { planAttachmentReorganization, type ReorgInputDoc } from './attachment-reorganizer.js';
 import type { DraftService } from './draft-service.js';
 import type { GitAuthor, GitService } from './git-service.js';
 import type { IndexerService } from './indexer-service.js';
@@ -43,6 +57,8 @@ import type { LibrarySettingsService } from './library-settings-service.js';
 import { DocLockedError, type LockService } from './lock-service.js';
 import { normalizeTagName, parseDocMeta, splitTagString } from './markdown-meta.js';
 import { applyPatches, guardFrontmatter, type PatchEdit } from '../mcp/note-patch.js';
+
+export { extractLinkTargets } from '../lib/attachment-links.js';
 
 // 文書・フォルダ操作(FR-DOC / 設計03章)
 // - ファイル書き込みはアトミック(一時ファイル→rename。NFR-AVL-03)
@@ -181,55 +197,6 @@ function validateAttachmentName(name: string): string {
   return normalized;
 }
 
-// フロントマターブロックと本文を厳密に分離する(FM_BLOCK_RE。#199の参照書き換えで、
-// フロントマターに一切触れず本文のみをバイト単位で書き戻すために使う)
-function splitFrontmatter(content: string): { prefix: string; body: string } {
-  const m = FM_BLOCK_RE.exec(content);
-  return m ? { prefix: m[0], body: content.slice(m[0].length) } : { prefix: '', body: content };
-}
-
-// #199: リネーム時の参照検出・書き換えの両方が使う正規表現。target部分だけを差し替えられる
-// よう、前後(記法の枠・alias・anchor・title)を別グループに分離して捕捉する
-// (グループ順は「開き記法・target・閉じ記法」で隙間なく連結しているため、
-// targetの開始位置はマッチ全体のindex + 開き記法の長さで正確に求まる)。
-// 対象: Obsidian埋め込み `![[target]]`・wikilink `[[target]]`(`|alias`・`#anchor`は除く)、
-// Markdown画像 `![alt](target)`・リンク `[text](target)`(`"title"`は除く)。
-// http(s)/data/mailto/fileスキームは除外。target の `?`/`#` 以降は落とす。URLデコードはしない。
-// `<...>` 囲みのリンクは対象外。単一行のtarget想定で改行含みには当たらない。
-// コードブロック・インラインコードの内側(中2)はcomputeCodeRangesで除外する
-const WIKILINK_REWRITE_RE = /(!?\[\[)([^\]|#\n]+?)((?:[#|][^\]\n]*)?\]\])/g;
-const MD_LINK_REWRITE_RE = /(!?\[[^\]\n]*\]\()([^)\s\n]+)((?:\s+["'][^)\n]*)?\))/g;
-const EXCLUDED_SCHEME_RE = /^(https?|data|mailto|file):/i;
-
-// targetの`?`/`#`以降(クエリ・アンカー)を切り離す。前後空白はtrimする(軽微8。
-// `![[ old.png ]]`のような余白付きtargetも一致判定できるように抽出側・書き換え側で揃える)
-function splitTargetSuffix(rawTarget: string): { pathPart: string; suffix: string } {
-  const trimmed = rawTarget.trim();
-  const cut = trimmed.search(/[?#]/);
-  return cut === -1
-    ? { pathPart: trimmed, suffix: '' }
-    : { pathPart: trimmed.slice(0, cut), suffix: trimmed.slice(cut) };
-}
-
-// #199: リネーム時の参照検出対象を抽出する純関数。既存extractAttachmentFilenames
-// (同フォルダ限定・拡張子限定)と異なり対象を絞らず、target文字列(スキーム付きURL等も含め)
-// をそのまま返す。呼び出し側がindexer.resolveAttachmentで実ファイルへの一致を判定する
-export function extractLinkTargets(body: string): string[] {
-  const ranges = computeCodeRanges(body);
-  const result = new Set<string>();
-  const consider = (m: RegExpMatchArray) => {
-    const offset = (m.index ?? 0) + m[1].length;
-    if (isWithinCode(ranges, offset)) return;
-    const { pathPart } = splitTargetSuffix(m[2]);
-    if (!pathPart) return;
-    if (EXCLUDED_SCHEME_RE.test(pathPart)) return;
-    result.add(pathPart);
-  };
-  for (const m of body.matchAll(WIKILINK_REWRITE_RE)) consider(m);
-  for (const m of body.matchAll(MD_LINK_REWRITE_RE)) consider(m);
-  return [...result];
-}
-
 // ローカルタイムゾーンのオフセット付きISO 8601(要件05章の例示形式)
 function localIso(d = new Date()): string {
   const p = (n: number) => String(n).padStart(2, '0');
@@ -242,9 +209,6 @@ function localIso(d = new Date()): string {
     `${sign}${p(Math.trunc(offAbs / 60))}:${p(offAbs % 60)}`
   );
 }
-
-// フロントマターブロック(開始〜終了フェンス)の抽出用
-const FM_BLOCK_RE = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/;
 
 // 先頭のフロントマターブロックを除いた本文を返す。composeContent と同じ FM_BLOCK_RE で判定する
 // (gray-matter とは閉じのない `---` や `...` 終端の扱いが異なるため、書き戻す経路ではこちらを使う)
@@ -734,6 +698,13 @@ export class DocService {
     await writeFile(tmp, content);
     await rename(tmp, abs);
   }
+
+  // 一括整理等のテストで FS 失敗を注入できるよう rename をラップ
+  private async moveFile(fromAbs: string, toAbs: string): Promise<void> {
+    await rename(fromAbs, toAbs);
+  }
+
+  private reorgInFlight = false;
 
   // ---- ツリー ----
 
@@ -1729,14 +1700,9 @@ export class DocService {
   // 同名の別ファイル(例: 旧モードで同フォルダに保存された PDF)が /api/embed で優先される場合でも
   // 今回保存した添付を一意に解決できるよう、末尾からセグメントを増やして最短ターゲットを求める(#160)
   private resolveShortestEmbedTarget(docNorm: string, relPath: string): string {
-    const parts = relPath.split('/');
-    for (let i = parts.length - 1; i >= 0; i--) {
-      const candidate = parts.slice(i).join('/');
-      if (this.indexer.resolveAttachment(candidate, docNorm) === relPath) {
-        return candidate;
-      }
-    }
-    return relPath;
+    return resolveShortestEmbedTargetWith(docNorm, relPath, (candidate, from) =>
+      this.indexer.resolveAttachment(candidate, from),
+    );
   }
 
   // 添付パスとして妥当か検証して正規化する(保護パス・.trash・.md・非対応拡張子を拒否。
@@ -1982,6 +1948,242 @@ export class DocService {
       { relPath: normalized },
       '添付',
     );
+  }
+
+  // ---- #333: 既存添付ファイルの一括整理・移行 ----
+
+  private async loadLibrarySettingsForReorg(): Promise<LibrarySettings> {
+    if (!this.librarySettings) {
+      return {
+        templates: { ...LIBRARY_SETTINGS_DEFAULTS.templates },
+        dailyNotes: { ...LIBRARY_SETTINGS_DEFAULTS.dailyNotes },
+        attachments: attachmentSettingsFromEnv(this.config.attachmentDirMode),
+      };
+    }
+    const { settings, corrupted } = await this.librarySettings.get();
+    if (corrupted) {
+      throw new InvalidPathError(
+        '.tsumiwiki/settings.yaml',
+        '設定ファイル(.tsumiwiki/settings.yaml)が壊れているため整理を実行できません。設定を修復または保存し直してください',
+      );
+    }
+    return settings;
+  }
+
+  private async buildReorgPlan(options?: { moveSharedToCommonFolder?: boolean }) {
+    const settings = await this.loadLibrarySettingsForReorg();
+
+    const rawAtts = (
+      this.db.prepare('SELECT rel_path FROM attachment_index ORDER BY rel_path').all() as {
+        rel_path: string;
+      }[]
+    ).map((r) => r.rel_path);
+    const attachmentPaths: string[] = [];
+    for (const rel of rawAtts) {
+      if (isProtectedPath(rel) || rel.split('/').includes('.trash') || !isIndexedFileName(rel)) {
+        continue;
+      }
+      if (await this.exists(resolveInLibrary(this.libraryPath, rel))) {
+        attachmentPaths.push(rel);
+      }
+    }
+
+    const rawDocs = (
+      this.db.prepare('SELECT doc_path FROM doc_index ORDER BY doc_path').all() as {
+        doc_path: string;
+      }[]
+    ).map((r) => r.doc_path);
+    const docs: ReorgInputDoc[] = [];
+    for (const docPath of rawDocs) {
+      if (isProtectedPath(docPath) || docPath.split('/').includes('.trash')) continue;
+      let content: string;
+      try {
+        content = await readFile(resolveInLibrary(this.libraryPath, docPath), 'utf8');
+      } catch {
+        continue;
+      }
+      const activeLock = this.locks.getActive(docPath);
+      docs.push({
+        docPath,
+        content,
+        lockedBy: activeLock
+          ? { userId: activeLock.userId, displayName: activeLock.displayName }
+          : null,
+      });
+    }
+
+    return planAttachmentReorganization({
+      attachmentPaths,
+      docs,
+      settings,
+      moveSharedToCommonFolder: options?.moveSharedToCommonFolder ?? false,
+      isOccupiedOnDisk: (relPath) => this.exists(resolveInLibrary(this.libraryPath, relPath)),
+    });
+  }
+
+  async previewReorganizeAttachments(options?: {
+    moveSharedToCommonFolder?: boolean;
+  }): Promise<ReorganizePreviewResponse> {
+    const plan = await this.buildReorgPlan(options);
+    return plan.preview;
+  }
+
+  async reorganizeAttachments(
+    options: { moveSharedToCommonFolder?: boolean },
+    author: GitAuthor,
+  ): Promise<ReorganizeExecuteResponse> {
+    if (this.reorgInFlight) {
+      throw new DocConflictError('添付ファイルの一括整理が既に実行中です');
+    }
+    this.reorgInFlight = true;
+    try {
+      const plan = await this.buildReorgPlan(options);
+      if (plan.preview.lockedWarnings.length > 0) {
+        const first = plan.preview.lockedWarnings[0];
+        const holder = this.locks.getActive(first.docPath) ?? {
+          userId: 0,
+          displayName: first.displayName,
+          acquiredAt: new Date().toISOString(),
+          refreshedAt: new Date().toISOString(),
+        };
+        throw new DocLockedError(holder);
+      }
+
+      if (plan.preview.moves.length === 0 && plan.rewritesWithContent.length === 0) {
+        return { moved: [], rewrittenDocs: [], skippedCount: plan.preview.skipped.length };
+      }
+
+      const moveStates: {
+        fromPath: string;
+        toPath: string;
+        fromAbs: string;
+        tmpAbs: string;
+        toAbs: string;
+        stage: 'at-from' | 'at-tmp' | 'at-to';
+      }[] = plan.preview.moves.map((m) => {
+        const fromAbs = resolveInLibrary(this.libraryPath, m.fromPath);
+        const toAbs = resolveInLibrary(this.libraryPath, m.toPath);
+        const tmpAbs = path.join(
+          path.dirname(fromAbs),
+          `.tsumiwiki-tmp-reorg-${randomBytes(6).toString('hex')}`,
+        );
+        return { fromPath: m.fromPath, toPath: m.toPath, fromAbs, tmpAbs, toAbs, stage: 'at-from' };
+      });
+      const docBackups: { docPath: string; docAbs: string; content: string }[] = [];
+      const rewrittenDocs: ReorganizeExecuteResponse['rewrittenDocs'] = [];
+
+      try {
+        // Phase 1: 一旦固有の一時名へ退避し、スワップや大文字小文字のみの変更でも衝突を防ぐ
+        for (const s of moveStates) {
+          await this.moveFile(s.fromAbs, s.tmpAbs);
+          s.stage = 'at-tmp';
+        }
+        // Phase 2: 一時名から最終移動先へリネーム
+        for (const s of moveStates) {
+          await mkdir(path.dirname(s.toAbs), { recursive: true });
+          await this.moveFile(s.tmpAbs, s.toAbs);
+          s.stage = 'at-to';
+        }
+        // Phase 3: 参照元文書のリンクをアトミックに書き換える(フロントマター・改行コード保持)
+        for (const d of plan.rewritesWithContent) {
+          const docAbs = resolveInLibrary(this.libraryPath, d.docPath);
+          const latestLock = this.locks.getActive(d.docPath);
+          if (latestLock) {
+            throw new DocLockedError(latestLock);
+          }
+          let latestContent: string;
+          try {
+            latestContent = await readFile(docAbs, 'utf8');
+          } catch {
+            throw new DocConflictError(
+              `一括整理の実行中に文書が削除または移動されたため中断しました: ${d.docPath}`,
+            );
+          }
+          if (latestContent !== d.originalContent) {
+            throw new DocConflictError(
+              `一括整理の実行中に文書が更新されたため中断しました: ${d.docPath}`,
+            );
+          }
+          docBackups.push({ docPath: d.docPath, docAbs, content: latestContent });
+          await this.writeAtomic(docAbs, d.nextContent);
+          const st = await stat(docAbs);
+          rewrittenDocs.push({
+            path: d.docPath,
+            updatedAt: st.mtime.toISOString(),
+            replacements: d.replacements,
+          });
+        }
+      } catch (e) {
+        for (let i = docBackups.length - 1; i >= 0; i--) {
+          const b = docBackups[i];
+          try {
+            await this.writeAtomic(b.docAbs, b.content);
+          } catch (rbErr) {
+            this.logger?.error(
+              { err: rbErr, docPath: b.docPath },
+              '一括整理の文書ロールバックに失敗しました(手動復旧が必要)',
+            );
+          }
+        }
+        for (let i = moveStates.length - 1; i >= 0; i--) {
+          const s = moveStates[i];
+          if (s.stage !== 'at-to') continue;
+          try {
+            await this.moveFile(s.toAbs, s.tmpAbs);
+            s.stage = 'at-tmp';
+          } catch (rbErr) {
+            this.logger?.error(
+              { err: rbErr, fromPath: s.fromPath, toPath: s.toPath },
+              '一括整理の移動先ロールバックに失敗しました(手動復旧が必要)',
+            );
+          }
+        }
+        for (let i = moveStates.length - 1; i >= 0; i--) {
+          const s = moveStates[i];
+          if (s.stage !== 'at-tmp') continue;
+          try {
+            await this.moveFile(s.tmpAbs, s.fromAbs);
+            s.stage = 'at-from';
+          } catch (rbErr) {
+            this.logger?.error(
+              { err: rbErr, fromPath: s.fromPath },
+              '一括整理の一時ファイル復旧に失敗しました(手動復旧が必要)',
+            );
+          }
+        }
+        throw e;
+      }
+
+      const commitPaths = [
+        ...plan.preview.moves.map((m) => m.fromPath),
+        ...plan.preview.moves.map((m) => m.toPath),
+        ...rewrittenDocs.map((d) => d.path),
+      ];
+      await this.tryCommit(
+        commitPaths,
+        `reorganize attachments: ${plan.preview.moves.length} files (${plan.preview.mode})`,
+        author,
+      );
+
+      for (const m of plan.preview.moves) {
+        await this.tryUpdateIndex(
+          () => this.indexer.moveAttachment(m.fromPath, m.toPath),
+          { oldRel: m.fromPath, newRel: m.toPath },
+          '添付',
+        );
+      }
+      for (const d of rewrittenDocs) {
+        await this.tryUpdateIndex(() => this.indexer.indexFile(d.path), { docPath: d.path }, '文書');
+      }
+
+      return {
+        moved: plan.preview.moves,
+        rewrittenDocs,
+        skippedCount: plan.preview.skipped.length,
+      };
+    } finally {
+      this.reorgInFlight = false;
+    }
   }
 
   // ---- ごみ箱(FR-DOC-07) ----

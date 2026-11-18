@@ -10,6 +10,10 @@ import {
   type DocSummary,
 } from '@tsumiwiki/shared';
 import type { AppDatabase } from '../db/index.js';
+import {
+  resolveAttachmentFromByName,
+  type AttachmentCandidate,
+} from '../lib/attachment-links.js';
 import { isIndexedFileName } from '../lib/attachments.js';
 import { isProtectedPath, normalizeRelPath } from '../lib/paths.js';
 import { parseDocMeta, type ExtractedLink, type ExtractedProp } from './markdown-meta.js';
@@ -124,12 +128,6 @@ interface AttachmentRow {
   folder: string;
   updatedAt: string;
   size: number;
-}
-
-// 解決候補(resolveAttachment用)
-interface AttachmentCandidate {
-  rel_path: string;
-  folder: string;
 }
 
 // フルリインデックス時のトランザクションあたり文書数
@@ -305,89 +303,14 @@ export class IndexerService {
   // (索引つき・JS toLowerCase())で候補を絞り込んでから、パス指定時は
   // JS側の文字列比較(完全一致 or `/`区切りの末尾一致)で絞る。
   resolveAttachment(target: string, fromDocPath: string): string | null {
-    const normalizedTarget = this.normalizeEmbedTarget(target);
-    if (!normalizedTarget) return null;
-    const fromFolder = this.folderOfDoc(fromDocPath);
-    const hasPath = normalizedTarget.includes('/');
-    const targetLower = normalizedTarget.toLowerCase();
-    const basenameLower = path.posix.basename(normalizedTarget).toLowerCase();
-
-    const byName = this.db
-      .prepare('SELECT rel_path, folder FROM attachment_index WHERE name_key = ?')
-      .all(basenameLower) as AttachmentCandidate[];
-
-    const candidates = hasPath
-      ? byName.filter((c) => {
-          const relLower = c.rel_path.toLowerCase();
-          return relLower === targetLower || relLower.endsWith(`/${targetLower}`);
-        })
-      : byName;
-
-    if (candidates.length === 0) return null;
-    if (candidates.length === 1) return candidates[0].rel_path;
-    // パス指定時のみ「ヴォルトルート起点の完全パス一致」を最優先にする(仕様外/レビュー指摘)。
-    // 名前のみ指定(hasPath=false)でこれを有効にすると、ルート直下の同名ファイルが
-    // 同フォルダ優先より不当に優先されてしまうため対象外とする
-    const isExactPath = hasPath
-      ? (relPath: string) => relPath.toLowerCase() === targetLower
-      : () => false;
-    return this.pickBestCandidate(fromFolder, candidates, isExactPath);
-  }
-
-  // target文字列の正規化。NFC・前後空白除去・\→/・先頭の./と/を除去。
-  // 空、または..セグメントを含む場合はnull(仕様A-4)
-  private normalizeEmbedTarget(target: string): string | null {
-    const unified = target.normalize('NFC').trim().replace(/\\/g, '/').replace(/^(\.\/|\/)+/, '');
-    if (!unified) return null;
-    const segments = unified.split('/').filter((s) => s !== '' && s !== '.');
-    if (segments.length === 0 || segments.some((s) => s === '..')) return null;
-    return segments.join('/');
-  }
-
-  // fromDocPathの親フォルダ('' = ルート)。空・不正な入力は''扱い
-  private folderOfDoc(fromDocPath: string): string {
-    if (!fromDocPath) return '';
-    try {
-      const normalized = normalizeRelPath(fromDocPath);
-      if (!normalized) return '';
-      const dir = path.posix.dirname(normalized);
-      return dir === '.' ? '' : dir;
-    } catch {
-      return '';
-    }
-  }
-
-  // 複数候補から1件を優先順位で絞り込む(仕様A-4の4. + レビュー指摘の完全パス一致優先)
-  // 0. ヴォルトルート起点の完全パスがtargetと一致(大文字小文字無視。パス指定時のみ)
-  // 1. 参照元と同じフォルダ 2. 共通祖先が深い 3. パスが浅い 4. 辞書順
-  private pickBestCandidate(
-    fromFolder: string,
-    candidates: AttachmentCandidate[],
-    isExactPath: (relPath: string) => boolean,
-  ): string {
-    const fromSegments = fromFolder ? fromFolder.split('/') : [];
-    const commonDepth = (folder: string): number => {
-      const segments = folder ? folder.split('/') : [];
-      let n = 0;
-      while (n < fromSegments.length && n < segments.length && fromSegments[n] === segments[n]) n++;
-      return n;
-    };
-    const sorted = [...candidates].sort((a, b) => {
-      const aExact = isExactPath(a.rel_path) ? 0 : 1;
-      const bExact = isExactPath(b.rel_path) ? 0 : 1;
-      if (aExact !== bExact) return aExact - bExact;
-      const aSame = a.folder === fromFolder ? 0 : 1;
-      const bSame = b.folder === fromFolder ? 0 : 1;
-      if (aSame !== bSame) return aSame - bSame;
-      const depthDiff = commonDepth(b.folder) - commonDepth(a.folder);
-      if (depthDiff !== 0) return depthDiff;
-      const segCountDiff = a.rel_path.split('/').length - b.rel_path.split('/').length;
-      if (segCountDiff !== 0) return segCountDiff;
-      if (a.rel_path < b.rel_path) return -1;
-      if (a.rel_path > b.rel_path) return 1;
-      return 0;
-    });
-    return sorted[0].rel_path;
+    return resolveAttachmentFromByName(
+      target,
+      fromDocPath,
+      (basenameLower) =>
+        this.db
+          .prepare('SELECT rel_path, folder FROM attachment_index WHERE name_key = ?')
+          .all(basenameLower) as AttachmentCandidate[],
+    );
   }
 
   // targetKey群に合致するリンク一覧を取得(#267 バックリンク検索用)

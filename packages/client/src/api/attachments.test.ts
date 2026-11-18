@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteAttachment,
   fetchAttachmentReferences,
+  previewReorganizeAttachments,
   renameAttachment,
+  reorganizeAttachments,
   resolveAttachment,
 } from './attachments';
 
@@ -77,5 +79,54 @@ describe('deleteAttachment', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(`/api/attachments?path=${encodeURIComponent('フォルダ/a.png')}`);
     expect(init.method).toBe('DELETE');
+  });
+});
+
+describe('previewReorganizeAttachments', () => {
+  it('POST /api/attachments/reorganize/preview に body を送信する', async () => {
+    const mockRes = {
+      mode: 'vault-folder',
+      targetFolder: 'media',
+      commonFolder: 'media',
+      moves: [],
+      rewrites: [],
+      skipped: [],
+      lockedWarnings: [],
+      summary: {
+        totalAttachments: 0,
+        moveCount: 0,
+        renameCount: 0,
+        rewriteDocCount: 0,
+        skipAlreadyInPlace: 0,
+        skipShared: 0,
+        skipUnreferenced: 0,
+      },
+    };
+    const fetchMock = stubFetch(200, mockRes);
+    const result = await previewReorganizeAttachments({ moveSharedToCommonFolder: true });
+
+    expect(result).toEqual(mockRes);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/attachments/reorganize/preview');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ moveSharedToCommonFolder: true });
+  });
+});
+
+describe('reorganizeAttachments', () => {
+  it('POST /api/attachments/reorganize に body を送信する', async () => {
+    const mockRes = {
+      moved: [{ fromPath: 'a.png', toPath: 'media/a.png', renamed: false, referencedBy: [] }],
+      rewrittenDocs: [],
+      skippedCount: 0,
+    };
+    const fetchMock = stubFetch(200, mockRes);
+    const result = await reorganizeAttachments({ moveSharedToCommonFolder: false });
+
+    expect(result).toEqual(mockRes);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/attachments/reorganize');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ moveSharedToCommonFolder: false });
   });
 });

@@ -389,6 +389,26 @@ file=<バイナリ>
 
 添付・画像などライブラリ内のファイルを配信する。認証必須。
 
+### POST /api/attachments/reorganize/preview (admin 専用)
+
+保存済みのライブラリ設定（`attachments`）に沿って既存添付を整理した場合のプレビュー（Dry-run）を返す。ファイルや Git 履歴は変更しない。
+
+```json
+{ "moveSharedToCommonFolder": false }
+```
+
+主な返却項目: `moves`（`fromPath`, `toPath`, `renamed`, `referencedBy`）、`rewrites`（`docPath`, `lockedBy`, `replacements`）、`skipped`（`already-in-place` / `shared-across-folders` / `unreferenced` / `template-folder`）、`lockedWarnings`、`summary`。
+
+### POST /api/attachments/reorganize (admin 専用)
+
+プレビューと同条件で既存添付を一括移動し、文書内の wikilink / Markdown 相対リンクを更新して **1 コミット** にまとめる。書き換え対象文書が他ユーザーによりロックされている場合や、実行中に文書がロック・更新された場合は変更を反映せず（実行中の場合はすべてロールバックし）`409 DOC_LOCKED` / `CONFLICT` を返す。
+
+```json
+{ "moveSharedToCommonFolder": false }
+```
+
+返却値: `{ moved, rewrittenDocs, skippedCount }`。
+
 ---
 
 ## 14. ユーザー管理(admin専用)
