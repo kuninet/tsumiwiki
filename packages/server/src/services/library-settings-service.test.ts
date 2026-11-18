@@ -86,4 +86,54 @@ describe('LibrarySettingsService#get', () => {
     const result = await noLoggerSvc.get();
     expect(result.corrupted).toBe(true);
   });
+
+  it('ファイル不在かつ defaultAttachmentDirMode 指定時: 環境変数互換の vault-folder が返る', async () => {
+    const envSvc = new LibrarySettingsService(lib, new GitService(lib), logger, 'assets');
+    const result = await envSvc.get();
+    expect(result.corrupted).toBe(false);
+    expect(result.settings.attachments).toEqual({ mode: 'vault-folder', folder: 'assets' });
+  });
+
+  it('attachments キーが無い既存 YAML: defaultAttachmentDirMode の値へフォールバックする', async () => {
+    await mkdir(join(lib, '.tsumiwiki'), { recursive: true });
+    await writeFile(
+      settingsPath(),
+      'templates:\n  folder: _templates\ndailyNotes:\n  folder: 日記\n  template: ""\n  filenamePattern: YYYY-MM-DD\n',
+      'utf8',
+    );
+    const envSvc = new LibrarySettingsService(lib, new GitService(lib), logger, 'assets');
+    const result = await envSvc.get();
+    expect(result.corrupted).toBe(false);
+    expect(result.settings.attachments).toEqual({ mode: 'vault-folder', folder: 'assets' });
+  });
+
+  it('attachments キーが不正な場合は corrupted: true となる', async () => {
+    await mkdir(join(lib, '.tsumiwiki'), { recursive: true });
+    await writeFile(
+      settingsPath(),
+      'templates:\n  folder: _templates\ndailyNotes:\n  folder: 日記\n  template: ""\n  filenamePattern: YYYY-MM-DD\nattachments:\n  mode: invalid-mode\n  folder: attachments\n',
+      'utf8',
+    );
+    const envSvc = new LibrarySettingsService(lib, new GitService(lib), logger, 'assets');
+    const result = await envSvc.get();
+    expect(result.corrupted).toBe(true);
+    expect(result.settings.attachments).toEqual({ mode: 'vault-folder', folder: 'assets' });
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('settings.yaml の attachments は環境変数フォールバックより優先される', async () => {
+    const git = new GitService(lib);
+    await git.init();
+    const envSvc = new LibrarySettingsService(lib, git, logger, 'assets');
+    await envSvc.update(
+      {
+        ...LIBRARY_SETTINGS_DEFAULTS,
+        attachments: { mode: 'doc-subfolder', folder: 'media/' },
+      },
+      { name: 'admin', email: 'admin@example.com' },
+    );
+    const result = await envSvc.get();
+    expect(result.corrupted).toBe(false);
+    expect(result.settings.attachments).toEqual({ mode: 'doc-subfolder', folder: 'media' });
+  });
 });

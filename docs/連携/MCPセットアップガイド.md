@@ -240,18 +240,18 @@ Read 9 種 + 履歴 5 種 + Write 11 種 + 添付 1 種 + ごみ箱 2 種 + 記�
 
 | ツール | 引数 | 用途 |
 |---|---|---|
-| `upload_attachment` | `docPath: string`, `fileName: string`, `dataBase64: string` | ノートに画像または PDF を添付ファイルとして保存する(長辺超過時は自動縮小・EXIF 除去)。本文への挿入は呼び出し側で行う(`![[fileName]]`) |
+| `upload_attachment` | `docPath: string`, `fileName: string`, `dataBase64: string` | ノートに画像または PDF を添付ファイルとして保存する(長辺超過時は自動縮小・EXIF 除去)。本文への挿入は呼び出し側で行う(戻り値の `embed` または `![[${embedTarget}]]`) |
 
 - **`upload_attachment` の仕様と使用例**:
   - **引数**:
-    - `docPath`: 添付先ノートの相対パス(例: `設計/アーキテクチャ.md`)。このノートの配置設定(`attachmentDirMode`)に基づいて保存先が決まる
+    - `docPath`: 添付先ノートの相対パス(例: `設計/アーキテクチャ.md`)。このノートの配置設定(ライブラリ設定の `attachments` または未設定時 `ATTACHMENT_DIR_MODE`)に基づいて保存先が決まる
     - `fileName`: 元のファイル名(拡張子で判定。画像または `.pdf` のみ)。画像は `image-YYYYMMDDHHmmss.ext` 形式、PDF は元ファイル名で保存され、同名重複時は自動で連番が付与される
     - `dataBase64`: ファイルバイナリの base64 文字列(`data:image/png;base64,` などの接頭辞は含めない。MIME 形式などの改行や空白を含む base64 も受け付ける)
   - **戻り値**:
-    - `{ fileName: "image-20261103120000.png", path: "設計/image-20261103120000.png", embed: "![[image-20261103120000.png]]" }`
+    - `{ fileName: "image-20261103120000.png", path: "設計/image-20261103120000.png", embedTarget: "image-20261103120000.png", embed: "![[image-20261103120000.png]]" }`（別フォルダの同名ファイルと衝突する場合は `embedTarget` / `embed` が一意解決できる最短パス付きになります）
   - **使用例**:
     1. `upload_attachment` を呼び出して画像を保存
-    2. 戻り値の `embed` (`![[image-...png]]`) をノート本文の挿入したい箇所に `save_note` 等で追記する
+    2. 戻り値の `embed` (`![[...]]`) をノート本文の挿入したい箇所に `save_note` 等で追記する
   - **注意**:
     - デコード後のファイルサイズが `MAX_UPLOAD_MB`(既定 20MB)を超える場合は `PAYLOAD_TOO_LARGE` エラーが返ります。
     - Fastify の `/mcp` ルートには base64 展開後のサイズを考慮した `bodyLimit` (約 27MB) が設定されています。これを超える巨大な HTTP リクエストは Fastify レベルで HTTP 413 (`FST_ERR_CTP_BODY_TOO_LARGE`) となり、ツール実行まで届きません。

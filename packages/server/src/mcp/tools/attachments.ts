@@ -24,7 +24,7 @@ export function registerAttachmentTools(mcp: McpServer, app: FastifyInstance): v
     {
       title: '添付ファイルアップロード',
       description:
-        'ノートに画像またはPDFを添付ファイルとして保存する。本文への挿入は呼び出し側で行う(![[fileName]])',
+        'ノートに画像またはPDFを添付ファイルとして保存する。本文への挿入は呼び出し側で行う(戻り値の embed または ![[embedTarget]])',
       inputSchema: {
         docPath: z
           .string()
@@ -85,7 +85,8 @@ export function registerAttachmentTools(mcp: McpServer, app: FastifyInstance): v
         return toolResult({
           fileName: result.fileName,
           path: result.path,
-          embed: `![[${result.fileName}]]`,
+          embedTarget: result.embedTarget,
+          embed: `![[${result.embedTarget}]]`,
         });
       } catch (e) {
         return docError(e);

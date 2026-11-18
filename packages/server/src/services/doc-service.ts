@@ -14,7 +14,7 @@ import {
   stringify as yamlStringify,
   YAMLSeq,
 } from 'yaml';
-import { REV_PATTERN } from '@tsumiwiki/shared';
+import { REV_PATTERN, attachmentSettingsFromEnv } from '@tsumiwiki/shared';
 import type {
   AttachmentSummary,
   BacklinksResponse,
@@ -39,6 +39,7 @@ import {
 import type { DraftService } from './draft-service.js';
 import type { GitAuthor, GitService } from './git-service.js';
 import type { IndexerService } from './indexer-service.js';
+import type { LibrarySettingsService } from './library-settings-service.js';
 import { DocLockedError, type LockService } from './lock-service.js';
 import { normalizeTagName, parseDocMeta, splitTagString } from './markdown-meta.js';
 import { applyPatches, guardFrontmatter, type PatchEdit } from '../mcp/note-patch.js';
@@ -656,6 +657,7 @@ export class DocService {
     private readonly locks: LockService,
     private readonly drafts: DraftService,
     private readonly logger?: Logger,
+    private readonly librarySettings?: LibrarySettingsService,
   ) {}
 
   // appendDocMcp のパスごとの直列化キュー(末尾の Promise)。完了時に自分が末尾なら削除する
@@ -1668,14 +1670,14 @@ export class DocService {
     return sanitized === '' ? 'document' : sanitized;
   }
 
-  // 画像・PDF添付の保存(FR-IMG-01/02/04)。保存先は既定で文書と同じフォルダ、
-  // 設定(ATTACHMENT_DIR_MODE)でフォルダ名指定も可能
+  // 画像・PDF添付の保存(FR-IMG-01/02/04)。保存先はライブラリ設定(未設定時は ATTACHMENT_DIR_MODE)により
+  // 文書と同フォルダ / ライブラリ全体で1つのフォルダ / 文書フォルダ直下のサブフォルダ を切り替える(#160)
   async addAttachment(
     docPath: string,
     originalName: string,
     data: Buffer,
     author: GitAuthor,
-  ): Promise<{ fileName: string; path: string }> {
+  ): Promise<{ fileName: string; path: string; embedTarget: string }> {
     const docNorm = this.validateDocPath(docPath);
     if (!(await this.exists(resolveInLibrary(this.libraryPath, docNorm)))) {
       throw new DocNotFoundError(docNorm);
@@ -1685,9 +1687,19 @@ export class DocService {
       throw new InvalidPathError(originalName);
     }
 
-    const mode = this.config.attachmentDirMode;
-    const dirRel = mode === 'same-folder' ? path.posix.dirname(docNorm) : mode;
-    const dirNorm = dirRel === '.' ? '' : dirRel;
+    const attSettings = this.librarySettings
+      ? (await this.librarySettings.get()).settings.attachments
+      : attachmentSettingsFromEnv(this.config.attachmentDirMode);
+    const docDirRaw = path.posix.dirname(docNorm);
+    const docDir = docDirRaw === '.' ? '' : docDirRaw;
+    let dirNorm: string;
+    if (attSettings.mode === 'same-folder') {
+      dirNorm = docDir;
+    } else if (attSettings.mode === 'vault-folder') {
+      dirNorm = attSettings.folder;
+    } else {
+      dirNorm = docDir ? `${docDir}/${attSettings.folder}` : attSettings.folder;
+    }
     const absDir = dirNorm ? resolveInLibrary(this.libraryPath, dirNorm) : this.libraryPath;
     await mkdir(absDir, { recursive: true });
 
@@ -1710,7 +1722,21 @@ export class DocService {
     await this.tryCommit([relPath], `attach: ${relPath}`, author);
     // 添付索引に即時反映(issue #198。/api/embedで直後から解決できるように)
     await this.tryUpdateIndex(() => this.indexer.indexAttachment(relPath), { relPath }, '添付');
-    return { fileName, path: relPath };
+    const embedTarget = this.resolveShortestEmbedTarget(docNorm, relPath);
+    return { fileName, path: relPath, embedTarget };
+  }
+
+  // 同名の別ファイル(例: 旧モードで同フォルダに保存された PDF)が /api/embed で優先される場合でも
+  // 今回保存した添付を一意に解決できるよう、末尾からセグメントを増やして最短ターゲットを求める(#160)
+  private resolveShortestEmbedTarget(docNorm: string, relPath: string): string {
+    const parts = relPath.split('/');
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const candidate = parts.slice(i).join('/');
+      if (this.indexer.resolveAttachment(candidate, docNorm) === relPath) {
+        return candidate;
+      }
+    }
+    return relPath;
   }
 
   // 添付パスとして妥当か検証して正規化する(保護パス・.trash・.md・非対応拡張子を拒否。

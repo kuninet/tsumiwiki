@@ -93,7 +93,7 @@
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| POST | `/api/attachments?docPath=` | multipart `{file}`(docPathはクエリ。フィールド順非依存)→ 添付フォルダに保存+コミットし、参照名を返す。対応形式: 画像(`png/jpg/jpeg/gif/svg/webp`)+ PDF(`pdf`。issue #204)。画像は`image-YYYYMMDDHHmmss.ext`で自動命名、PDFは元ファイル名のbasenameを尊重(危険文字置換。Obsidian互換)。保存前に画像を縮小・EXIF除去する(issue #247。下記補足参照) |
+| POST | `/api/attachments?docPath=` | multipart `{file}`(docPathはクエリ。フィールド順非依存)→ 添付フォルダに保存+コミットし、`{fileName, path, embedTarget}`を返す。`embedTarget`は`/api/embed`で一意解決できる最短ターゲット(通常は`fileName`、別フォルダの同名ファイルが優先される場合はパス付き最短表記。issue #160)。対応形式: 画像(`png/jpg/jpeg/gif/svg/webp`)+ PDF(`pdf`。issue #204)。画像は`image-YYYYMMDDHHmmss.ext`で自動命名、PDFは元ファイル名のbasenameを尊重(危険文字置換。Obsidian互換)。保存前に画像を縮小・EXIF除去する(issue #247。下記補足参照) |
 | GET | `/api/files/*` | ライブラリ内ファイルのraw配信(画像・PDF表示用)。Markdownは対象外。`Content-Disposition` と MIME を適切に設定。CSPは画像/SVGが`default-src 'none'`(NFR-SEC-03)、PDFはブラウザ内蔵ビューアが自ページ内リソースを読み込めるよう`default-src 'self'`系の緩いCSPを使う |
 | GET | `/api/embed?target=&from=` | Obsidian同等のファイル名索引(`attachment_index`。issue #198)による解決+配信。`target`(`![[target]]`相当)を`from`(参照元文書パス)のフォルダ起点で解決: パス指定時の完全パス一致→同フォルダ優先→共通祖先が深い方→パスが浅い方→辞書順。未解決は404。配信自体は`/api/files/*`と同条件(`.md`・`.trash`・保護パスは対象外) |
 | GET | `/api/attachments/resolve?target=&from=` | `/api/embed`と同じ規則で解決し、実パスとファイル名を`{path, name}`で返す(配信はしない)。未解決404、`target`が非文字列/空は400 |
@@ -160,9 +160,10 @@
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| GET | `/api/library/settings` | 現在のライブラリ設定(認証必須)。`{ settings, corrupted }` を返す |
-| PUT | `/api/library/settings` | **admin** 更新。`.tsumiwiki/settings.yaml` を書き `config: update library settings` でコミット |
+| GET | `/api/library/settings` | 現在のライブラリ設定(認証必須)。`{ settings, corrupted }` を返す。`settings` には `templates`・`dailyNotes`・`attachments` (`{ mode: 'same-folder' \| 'vault-folder' \| 'doc-subfolder', folder }`) を含む |
+| PUT | `/api/library/settings` | **admin** 更新。`.tsumiwiki/settings.yaml` を書き `config: update library settings` でコミット。`attachments` 省略時は現在の設定値(未設定時は環境変数フォールバック値)を維持。`vault-folder` / `doc-subfolder` の空欄・ドット始まり・`..`・禁止文字・予約名、または `vault-folder` と `templates.folder` の衝突は `VALIDATION_ERROR`(400) |
 
+- `attachments` キーが `settings.yaml` に無い(またはファイル不在の)場合は、環境変数 `ATTACHMENT_DIR_MODE` (`same-folder` またはフォルダ名。フォルダ名指定時は `vault-folder` 扱い) へフォールバックする(#160)。`doc-subfolder` はルート直下の文書に対してはライブラリ直下の指定フォルダへ保存する。
 - `corrupted`: `settings.yaml` の**パース失敗・バリデーション失敗**時に `true`(サーバーログに warn を出力しつつデフォルト値へフォールバック)。ファイル不在(初期セットアップ)は `false`。
   `true` のまま PUT すると git 上の正しい過去版を上書きしてしまうため、クライアントは警告バナーを表示する(#99)。
 

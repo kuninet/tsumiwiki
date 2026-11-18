@@ -18,7 +18,19 @@ export const librarySettingsRoutes: FastifyPluginCallback = (app, _opts, done) =
     if (req.user.role !== 'admin') {
       return sendError(reply, 403, 'FORBIDDEN', 'ライブラリ設定の変更は管理者のみが行えます');
     }
-    const parsed = librarySettingsSchema.safeParse(req.body);
+    const body = req.body;
+    const rawBody =
+      body !== null &&
+      typeof body === 'object' &&
+      !Array.isArray(body) &&
+      (!Object.hasOwn(body, 'attachments') ||
+        (body as Record<string, unknown>).attachments === undefined)
+        ? {
+            ...(body as Record<string, unknown>),
+            attachments: (await app.librarySettingsService.get()).settings.attachments,
+          }
+        : body;
+    const parsed = librarySettingsSchema.safeParse(rawBody);
     if (!parsed.success) {
       return sendError(
         reply,

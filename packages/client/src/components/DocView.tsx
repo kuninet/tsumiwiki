@@ -716,7 +716,10 @@ export function DocView({
         editor
           ?.chain()
           .focus()
-          .insertContent({ type: 'obsidianEmbed', attrs: { target: result.fileName } })
+          .insertContent({
+            type: 'obsidianEmbed',
+            attrs: { target: result.embedTarget ?? result.fileName },
+          })
           .run();
         inserted++;
       } catch (err) {

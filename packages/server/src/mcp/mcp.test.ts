@@ -3114,6 +3114,71 @@ describe('添付ファイルアップロード(upload_attachment)', () => {
     expect(res.isError).toBe(true);
     expect(res.structuredContent.code).toBe('NOT_FOUND');
   });
+
+  it('正常系: ライブラリ設定の doc-subfolder / vault-folder が MCP 経由のアップロードにも反映される', async () => {
+    await callTool('create_note', { path: '企画/メモ.md', content: '# 企画\n' });
+    const base = (await app.librarySettingsService.get()).settings;
+
+    await app.librarySettingsService.update(
+      { ...base, attachments: { mode: 'doc-subfolder', folder: 'assets' } },
+      { name: 'admin', email: 'admin@example.com' },
+    );
+    const subRes = await callTool('upload_attachment', {
+      docPath: '企画/メモ.md',
+      fileName: 'diagram.png',
+      dataBase64: TINY_PNG_BASE64,
+    });
+    expect(subRes.isError).toBeFalsy();
+    expect(subRes.structuredContent.path).toBe(`企画/assets/${subRes.structuredContent.fileName}`);
+
+    await app.librarySettingsService.update(
+      { ...base, attachments: { mode: 'vault-folder', folder: 'shared-assets' } },
+      { name: 'admin', email: 'admin@example.com' },
+    );
+    const vaultRes = await callTool('upload_attachment', {
+      docPath: '企画/メモ.md',
+      fileName: 'diagram2.png',
+      dataBase64: TINY_PNG_BASE64,
+    });
+    expect(vaultRes.isError).toBeFalsy();
+    expect(vaultRes.structuredContent.path).toBe(
+      `shared-assets/${vaultRes.structuredContent.fileName}`,
+    );
+    expect(
+      app.indexerService.resolveAttachment(
+        vaultRes.structuredContent.embedTarget as string,
+        '企画/メモ.md',
+      ),
+    ).toBe(vaultRes.structuredContent.path);
+
+    // 同名 PDF が同フォルダに既存の場合、doc-subfolder 側の embedTarget/embed がパス付き最短表記になる
+    const pdfBase64 = Buffer.from('%PDF-1.4\n% test\n%%EOF').toString('base64');
+    await app.librarySettingsService.update(
+      { ...base, attachments: { mode: 'same-folder', folder: 'attachments' } },
+      { name: 'admin', email: 'admin@example.com' },
+    );
+    const firstPdf = await callTool('upload_attachment', {
+      docPath: '企画/メモ.md',
+      fileName: 'spec.pdf',
+      dataBase64: pdfBase64,
+    });
+    expect(firstPdf.isError).toBeFalsy();
+    expect(firstPdf.structuredContent.embed).toBe('![[spec.pdf]]');
+
+    await app.librarySettingsService.update(
+      { ...base, attachments: { mode: 'doc-subfolder', folder: 'assets' } },
+      { name: 'admin', email: 'admin@example.com' },
+    );
+    const subPdf = await callTool('upload_attachment', {
+      docPath: '企画/メモ.md',
+      fileName: 'spec.pdf',
+      dataBase64: pdfBase64,
+    });
+    expect(subPdf.isError).toBeFalsy();
+    expect(subPdf.structuredContent.path).toBe('企画/assets/spec.pdf');
+    expect(subPdf.structuredContent.embedTarget).toBe('assets/spec.pdf');
+    expect(subPdf.structuredContent.embed).toBe('![[assets/spec.pdf]]');
+  });
 });
 
 describe('decodeBase64Strict 単体テスト', () => {
