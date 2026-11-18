@@ -14,7 +14,57 @@ interface Call {
   body?: unknown;
 }
 
-function stubFetch(corrupted: boolean, settings = LIBRARY_SETTINGS_DEFAULTS) {
+const SAMPLE_PREVIEW = {
+  mode: 'doc-subfolder',
+  targetFolder: 'attachments',
+  commonFolder: 'attachments',
+  moves: [
+    {
+      fromPath: 'old/pic.png',
+      toPath: '企画/attachments/pic-2.png',
+      renamed: true,
+      referencedBy: ['企画/メモ.md'],
+    },
+  ],
+  rewrites: [
+    {
+      docPath: '企画/メモ.md',
+      lockedBy: null,
+      replacements: [{ from: 'pic.png', to: 'pic-2.png' }],
+    },
+  ],
+  skipped: [
+    {
+      path: 'shared.png',
+      reason: 'shared-across-folders',
+      referencedBy: ['企画/メモ.md', '議事/メモ.md'],
+    },
+    {
+      path: '_templates/logo.png',
+      reason: 'template-folder',
+      referencedBy: ['_templates/日誌.md'],
+    },
+  ],
+  lockedWarnings: [] as { docPath: string; displayName: string }[],
+  summary: {
+    totalAttachments: 3,
+    moveCount: 1,
+    renameCount: 1,
+    rewriteDocCount: 1,
+    skipAlreadyInPlace: 0,
+    skipShared: 1,
+    skipUnreferenced: 0,
+    skipTemplate: 1,
+  },
+};
+
+function stubFetch(
+  corrupted: boolean,
+  settings = LIBRARY_SETTINGS_DEFAULTS,
+  options?: {
+    previewResponse?: typeof SAMPLE_PREVIEW;
+  },
+) {
   const calls: Call[] = [];
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     const method = (init?.method ?? 'GET').toUpperCase();
@@ -50,6 +100,31 @@ function stubFetch(corrupted: boolean, settings = LIBRARY_SETTINGS_DEFAULTS) {
         ok: true,
         status: 200,
         json: () => Promise.resolve({ settings: body }),
+      });
+    }
+    if (path === '/api/attachments/reorganize/preview' && method === 'POST') {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(options?.previewResponse ?? SAMPLE_PREVIEW),
+      });
+    }
+    if (path === '/api/attachments/reorganize' && method === 'POST') {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            moved: (options?.previewResponse ?? SAMPLE_PREVIEW).moves,
+            rewrittenDocs: [
+              {
+                path: '企画/メモ.md',
+                updatedAt: '2026-11-18T12:00:00Z',
+                replacements: [{ from: 'pic.png', to: 'pic-2.png' }],
+              },
+            ],
+            skippedCount: 2,
+          }),
       });
     }
     return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
@@ -172,5 +247,77 @@ describe('LibrarySettingsPage', () => {
     }
 
     expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(0);
+  });
+
+  it('未保存の変更がある場合は整理プレビューが無効化され警告が出る', async () => {
+    stubFetch(false);
+    renderPage();
+
+    await screen.findByTestId('reorganize-attachments-section');
+    const previewBtn = screen.getByRole('button', {
+      name: '整理内容をプレビュー',
+    }) as HTMLButtonElement;
+    expect(previewBtn.disabled).toBe(false);
+
+    fireEvent.click(screen.getByLabelText(/ライブラリ全体で 1 つのフォルダ/));
+    expect(screen.getByTestId('reorganize-dirty-warning')).toBeTruthy();
+    expect(previewBtn.disabled).toBe(true);
+  });
+
+  it('プレビュー取得→確認ダイアログ→整理実行でサマリーと結果が表示される', async () => {
+    const calls = stubFetch(false, {
+      ...LIBRARY_SETTINGS_DEFAULTS,
+      attachments: { mode: 'doc-subfolder', folder: 'attachments' },
+    });
+    renderPage();
+
+    await screen.findByTestId('reorganize-attachments-section');
+    const checkbox = screen.getByLabelText(
+      /フォルダ横断で共有されている添付を共通フォルダ/,
+    ) as HTMLInputElement;
+    fireEvent.click(checkbox);
+
+    fireEvent.click(screen.getByRole('button', { name: '整理内容をプレビュー' }));
+
+    const previewBox = await screen.findByTestId('reorganize-preview');
+    expect(previewBox.textContent).toContain('old/pic.png');
+    expect(previewBox.textContent).toContain('企画/attachments/pic-2.png');
+    expect(previewBox.textContent).toContain('リネーム');
+    expect(previewBox.textContent).toContain('shared.png');
+    expect(previewBox.textContent).toContain('企画/メモ.md, 議事/メモ.md');
+    expect(previewBox.textContent).toContain('_templates/logo.png');
+    expect(previewBox.textContent).toContain('テンプレート 1 件');
+
+    const prevCall = calls.find((c) => c.path === '/api/attachments/reorganize/preview');
+    expect(prevCall?.body).toEqual({ moveSharedToCommonFolder: true });
+
+    fireEvent.click(screen.getByRole('button', { name: '整理を実行' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('1 件の添付ファイルを移動し、1 件の文書のリンクを更新');
+
+    fireEvent.click(screen.getByRole('button', { name: '実行する' }));
+    const resultBanner = await screen.findByTestId('reorganize-result');
+    expect(resultBanner.textContent).toContain('移動 1 件');
+    const execCall = calls.find((c) => c.path === '/api/attachments/reorganize');
+    expect(execCall?.body).toEqual({ moveSharedToCommonFolder: true });
+  });
+
+  it('ロック警告がある場合は警告バナーを表示し整理を実行を無効化する', async () => {
+    stubFetch(false, LIBRARY_SETTINGS_DEFAULTS, {
+      previewResponse: {
+        ...SAMPLE_PREVIEW,
+        lockedWarnings: [{ docPath: '企画/メモ.md', displayName: '山田' }],
+      },
+    });
+    renderPage();
+
+    await screen.findByTestId('reorganize-attachments-section');
+    fireEvent.click(screen.getByRole('button', { name: '整理内容をプレビュー' }));
+
+    const lockWarn = await screen.findByTestId('reorganize-lock-warning');
+    expect(lockWarn.textContent).toContain('企画/メモ.md');
+    expect(lockWarn.textContent).toContain('山田');
+    const execBtn = screen.getByRole('button', { name: '整理を実行' }) as HTMLButtonElement;
+    expect(execBtn.disabled).toBe(true);
   });
 });

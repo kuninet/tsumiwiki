@@ -2,11 +2,14 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { renameAttachmentRequestSchema } from '@tsumiwiki/shared';
+import {
+  renameAttachmentRequestSchema,
+  reorganizeAttachmentsRequestSchema,
+} from '@tsumiwiki/shared';
 import { MIME_BY_EXT } from '../lib/attachments.js';
 import { resizeAttachmentImage } from '../lib/image-resize.js';
 import { InvalidPathError, isProtectedPath, normalizeRelPath, resolveInLibrary } from '../lib/paths.js';
-import { sendError } from '../plugins/auth.js';
+import { requireAdmin, sendError } from '../plugins/auth.js';
 import { DocService } from '../services/doc-service.js';
 import { authorOf, handling } from './docs.js';
 
@@ -194,5 +197,25 @@ export function registerAttachmentRoutes(app: FastifyInstance): void {
       await app.docService.deleteAttachment(attachmentPath, authorOf(req));
       return { ok: true };
     });
+  });
+
+  // ---- #333: 既存添付ファイルの一括整理・移行(admin 専用) ----
+
+  app.post('/api/attachments/reorganize/preview', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const parsed = reorganizeAttachmentsRequestSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'リクエスト内容が不正です');
+    }
+    return handling(reply, () => app.docService.previewReorganizeAttachments(parsed.data));
+  });
+
+  app.post('/api/attachments/reorganize', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const parsed = reorganizeAttachmentsRequestSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return sendError(reply, 400, 'VALIDATION_ERROR', 'リクエスト内容が不正です');
+    }
+    return handling(reply, () => app.docService.reorganizeAttachments(parsed.data, authorOf(req)));
   });
 }

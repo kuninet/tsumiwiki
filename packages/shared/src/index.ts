@@ -574,3 +574,83 @@ export const apiErrorSchema = z.object({
   }),
 });
 export type ApiError = z.infer<typeof apiErrorSchema>;
+
+// ---- #333: 既存添付ファイルの一括整理・移行 ----
+
+export const reorganizeAttachmentsRequestSchema = z.object({
+  moveSharedToCommonFolder: z.boolean().optional().default(false),
+});
+export type ReorganizeAttachmentsRequest = z.infer<typeof reorganizeAttachmentsRequestSchema>;
+
+export const reorganizeMoveItemSchema = z.object({
+  fromPath: z.string(),
+  toPath: z.string(),
+  renamed: z.boolean(),
+  referencedBy: z.array(z.string()),
+});
+export type ReorganizeMoveItem = z.infer<typeof reorganizeMoveItemSchema>;
+
+export const reorganizeDocRewriteSchema = z.object({
+  docPath: z.string(),
+  lockedBy: z.object({ userId: z.number(), displayName: z.string() }).nullable(),
+  replacements: z.array(attachmentReplacementSchema),
+});
+export type ReorganizeDocRewrite = z.infer<typeof reorganizeDocRewriteSchema>;
+
+export const reorganizeSkipReasonSchema = z.enum([
+  'already-in-place',
+  'shared-across-folders',
+  'unreferenced',
+  'template-folder',
+]);
+export type ReorganizeSkipReason = z.infer<typeof reorganizeSkipReasonSchema>;
+
+export const reorganizeSkippedItemSchema = z.object({
+  path: z.string(),
+  reason: reorganizeSkipReasonSchema,
+  referencedBy: z.array(z.string()),
+});
+export type ReorganizeSkippedItem = z.infer<typeof reorganizeSkippedItemSchema>;
+
+export const reorganizeLockedWarningSchema = z.object({
+  docPath: z.string(),
+  displayName: z.string(),
+});
+export type ReorganizeLockedWarning = z.infer<typeof reorganizeLockedWarningSchema>;
+
+export const reorganizePreviewSummarySchema = z.object({
+  totalAttachments: z.number(),
+  moveCount: z.number(),
+  renameCount: z.number(),
+  rewriteDocCount: z.number(),
+  skipAlreadyInPlace: z.number(),
+  skipShared: z.number(),
+  skipUnreferenced: z.number(),
+  skipTemplate: z.number(),
+});
+export type ReorganizePreviewSummary = z.infer<typeof reorganizePreviewSummarySchema>;
+
+export const reorganizePreviewResponseSchema = z.object({
+  mode: attachmentDirModeSchema,
+  targetFolder: z.string(),
+  commonFolder: z.string(),
+  moves: z.array(reorganizeMoveItemSchema),
+  rewrites: z.array(reorganizeDocRewriteSchema),
+  skipped: z.array(reorganizeSkippedItemSchema),
+  lockedWarnings: z.array(reorganizeLockedWarningSchema),
+  summary: reorganizePreviewSummarySchema,
+});
+export type ReorganizePreviewResponse = z.infer<typeof reorganizePreviewResponseSchema>;
+
+export const reorganizeExecuteResponseSchema = z.object({
+  moved: z.array(reorganizeMoveItemSchema),
+  rewrittenDocs: z.array(
+    z.object({
+      path: z.string(),
+      updatedAt: z.string(),
+      replacements: z.array(attachmentReplacementSchema),
+    }),
+  ),
+  skippedCount: z.number(),
+});
+export type ReorganizeExecuteResponse = z.infer<typeof reorganizeExecuteResponseSchema>;

@@ -150,3 +150,22 @@ describe('librarySettingsSchema (attachments)', () => {
     ).toBe(true);
   });
 });
+
+import { reorganizeAttachmentsRequestSchema } from './index.js';
+
+describe('reorganizeAttachmentsRequestSchema', () => {
+  it('省略時は moveSharedToCommonFolder: false を補完する', () => {
+    expect(reorganizeAttachmentsRequestSchema.parse({})).toEqual({
+      moveSharedToCommonFolder: false,
+    });
+    expect(reorganizeAttachmentsRequestSchema.parse({ moveSharedToCommonFolder: true })).toEqual({
+      moveSharedToCommonFolder: true,
+    });
+  });
+
+  it('boolean 以外は拒否する', () => {
+    expect(
+      reorganizeAttachmentsRequestSchema.safeParse({ moveSharedToCommonFolder: 'yes' }).success,
+    ).toBe(false);
+  });
+});
