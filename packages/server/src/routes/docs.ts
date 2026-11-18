@@ -3,6 +3,7 @@ import {
   createDocRequestSchema,
   createFolderRequestSchema,
   moveDocRequestSchema,
+  moveDocsBatchRequestSchema,
   moveFolderRequestSchema,
   saveDocRequestSchema,
 } from '@tsumiwiki/shared';
@@ -138,6 +139,16 @@ export function registerDocRoutes(app: FastifyInstance): void {
         req.user!.id,
         authorOf(req),
       ),
+    );
+  });
+
+  app.post('/api/docs/move-batch', async (req, reply) => {
+    const parsed = moveDocsBatchRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(reply, 400, 'VALIDATION_ERROR', '移動対象の指定が不正です');
+    }
+    return handling(reply, () =>
+      app.docService.moveDocsBatch(parsed.data.moves, req.user!.id, authorOf(req)),
     );
   });
 

@@ -97,13 +97,11 @@ export class GitService {
         // (既存ライブラリで新規trash操作前に確実に無視される状態にする)
         const current = readFileSync(gitignorePath, 'utf8');
         if (!/(^|\n)\.tsumiwiki-trash\.json(\s|$)/.test(current)) {
-          const appended = current + (current.endsWith('\n') ? '' : '\n') + '.tsumiwiki-trash.json\n';
+          const appended =
+            current + (current.endsWith('\n') ? '' : '\n') + '.tsumiwiki-trash.json\n';
           writeFileSync(gitignorePath, appended, 'utf8');
           await this.git.add(['.gitignore']);
-          await this.commitStaged(
-            'chore: ignore .tsumiwiki-trash.json',
-            SYSTEM_AUTHOR,
-          );
+          await this.commitStaged('chore: ignore .tsumiwiki-trash.json', SYSTEM_AUTHOR);
         }
       }
     });
@@ -111,8 +109,35 @@ export class GitService {
 
   // 指定パスの変更をコミットする(保存・作成・添付追加等。設計06章6.2)
   async commit(paths: string[], message: string, author: GitAuthor): Promise<void> {
+    if (paths.length === 0) return;
     await this.queue.run(async () => {
-      await this.literalPathRaw(['add', '--', ...paths]);
+      const targetPaths: string[] = [];
+      const missing: string[] = [];
+      for (const p of paths) {
+        if (existsSync(join(this.libraryPath, p))) {
+          targetPaths.push(p);
+        } else {
+          missing.push(p);
+        }
+      }
+      if (missing.length > 0) {
+        // 移動元・削除元が Git 未追跡(untracked)だった場合、`git add -- <missing>` は
+        // pathspec エラーで失敗し他変更のコミットまで止めるため追跡中のパスのみ残す
+        const trackedOut = await this.literalPathRaw(['ls-files', '-z', '--', ...missing]);
+        const trackedNfc = new Set(
+          trackedOut
+            .split('\0')
+            .filter(Boolean)
+            .map((s) => s.normalize('NFC')),
+        );
+        for (const p of missing) {
+          if (trackedNfc.has(p.normalize('NFC'))) {
+            targetPaths.push(p);
+          }
+        }
+      }
+      if (targetPaths.length === 0) return;
+      await this.literalPathRaw(['add', '--', ...targetPaths]);
       await this.commitStaged(message, author);
     });
   }
@@ -163,12 +188,7 @@ export class GitService {
     // まず hash 一覧だけを取り、コミットごとに git show でメタ+name-status を取得する。
     // 1コミット単位で境界が明確なので、-z 出力にマーカー文字列を仕込んで境界を作る
     // 方式(件名やパスに衝突しうる)を避けられる
-    const hashesOut = await this.git.raw([
-      'log',
-      '--pretty=format:%H',
-      '-n',
-      String(clamped),
-    ]);
+    const hashesOut = await this.git.raw(['log', '--pretty=format:%H', '-n', String(clamped)]);
     const hashes = hashesOut.split('\n').filter(Boolean);
     const entries = await Promise.all(hashes.map((h) => this.historyEntryForRev(h)));
     return entries.filter((e): e is AllHistoryEntry => e !== null);
@@ -206,7 +226,7 @@ export class GitService {
     const paths: string[] = [];
     // git の name-status で出る status コード(通常種のみ)
     const STATUS_RE = /^([AMDTUXB]|[RC]\d+)$/;
-    for (let i = 0; i < tokens.length; ) {
+    for (let i = 0; i < tokens.length;) {
       const status = tokens[i];
       if (!STATUS_RE.test(status)) break; // diff 本文に到達したら打ち切り
       if (status.startsWith('R') || status.startsWith('C')) {

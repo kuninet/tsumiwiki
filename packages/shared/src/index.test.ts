@@ -169,3 +169,34 @@ describe('reorganizeAttachmentsRequestSchema', () => {
     ).toBe(false);
   });
 });
+
+import { moveDocsBatchRequestSchema, skippedAttachmentSchema } from './index.js';
+
+describe('moveDocsBatchRequestSchema / skippedAttachmentSchema (#334)', () => {
+  it('1件以上の移動リストを受理し、0件または201件以上は拒否する', () => {
+    expect(
+      moveDocsBatchRequestSchema.safeParse({
+        moves: [{ path: 'a.md', newFolder: 'dest', newTitle: 'a' }],
+      }).success,
+    ).toBe(true);
+    expect(moveDocsBatchRequestSchema.safeParse({ moves: [] }).success).toBe(false);
+    const over = Array.from({ length: 201 }, (_, i) => ({
+      path: `doc-${i}.md`,
+      newFolder: 'dest',
+      newTitle: `doc-${i}`,
+    }));
+    expect(moveDocsBatchRequestSchema.safeParse({ moves: over }).success).toBe(false);
+  });
+
+  it('skippedAttachmentSchema は shared / conflict のみ受理する', () => {
+    expect(skippedAttachmentSchema.safeParse({ fileName: 'a.png', reason: 'shared' }).success).toBe(
+      true,
+    );
+    expect(
+      skippedAttachmentSchema.safeParse({ fileName: 'b.png', reason: 'conflict' }).success,
+    ).toBe(true);
+    expect(skippedAttachmentSchema.safeParse({ fileName: 'c.png', reason: 'other' }).success).toBe(
+      false,
+    );
+  });
+});

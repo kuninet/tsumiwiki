@@ -14,7 +14,11 @@ import {
   stringify as yamlStringify,
   YAMLSeq,
 } from 'yaml';
-import { LIBRARY_SETTINGS_DEFAULTS, REV_PATTERN, attachmentSettingsFromEnv } from '@tsumiwiki/shared';
+import {
+  LIBRARY_SETTINGS_DEFAULTS,
+  REV_PATTERN,
+  attachmentSettingsFromEnv,
+} from '@tsumiwiki/shared';
 import type {
   AttachmentSummary,
   BacklinksResponse,
@@ -22,10 +26,14 @@ import type {
   DocSummary,
   FrontmatterOp,
   LibrarySettings,
+  MoveDocRequest,
+  MoveDocsBatchResponse,
+  MovedDocResponse,
   RenameAttachmentResponse,
   ReorganizeExecuteResponse,
   ReorganizePreviewResponse,
   SaveDocResponse,
+  SkippedAttachment,
   TrashEntry,
   TreeResponse,
 } from '@tsumiwiki/shared';
@@ -37,7 +45,12 @@ import {
   FM_BLOCK_RE,
   MD_LINK_REWRITE_RE,
   WIKILINK_REWRITE_RE,
+  buildByNameIndex,
   extractLinkTargets,
+  folderOfDoc,
+  normalizeEmbedTarget,
+  resolveAttachmentFromByName,
+  resolveMarkdownRelPath,
   resolveShortestEmbedTargetWith,
   splitFrontmatter,
   splitTargetSuffix,
@@ -573,35 +586,7 @@ export function extractLeadingFrontmatter(body: string): {
   }
 }
 
-// #159: 文書本文が同フォルダに置いた画像添付を参照している「bareファイル名」を抽出する。
-// Obsidian embed `![[X]]`(`|alias`・`#anchor` は捨てる)とマークダウン画像 `![alt](X)`
-// (`"title"` は捨てる)を対象。http(s)/data スキームやフォルダ区切りを含むターゲットは
-// 対象外(同フォルダ添付に限定)。単一行 URL 想定で改行含みには当たらない。
-// TODO(#160): 保存先モード拡張時に、集約フォルダを指す絶対パス参照も対象化するか再検討
-const OBSIDIAN_EMBED_RE = /!\[\[([^\]|#\n]+?)(?:[#|][^\]\n]*)?\]\]/g;
-const MARKDOWN_IMG_RE = /!\[[^\]\n]*\]\(([^)\s\n]+)(?:\s+["'][^)\n]*)?\)/g;
-
-function extractAttachmentFilenames(body: string, extensions: ReadonlySet<string>): string[] {
-  const result = new Set<string>();
-  const consider = (raw: string) => {
-    const target = raw.trim();
-    if (!target) return;
-    if (/^(https?:|data:)/i.test(target)) return;
-    if (target.includes('/')) return;
-    // クエリ・フラグメントは拡張子判定前に落とす(ローカルファイル参照は通常付かないが保険)
-    const clean = target.split(/[?#]/)[0];
-    const dot = clean.lastIndexOf('.');
-    if (dot < 0) return;
-    const ext = clean.slice(dot).toLowerCase();
-    if (!extensions.has(ext)) return;
-    result.add(clean);
-  };
-  for (const m of body.matchAll(OBSIDIAN_EMBED_RE)) consider(m[1]);
-  for (const m of body.matchAll(MARKDOWN_IMG_RE)) consider(m[1]);
-  return [...result];
-}
-
-// 他文書本文にファイル名リテラルが「独立した」トークンとして現れるかを判定する。
+// 他文書本文にファイル名リテラルが「独立した」トークンとして現れるかを判定する(#159 / #334)。
 // 素朴な substring 一致だと `1.png` が `image-1.png` にヒットしてしまう(false-shared)
 // ため、直前は英数・`_`・`-`・`.`・`/` 以外、直後は英数・`_`・`-`・`.` 以外を要求する。
 function escapeRegex(s: string): string {
@@ -1461,166 +1446,818 @@ export class DocService {
     newTitle: string,
     userId: number,
     author: GitAuthor,
-  ): Promise<{ path: string }> {
-    const oldNorm = this.validateDocPath(relPath);
-    const oldAbs = resolveInLibrary(this.libraryPath, oldNorm);
-    if (!(await this.exists(oldAbs))) {
-      throw new DocNotFoundError(oldNorm);
-    }
-    this.locks.assertNotLockedByOther(oldNorm, userId);
-    const folderNorm = newFolder ? this.validateFolderPath(newFolder) : '';
-    const fileName = `${sanitizeTitle(newTitle)}.md`;
-    const newNorm = folderNorm ? `${folderNorm}/${fileName}` : fileName;
-    if (newNorm === oldNorm) {
-      return { path: oldNorm };
-    }
-    const newAbs = resolveInLibrary(this.libraryPath, newNorm);
-    // 大文字小文字のみの変更は、case-insensitiveなFS(Windows/macOS)では
-    // existsが自分自身を指してしまうため、衝突チェックを行わずrenameに通す
-    const caseOnly = newNorm.toLowerCase() === oldNorm.toLowerCase();
-    if (!caseOnly && (await this.exists(newAbs))) {
-      throw new DocConflictError(`移動先に同名の文書があります: ${newNorm}`);
+  ): Promise<MovedDocResponse> {
+    const result = await this.moveDocsBatch(
+      [{ path: relPath, newFolder, newTitle }],
+      userId,
+      author,
+    );
+    return {
+      path: result.moved[0].path,
+      skippedAttachments: result.skippedAttachments,
+    };
+  }
+
+  // 複数文書の一括移動(#334)。グループ内で専属判定・doc-subfolder追従・リンク書き換え・
+  // 全ロールバック・単一Gitコミットを行い、共有・同名衝突で残置した添付を返す。
+  async moveDocsBatch(
+    moves: MoveDocRequest[],
+    userId: number,
+    author: GitAuthor,
+  ): Promise<MoveDocsBatchResponse> {
+    if (moves.length === 0) {
+      return { moved: [], skippedAttachments: [] };
     }
 
-    // #159: フォルダ跨ぎの移動時、この文書が同フォルダに置いた画像添付のうち
-    // 他文書から一切参照されていないもの(=専属)を一緒に運ぶ。他文書が参照して
-    // いる可能性のあるものは他方のリンク維持を優先して現地に残す。
-    // 大文字小文字のみの折衝(case-only)は case-insensitive FS で self-exists にぶつかる
-    // ため、フォルダ実体は同一とみなして添付走査自体をスキップする。
-    const oldFolder = path.posix.dirname(oldNorm) === '.' ? '' : path.posix.dirname(oldNorm);
-    const folderChanged =
-      folderNorm !== oldFolder && folderNorm.toLowerCase() !== oldFolder.toLowerCase();
+    interface ValidatedMove {
+      oldNorm: string;
+      oldAbs: string;
+      newNorm: string;
+      newAbs: string;
+      oldFolder: string;
+      newFolder: string;
+      folderChanged: boolean;
+      noop: boolean;
+    }
+
+    const validated: ValidatedMove[] = [];
+    const seenOldLower = new Set<string>();
+    for (const item of moves) {
+      const oldNorm = this.validateDocPath(item.path);
+      const oldLower = oldNorm.toLowerCase();
+      if (seenOldLower.has(oldLower)) {
+        throw new InvalidPathError(item.path, `同一の移動元文書が重複しています: ${oldNorm}`);
+      }
+      seenOldLower.add(oldLower);
+
+      const oldAbs = resolveInLibrary(this.libraryPath, oldNorm);
+      if (!(await this.exists(oldAbs))) {
+        throw new DocNotFoundError(oldNorm);
+      }
+      this.locks.assertNotLockedByOther(oldNorm, userId);
+
+      const folderNorm = item.newFolder ? this.validateFolderPath(item.newFolder) : '';
+      const fileName = `${sanitizeTitle(item.newTitle)}.md`;
+      const newNorm = folderNorm ? `${folderNorm}/${fileName}` : fileName;
+      const newAbs = resolveInLibrary(this.libraryPath, newNorm);
+      const oldFolder = folderOfDoc(oldNorm);
+      const folderChanged =
+        folderNorm !== oldFolder && folderNorm.toLowerCase() !== oldFolder.toLowerCase();
+
+      validated.push({
+        oldNorm,
+        oldAbs,
+        newNorm,
+        newAbs,
+        oldFolder,
+        newFolder: folderNorm,
+        folderChanged,
+        noop: newNorm === oldNorm,
+      });
+    }
+
+    const activeMoves = validated.filter((m) => !m.noop);
+    if (activeMoves.length === 0) {
+      return {
+        moved: validated.map((m) => ({ oldPath: m.oldNorm, path: m.newNorm })),
+        skippedAttachments: [],
+      };
+    }
+
+    const activeOldLower = new Set(activeMoves.map((m) => m.oldNorm.toLowerCase()));
+    const seenDestLower = new Set<string>();
+    for (const m of activeMoves) {
+      const destLower = m.newNorm.toLowerCase();
+      if (seenDestLower.has(destLower)) {
+        throw new DocConflictError(`移動先の文書パスが重複しています: ${m.newNorm}`);
+      }
+      seenDestLower.add(destLower);
+
+      const caseOnly = destLower === m.oldNorm.toLowerCase();
+      const vacatedByBatch = activeOldLower.has(destLower);
+      if (!caseOnly && !vacatedByBatch && (await this.exists(m.newAbs))) {
+        throw new DocConflictError(`移動先に同名の文書があります: ${m.newNorm}`);
+      }
+    }
+
+    const attSettings = this.librarySettings
+      ? (await this.librarySettings.get()).settings.attachments
+      : attachmentSettingsFromEnv(this.config.attachmentDirMode);
+
+    // 各移動文書の本文を読み込み、同伴候補添付を収集する(best-effort)
+    const docContentMap = new Map<string, string>();
+    const preIndexRows = this.db.prepare('SELECT rel_path FROM attachment_index').all() as {
+      rel_path: string;
+    }[];
+    const preIndexedPaths = preIndexRows.map((r) => r.rel_path);
+    const preIndexedSet = new Set(preIndexedPaths);
+    const preByName = buildByNameIndex(preIndexedPaths);
+    const resolvePreIndexedWikilink = (target: string, fromDoc: string): string | null =>
+      resolveAttachmentFromByName(target, fromDoc, (b) => preByName.get(b) ?? []);
+
+    interface AttMoveCandidate {
+      oldRel: string;
+      newRel: string | null; // null = バッチ内で移動先が不一致(共有扱い)
+      fileName: string;
+    }
+    const candidateByAttRel = new Map<string, AttMoveCandidate>();
+    const perDocCandidateRels = new Map<string, Set<string>>();
+
+    for (const m of activeMoves) {
+      try {
+        const content = await readFile(m.oldAbs, 'utf8');
+        docContentMap.set(m.oldNorm, content);
+        if (!m.folderChanged || attSettings.mode === 'vault-folder') continue;
+
+        const sourceDir =
+          attSettings.mode === 'same-folder'
+            ? m.oldFolder
+            : m.oldFolder
+              ? `${m.oldFolder}/${attSettings.folder}`
+              : attSettings.folder;
+        const destDir =
+          attSettings.mode === 'same-folder'
+            ? m.newFolder
+            : m.newFolder
+              ? `${m.newFolder}/${attSettings.folder}`
+              : attSettings.folder;
+
+        const { body } = splitFrontmatter(content);
+        const foundRels = await this.extractMovableAttachmentsForDoc(
+          body,
+          m.oldNorm,
+          m.oldFolder,
+          sourceDir,
+          attSettings,
+          preIndexedSet,
+          resolvePreIndexedWikilink,
+        );
+        perDocCandidateRels.set(m.oldNorm, new Set(foundRels));
+        for (const attOldRel of foundRels) {
+          const base = path.posix.basename(attOldRel);
+          const attNewRel = destDir ? `${destDir}/${base}` : base;
+          const existing = candidateByAttRel.get(attOldRel);
+          if (!existing) {
+            candidateByAttRel.set(attOldRel, {
+              oldRel: attOldRel,
+              newRel: attNewRel,
+              fileName: base,
+            });
+          } else if (existing.newRel !== null && existing.newRel !== attNewRel) {
+            existing.newRel = null;
+          }
+        }
+      } catch (e) {
+        // 添付走査は best-effort。失敗しても文書自体の移動は継続する
+        this.logger?.warn({ err: e, docPath: m.oldNorm }, '添付の同伴走査に失敗しました');
+      }
+    }
+
+    // 移動グループ外の文書による共有チェック
+    const excludeDocPaths = new Set(activeMoves.map((m) => m.oldNorm));
+    const skippedAttachments: SkippedAttachment[] = [];
+    const seenSkipped = new Set<string>();
+    const addSkipped = (fileName: string, reason: SkippedAttachment['reason']) => {
+      const key = `${reason}:${fileName}`;
+      if (seenSkipped.has(key)) return;
+      seenSkipped.add(key);
+      skippedAttachments.push({ fileName, reason });
+    };
+
+    const allCandidateRels = [...candidateByAttRel.keys()];
+    const splitDestShared = new Set<string>();
+    for (const [attRel, cand] of candidateByAttRel) {
+      if (cand.newRel === null) {
+        splitDestShared.add(attRel);
+        addSkipped(cand.fileName, 'shared');
+      }
+    }
+
+    const externallyShared = await this.findSharedAttachments(
+      allCandidateRels.filter((r) => !splitDestShared.has(r)),
+      excludeDocPaths,
+      attSettings,
+      preIndexedSet,
+      resolvePreIndexedWikilink,
+    );
+    for (const attRel of externallyShared) {
+      const cand = candidateByAttRel.get(attRel);
+      if (cand) addSkipped(cand.fileName, 'shared');
+    }
+
+    // 同名衝突判定(ディスク上の既存ファイルおよび同一バッチ内の別ソースからの合流衝突)
+    // conflict で残置された添付の移動元は空かないため、残置がなくなるまで反復収束させる(M1)
+    let activeAttCands = [...candidateByAttRel.entries()]
+      .filter(
+        ([attRel, cand]) =>
+          !splitDestShared.has(attRel) && !externallyShared.has(attRel) && cand.newRel !== null,
+      )
+      .map(([attRel, cand]) => ({
+        oldRel: attRel,
+        newRel: cand.newRel!,
+        fileName: cand.fileName,
+      }));
+
+    let resolvedAttCands: typeof activeAttCands = [];
+    while (activeAttCands.length > 0) {
+      const vacatedAttLower = new Set(activeAttCands.map((c) => c.oldRel.toLowerCase()));
+      const claimedAttDestLower = new Set<string>();
+      const nextActive: typeof activeAttCands = [];
+      let droppedAny = false;
+
+      for (const cand of activeAttCands) {
+        const destLower = cand.newRel.toLowerCase();
+        const attNewAbs = resolveInLibrary(this.libraryPath, cand.newRel);
+        const occupiedByOtherInBatch = claimedAttDestLower.has(destLower);
+        const occupiedOnDisk =
+          destLower !== cand.oldRel.toLowerCase() &&
+          !vacatedAttLower.has(destLower) &&
+          (await this.exists(attNewAbs));
+        if (occupiedByOtherInBatch || occupiedOnDisk) {
+          addSkipped(cand.fileName, 'conflict');
+          droppedAny = true;
+          continue;
+        }
+        claimedAttDestLower.add(destLower);
+        nextActive.push(cand);
+      }
+
+      activeAttCands = nextActive;
+      if (!droppedAny) {
+        resolvedAttCands = nextActive;
+        break;
+      }
+    }
+
     const attachmentMoves: {
       oldRel: string;
       newRel: string;
       oldAbs: string;
+      tmpAbs: string;
       newAbs: string;
     }[] = [];
-    if (folderChanged) {
-      try {
-        const oldContent = await readFile(oldAbs, 'utf8');
-        const { body } = parseDocMeta(oldContent);
-        const candidates = extractAttachmentFilenames(body, DocService.ATTACHMENT_EXTENSIONS);
-        const exclusive = await this.findExclusiveAttachments(oldFolder, candidates, oldNorm);
-        for (const filename of exclusive) {
-          const attOldRel = oldFolder ? `${oldFolder}/${filename}` : filename;
-          const attNewRel = folderNorm ? `${folderNorm}/${filename}` : filename;
-          const attOldAbs = resolveInLibrary(this.libraryPath, attOldRel);
-          const attNewAbs = resolveInLibrary(this.libraryPath, attNewRel);
-          // 移動先に同名添付がある場合は誤上書き回避で現地に残す
-          if (await this.exists(attNewAbs)) continue;
-          attachmentMoves.push({
-            oldRel: attOldRel,
-            newRel: attNewRel,
-            oldAbs: attOldAbs,
-            newAbs: attNewAbs,
-          });
-        }
-      } catch (e) {
-        // 添付走査は best-effort。失敗しても文書自体の移動は継続する
-        this.logger?.warn({ err: e, docPath: oldNorm }, '添付の同伴走査に失敗しました');
-      }
+    const movedAttMap = new Map<string, string>();
+    for (const cand of resolvedAttCands) {
+      const attOldAbs = resolveInLibrary(this.libraryPath, cand.oldRel);
+      const attNewAbs = resolveInLibrary(this.libraryPath, cand.newRel);
+      const tmpAbs = path.join(
+        path.dirname(attOldAbs),
+        `.tsumiwiki-tmp-move-${randomBytes(6).toString('hex')}`,
+      );
+      attachmentMoves.push({
+        oldRel: cand.oldRel,
+        newRel: cand.newRel,
+        oldAbs: attOldAbs,
+        tmpAbs,
+        newAbs: attNewAbs,
+      });
+      movedAttMap.set(cand.oldRel, cand.newRel);
     }
 
-    await mkdir(path.dirname(newAbs), { recursive: true });
-    await rename(oldAbs, newAbs);
-    const commitPaths: string[] = [oldNorm, newNorm];
-    const movedAttachments: typeof attachmentMoves = [];
-    for (const m of attachmentMoves) {
-      try {
-        await rename(m.oldAbs, m.newAbs);
-        movedAttachments.push(m);
-        commitPaths.push(m.oldRel, m.newRel);
-      } catch (e) {
-        // 添付の rename が失敗するとリンクが切れる。move 全体をロールバックして
-        // 「一部だけ移動して壊れた状態」を残さない。
-        this.logger?.error(
-          { err: e, docPath: oldNorm, from: m.oldRel, to: m.newRel },
-          '添付の移動に失敗したため、文書移動をロールバックします',
+    // 移動後の添付インデックスを構築し、本文リンク書き換えが必要なら事前計算する
+    const postPathSet = new Set<string>();
+    for (const p of preIndexedPaths) {
+      postPathSet.add(movedAttMap.get(p) ?? p);
+    }
+    for (const r of allCandidateRels) {
+      postPathSet.add(movedAttMap.get(r) ?? r);
+    }
+    const postByName = buildByNameIndex([...postPathSet]);
+    const resolvePostWikilink = (target: string, fromDoc: string): string | null =>
+      resolveAttachmentFromByName(target, fromDoc, (b) => postByName.get(b) ?? []);
+    const allKnownAttLower = new Map<string, string>();
+    for (const p of preIndexedPaths) allKnownAttLower.set(p.toLowerCase(), p);
+    for (const r of allCandidateRels) allKnownAttLower.set(r.toLowerCase(), r);
+
+    const docMoveStates = activeMoves.map((m) => {
+      const oldContent = docContentMap.get(m.oldNorm);
+      let nextContent: string | null = null;
+      if (oldContent !== undefined && (m.folderChanged || movedAttMap.size > 0)) {
+        const candidateRels = perDocCandidateRels.get(m.oldNorm);
+        const updated = this.rewriteMovedDocContent(
+          oldContent,
+          m.oldNorm,
+          m.newNorm,
+          m.oldFolder,
+          m.newFolder,
+          attSettings,
+          movedAttMap,
+          allKnownAttLower,
+          candidateRels,
+          resolvePreIndexedWikilink,
+          resolvePostWikilink,
         );
-        for (const done of movedAttachments) {
+        if (updated !== oldContent) {
+          nextContent = updated;
+        }
+      }
+      const tmpAbs = path.join(
+        path.dirname(m.oldAbs),
+        `.tsumiwiki-tmp-move-${randomBytes(6).toString('hex')}`,
+      );
+      return {
+        ...m,
+        tmpAbs,
+        oldContent,
+        nextContent,
+        stage: 'at-old' as 'at-old' | 'at-tmp' | 'at-new',
+        rewritten: false,
+      };
+    });
+
+    const attStates = attachmentMoves.map((a) => ({
+      ...a,
+      stage: 'at-old' as 'at-old' | 'at-tmp' | 'at-new',
+    }));
+
+    // 2フェーズ移動(文書・添付とも一時名経由で衝突・スワップ・大文字小文字変更を安全に処理)
+    try {
+      for (const d of docMoveStates) {
+        await this.moveFile(d.oldAbs, d.tmpAbs);
+        d.stage = 'at-tmp';
+      }
+      for (const a of attStates) {
+        await this.moveFile(a.oldAbs, a.tmpAbs);
+        a.stage = 'at-tmp';
+      }
+      for (const d of docMoveStates) {
+        await mkdir(path.dirname(d.newAbs), { recursive: true });
+        await this.moveFile(d.tmpAbs, d.newAbs);
+        d.stage = 'at-new';
+        if (d.nextContent !== null) {
+          await this.writeAtomic(d.newAbs, d.nextContent);
+          d.rewritten = true;
+        }
+      }
+      for (const a of attStates) {
+        await mkdir(path.dirname(a.newAbs), { recursive: true });
+        await this.moveFile(a.tmpAbs, a.newAbs);
+        a.stage = 'at-new';
+      }
+    } catch (e) {
+      this.logger?.error(
+        { err: e, count: activeMoves.length },
+        '文書・添付の移動に失敗したため、変更をすべてロールバックします',
+      );
+      for (const a of [...attStates].reverse()) {
+        if (a.stage === 'at-new') {
           try {
-            await rename(done.newAbs, done.oldAbs);
+            await this.moveFile(a.newAbs, a.tmpAbs);
+            a.stage = 'at-tmp';
           } catch (rbErr) {
             this.logger?.error(
-              { err: rbErr, from: done.newAbs, to: done.oldAbs },
-              '添付のロールバックに失敗しました(手動復旧が必要)',
+              { err: rbErr, from: a.newAbs, to: a.tmpAbs },
+              '添付ロールバック失敗',
             );
           }
         }
-        try {
-          await rename(newAbs, oldAbs);
-        } catch (rbErr) {
-          this.logger?.error(
-            { err: rbErr, from: newAbs, to: oldAbs },
-            '文書のロールバックに失敗しました(手動復旧が必要)',
-          );
-        }
-        throw new Error(`添付の移動に失敗したため文書移動を中止しました: ${m.oldRel}`);
       }
-    }
-    await this.tryCommit(commitPaths, `move: ${oldNorm} -> ${newNorm}`, author);
-    await this.tryUpdateIndex(
-      () => this.indexer.moveFile(oldNorm, newNorm),
-      { oldPath: oldNorm, newPath: newNorm },
-      '文書',
-    );
-    // 同伴した添付も索引を付け替える(issue #198。#159の添付同伴に追随)
-    for (const m of movedAttachments) {
-      await this.tryUpdateIndex(
-        () => this.indexer.moveAttachment(m.oldRel, m.newRel),
-        { oldRel: m.oldRel, newRel: m.newRel },
-        '添付',
+      for (const d of [...docMoveStates].reverse()) {
+        if (d.stage === 'at-new') {
+          try {
+            if (d.rewritten && d.oldContent !== undefined) {
+              await this.writeAtomic(d.newAbs, d.oldContent);
+            }
+            await this.moveFile(d.newAbs, d.tmpAbs);
+            d.stage = 'at-tmp';
+          } catch (rbErr) {
+            this.logger?.error(
+              { err: rbErr, from: d.newAbs, to: d.tmpAbs },
+              '文書ロールバック失敗',
+            );
+          }
+        }
+      }
+      for (const a of [...attStates].reverse()) {
+        if (a.stage === 'at-tmp') {
+          try {
+            await this.moveFile(a.tmpAbs, a.oldAbs);
+            a.stage = 'at-old';
+          } catch (rbErr) {
+            this.logger?.error({ err: rbErr, from: a.tmpAbs, to: a.oldAbs }, '添付復元失敗');
+          }
+        }
+      }
+      for (const d of [...docMoveStates].reverse()) {
+        if (d.stage === 'at-tmp') {
+          try {
+            await this.moveFile(d.tmpAbs, d.oldAbs);
+            d.stage = 'at-old';
+          } catch (rbErr) {
+            this.logger?.error({ err: rbErr, from: d.tmpAbs, to: d.oldAbs }, '文書復元失敗');
+          }
+        }
+      }
+      throw new Error(
+        `移動処理に失敗したためロールバックしました: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
-    // ロック・下書きも新パスへ追随させる
-    this.locks.repath(oldNorm, newNorm);
-    this.drafts.repath(oldNorm, newNorm);
-    return { path: newNorm };
+
+    const commitPathSet = new Set<string>();
+    for (const d of docMoveStates) {
+      commitPathSet.add(d.oldNorm);
+      commitPathSet.add(d.newNorm);
+    }
+    for (const a of attStates) {
+      commitPathSet.add(a.oldRel);
+      commitPathSet.add(a.newRel);
+    }
+    const commitMsg =
+      docMoveStates.length === 1
+        ? `move: ${docMoveStates[0].oldNorm} -> ${docMoveStates[0].newNorm}`
+        : `move batch: ${docMoveStates.length} docs`;
+    await this.tryCommit([...commitPathSet], commitMsg, author);
+
+    // インデックス・ロック・下書きは連鎖移動や入れ替え(vacatedByBatch)で中間上書きが起きないよう
+    // 全件削除/一時キー退避 → 全件登録/新パス確定の 2 段階で追従させる(M2)
+    for (const d of docMoveStates) {
+      await this.tryUpdateIndex(
+        async () => {
+          this.indexer.removeFile(d.oldNorm);
+          this.indexer.removeFile(d.newNorm);
+        },
+        { oldPath: d.oldNorm, newPath: d.newNorm },
+        '文書削除',
+      );
+    }
+    for (const d of docMoveStates) {
+      await this.tryUpdateIndex(
+        () => this.indexer.indexFile(d.newNorm),
+        { path: d.newNorm },
+        '文書登録',
+      );
+    }
+    const repathToken = randomBytes(6).toString('hex');
+    docMoveStates.forEach((d, idx) => {
+      const tmpKey = `__batch_repath_${repathToken}/${idx}`;
+      this.locks.repath(d.oldNorm, tmpKey);
+      this.drafts.repath(d.oldNorm, tmpKey);
+    });
+    docMoveStates.forEach((d, idx) => {
+      const tmpKey = `__batch_repath_${repathToken}/${idx}`;
+      this.locks.repath(tmpKey, d.newNorm);
+      this.drafts.repath(tmpKey, d.newNorm);
+    });
+
+    for (const a of attStates) {
+      await this.tryUpdateIndex(
+        async () => {
+          this.indexer.removeAttachment(a.oldRel);
+          this.indexer.removeAttachment(a.newRel);
+        },
+        { oldRel: a.oldRel, newRel: a.newRel },
+        '添付削除',
+      );
+    }
+    for (const a of attStates) {
+      await this.tryUpdateIndex(
+        () => this.indexer.indexAttachment(a.newRel),
+        { relPath: a.newRel },
+        '添付登録',
+      );
+    }
+
+    return {
+      moved: validated.map((m) => ({ oldPath: m.oldNorm, path: m.newNorm })),
+      skippedAttachments,
+    };
   }
 
-  // 指定文書の同フォルダ画像添付のうち、他文書から一切参照されていないもの(専属)を返す。
-  // 判定は referencesFilename(境界チェック付き)で他 .md 本文を走査する近似で、誤って
-  // 共有扱いとする方向へ倒す(現地に残す)ことで他文書のリンク切れを防ぐ。
-  // TODO(#160含む): 大規模ライブラリでは N-1 件 readFile が高コスト。将来、doc_index に
-  // 添付参照リストを持たせて O(1) 逆引きに置き換える。
-  private async findExclusiveAttachments(
-    sourceFolder: string,
-    candidateFilenames: string[],
-    excludeDocPath: string,
+  // 文書本文から移動対象ディレクトリ(same-folder / doc-subfolder)配下の参照済み添付実パスを抽出する(#334)
+  private async extractMovableAttachmentsForDoc(
+    body: string,
+    docNorm: string,
+    oldFolder: string,
+    sourceDir: string,
+    attSettings: LibrarySettings['attachments'],
+    indexedSet: ReadonlySet<string>,
+    resolveIndexedWikilink: (target: string, fromDoc: string) => string | null,
   ): Promise<string[]> {
-    if (candidateFilenames.length === 0) return [];
-    const shared = new Set<string>();
-    const otherDocs = (
-      this.db.prepare('SELECT doc_path FROM doc_index WHERE doc_path != ?').all(excludeDocPath) as {
-        doc_path: string;
-      }[]
-    ).map((r) => r.doc_path);
+    const ranges = computeCodeRanges(body);
+    const candidates = new Set<string>();
+    const subfolderLower = attSettings.folder.toLowerCase();
+    const sourceDirLower = sourceDir.toLowerCase();
 
-    for (const docPath of otherDocs) {
-      if (shared.size === candidateFilenames.length) break;
-      let content: string;
-      try {
-        const abs = resolveInLibrary(this.libraryPath, docPath);
-        content = await readFile(abs, 'utf8');
-      } catch {
-        // 読めない .md は共有判定できないが、安全側=現地に残す方向に倒れるためスキップ
+    for (const m of body.matchAll(WIKILINK_REWRITE_RE)) {
+      const offset = (m.index ?? 0) + m[1].length;
+      if (isWithinCode(ranges, offset)) continue;
+      const { pathPart } = splitTargetSuffix(m[2]);
+      if (!pathPart || EXCLUDED_SCHEME_RE.test(pathPart)) continue;
+      const norm = normalizeEmbedTarget(pathPart);
+      if (!norm) continue;
+      const ext = path.posix.extname(norm).toLowerCase();
+      if (!DocService.ATTACHMENT_EXTENSIONS.has(ext)) continue;
+
+      let candRel: string | null = null;
+      if (!norm.includes('/')) {
+        candRel = sourceDir ? `${sourceDir}/${norm}` : norm;
+      } else if (
+        attSettings.mode === 'doc-subfolder' &&
+        norm.toLowerCase().startsWith(`${subfolderLower}/`)
+      ) {
+        const rest = norm.slice(attSettings.folder.length + 1);
+        if (!rest.includes('/')) {
+          candRel = sourceDir ? `${sourceDir}/${rest}` : rest;
+        }
+      } else if (sourceDir && norm.toLowerCase().startsWith(`${sourceDirLower}/`)) {
+        const rest = norm.slice(sourceDir.length + 1);
+        if (!rest.includes('/')) {
+          candRel = `${sourceDir}/${rest}`;
+        }
+      }
+
+      if (!candRel) continue;
+      const resolvedIndexed = resolveIndexedWikilink(norm, docNorm);
+      if (
+        resolvedIndexed &&
+        resolvedIndexed.toLowerCase() !== candRel.toLowerCase() &&
+        indexedSet.has(candRel)
+      ) {
         continue;
       }
-      for (const filename of candidateFilenames) {
-        if (shared.has(filename)) continue;
-        if (referencesFilename(content, filename)) shared.add(filename);
+      try {
+        if (await this.exists(resolveInLibrary(this.libraryPath, candRel))) {
+          candidates.add(candRel);
+        }
+      } catch (e) {
+        this.logger?.warn(
+          { err: e, docPath: docNorm, target: pathPart },
+          '不正な添付リンクをスキップしました',
+        );
       }
     }
 
-    const exclusive: string[] = [];
-    for (const filename of candidateFilenames) {
-      if (shared.has(filename)) continue;
-      const rel = sourceFolder ? `${sourceFolder}/${filename}` : filename;
-      const abs = resolveInLibrary(this.libraryPath, rel);
-      if (await this.exists(abs)) exclusive.push(filename);
+    for (const m of body.matchAll(MD_LINK_REWRITE_RE)) {
+      const offset = (m.index ?? 0) + m[1].length;
+      if (isWithinCode(ranges, offset)) continue;
+      const { pathPart } = splitTargetSuffix(m[2]);
+      if (!pathPart || EXCLUDED_SCHEME_RE.test(pathPart)) continue;
+      const ext = path.posix.extname(pathPart).toLowerCase();
+      if (!DocService.ATTACHMENT_EXTENSIONS.has(ext)) continue;
+
+      try {
+        const resolvedMd = resolveMarkdownRelPath(oldFolder, pathPart);
+        if (resolvedMd) {
+          const dirRaw = path.posix.dirname(resolvedMd);
+          const dir = dirRaw === '.' ? '' : dirRaw;
+          if (dir.toLowerCase() === sourceDirLower) {
+            const base = path.posix.basename(resolvedMd);
+            const candRel = sourceDir ? `${sourceDir}/${base}` : base;
+            if (await this.exists(resolveInLibrary(this.libraryPath, candRel))) {
+              candidates.add(candRel);
+            }
+            continue;
+          }
+        }
+
+        // doc-subfolder で Markdown 画像記法に bare ファイル名のみ書いていた場合のフォールバック
+        if (
+          attSettings.mode === 'doc-subfolder' &&
+          m[1].startsWith('!') &&
+          ext !== '.pdf' &&
+          !pathPart.includes('/')
+        ) {
+          const candRel = sourceDir ? `${sourceDir}/${pathPart.trim()}` : pathPart.trim();
+          if (await this.exists(resolveInLibrary(this.libraryPath, candRel))) {
+            candidates.add(candRel);
+          }
+        }
+      } catch (e) {
+        this.logger?.warn(
+          { err: e, docPath: docNorm, target: pathPart },
+          '不正な添付リンクをスキップしました',
+        );
+      }
     }
-    return exclusive;
+
+    return [...candidates];
+  }
+
+  // 移動対象グループ外の文書に共有参照されていないか判定し、共有されている添付 relPath の集合を返す(#159 / #334)
+  private async findSharedAttachments(
+    candidateRels: string[],
+    excludeDocPaths: ReadonlySet<string>,
+    attSettings: LibrarySettings['attachments'],
+    indexedSet: ReadonlySet<string>,
+    resolveIndexedWikilink: (target: string, fromDoc: string) => string | null,
+  ): Promise<Set<string>> {
+    const shared = new Set<string>();
+    if (candidateRels.length === 0) return shared;
+
+    const allDocs = (
+      this.db.prepare('SELECT doc_path FROM doc_index').all() as { doc_path: string }[]
+    )
+      .map((r) => r.doc_path)
+      .filter((p) => !excludeDocPaths.has(p));
+
+    for (const otherDocPath of allDocs) {
+      if (shared.size === candidateRels.length) break;
+      let content: string;
+      try {
+        content = await readFile(resolveInLibrary(this.libraryPath, otherDocPath), 'utf8');
+      } catch {
+        continue;
+      }
+      const remaining = candidateRels.filter(
+        (r) => !shared.has(r) && referencesFilename(content, path.posix.basename(r)),
+      );
+      if (remaining.length === 0) continue;
+
+      const { body } = splitFrontmatter(content);
+      const targets = extractLinkTargets(body);
+      const otherFolder = folderOfDoc(otherDocPath);
+      const otherLocalSubfolder =
+        attSettings.mode === 'doc-subfolder'
+          ? otherFolder
+            ? `${otherFolder}/${attSettings.folder}`
+            : attSettings.folder
+          : otherFolder;
+
+      for (const attRel of remaining) {
+        const fileName = path.posix.basename(attRel);
+        const fileLower = fileName.toLowerCase();
+        const attLower = attRel.toLowerCase();
+
+        // リンク構文内に該当ファイル名が出現している場合、別フォルダの固有添付へ解決されるなら共有扱いしない
+        const matchingTargets = targets.filter(
+          (t) => path.posix.basename(t.replaceAll('\\', '/')).toLowerCase() === fileLower,
+        );
+        if (matchingTargets.length === 0) {
+          shared.add(attRel);
+          continue;
+        }
+
+        let pointsToCandidate = false;
+        for (const t of matchingTargets) {
+          const norm = normalizeEmbedTarget(t);
+          if (!norm) {
+            pointsToCandidate = true;
+            break;
+          }
+          if (!norm.includes('/')) {
+            const indexedResolved = resolveIndexedWikilink(norm, otherDocPath);
+            if (indexedResolved && indexedResolved.toLowerCase() === attLower) {
+              pointsToCandidate = true;
+              break;
+            }
+            const ownLocalRel = otherLocalSubfolder ? `${otherLocalSubfolder}/${norm}` : norm;
+            const hasOwnLocal =
+              ownLocalRel.toLowerCase() !== attLower &&
+              (indexedSet.has(ownLocalRel) ||
+                (await this.exists(resolveInLibrary(this.libraryPath, ownLocalRel))));
+            if (!hasOwnLocal && !(indexedResolved && indexedSet.has(attRel))) {
+              pointsToCandidate = true;
+              break;
+            }
+            if (indexedResolved && indexedResolved.toLowerCase() !== attLower) {
+              continue;
+            }
+            pointsToCandidate = true;
+            break;
+          }
+
+          // スラッシュを含む指定は、候補パス自体またはサブフォルダ/ローカル位置への一致を確認
+          const mdResolved = resolveMarkdownRelPath(otherFolder, t);
+          if (mdResolved && mdResolved.toLowerCase() === attLower) {
+            pointsToCandidate = true;
+            break;
+          }
+          if (attLower === norm.toLowerCase() || attLower.endsWith(`/${norm.toLowerCase()}`)) {
+            const ownSubTarget = otherLocalSubfolder
+              ? `${otherLocalSubfolder}/${fileName}`
+              : fileName;
+            if (
+              norm.toLowerCase() === `${attSettings.folder.toLowerCase()}/${fileLower}` &&
+              ownSubTarget.toLowerCase() !== attLower &&
+              (await this.exists(resolveInLibrary(this.libraryPath, ownSubTarget)))
+            ) {
+              continue;
+            }
+            pointsToCandidate = true;
+            break;
+          }
+        }
+
+        if (pointsToCandidate) {
+          shared.add(attRel);
+        }
+      }
+    }
+
+    return shared;
+  }
+
+  // 移動した文書の本文について、添付移動やフォルダ変更で切れるリンクを追従させる(#334)
+  private rewriteMovedDocContent(
+    content: string,
+    oldDocPath: string,
+    newDocPath: string,
+    oldFolder: string,
+    newFolder: string,
+    attSettings: LibrarySettings['attachments'],
+    movedAttMap: ReadonlyMap<string, string>,
+    allKnownAttLower: ReadonlyMap<string, string>,
+    docCandidateRels: ReadonlySet<string> | undefined,
+    resolvePreIndexedWikilink: (target: string, fromDoc: string) => string | null,
+    resolvePostWikilink: (target: string, fromDoc: string) => string | null,
+  ): string {
+    const { prefix, body } = splitFrontmatter(content);
+    const oldSourceDir =
+      attSettings.mode === 'same-folder'
+        ? oldFolder
+        : attSettings.mode === 'doc-subfolder'
+          ? oldFolder
+            ? `${oldFolder}/${attSettings.folder}`
+            : attSettings.folder
+          : null;
+
+    const findKnownAtt = (rel: string): string | null => {
+      if (movedAttMap.has(rel)) return rel;
+      return allKnownAttLower.get(rel.toLowerCase()) ?? null;
+    };
+
+    const wikilinkRanges = computeCodeRanges(body);
+    let working = body.replace(
+      WIKILINK_REWRITE_RE,
+      (full: string, open: string, rawTarget: string, close: string, offset: number): string => {
+        if (isWithinCode(wikilinkRanges, offset + open.length)) return full;
+        const { pathPart, suffix } = splitTargetSuffix(rawTarget);
+        if (!pathPart || EXCLUDED_SCHEME_RE.test(pathPart)) return full;
+        const norm = normalizeEmbedTarget(pathPart);
+        if (!norm) return full;
+        const ext = path.posix.extname(norm).toLowerCase();
+        if (!DocService.ATTACHMENT_EXTENSIONS.has(ext)) return full;
+
+        let preResolved: string | null = null;
+        if (docCandidateRels && oldSourceDir !== null) {
+          const base = path.posix.basename(norm);
+          const candidateRel = oldSourceDir ? `${oldSourceDir}/${base}` : base;
+          if (
+            docCandidateRels.has(candidateRel) &&
+            (!norm.includes('/') ||
+              (attSettings.mode === 'doc-subfolder' &&
+                norm.toLowerCase() ===
+                  `${attSettings.folder.toLowerCase()}/${base.toLowerCase()}`) ||
+              norm.toLowerCase() === candidateRel.toLowerCase())
+          ) {
+            preResolved = candidateRel;
+          }
+        }
+        if (!preResolved) {
+          preResolved = resolvePreIndexedWikilink(pathPart, oldDocPath);
+        }
+        if (!preResolved) return full;
+
+        const expectedDest = movedAttMap.get(preResolved) ?? preResolved;
+        if (resolvePostWikilink(pathPart, newDocPath) === expectedDest) {
+          return full;
+        }
+        const nextTarget = resolveShortestEmbedTargetWith(
+          newDocPath,
+          expectedDest,
+          resolvePostWikilink,
+        );
+        if (nextTarget === pathPart) return full;
+        return `${open}${nextTarget}${suffix}${close}`;
+      },
+    );
+
+    const mdRanges = computeCodeRanges(working);
+    working = working.replace(
+      MD_LINK_REWRITE_RE,
+      (full: string, open: string, rawTarget: string, close: string, offset: number): string => {
+        if (isWithinCode(mdRanges, offset + open.length)) return full;
+        const { pathPart, suffix } = splitTargetSuffix(rawTarget);
+        if (!pathPart || EXCLUDED_SCHEME_RE.test(pathPart)) return full;
+        const ext = path.posix.extname(pathPart).toLowerCase();
+        if (!DocService.ATTACHMENT_EXTENSIONS.has(ext)) return full;
+
+        const preMd = resolveMarkdownRelPath(oldFolder, pathPart);
+        let preResolved = preMd ? findKnownAtt(preMd) : null;
+        if (
+          !preResolved &&
+          oldSourceDir !== null &&
+          !pathPart.includes('/') &&
+          open.startsWith('!') &&
+          ext !== '.pdf'
+        ) {
+          const cand = oldSourceDir ? `${oldSourceDir}/${pathPart.trim()}` : pathPart.trim();
+          preResolved = findKnownAtt(cand);
+        }
+        if (!preResolved) return full;
+
+        const expectedDest = movedAttMap.get(preResolved) ?? preResolved;
+        const keptResolved = resolveMarkdownRelPath(newFolder, pathPart);
+        if (keptResolved === expectedDest) {
+          return full;
+        }
+        const relFromNew = path.posix.relative(newFolder || '.', expectedDest);
+        if (relFromNew === pathPart) return full;
+        return `${open}${relFromNew}${suffix}${close}`;
+      },
+    );
+
+    return prefix + working;
   }
 
   // ---- 添付(FR-IMG / FR-OBS-05) ----
@@ -2173,7 +2810,11 @@ export class DocService {
         );
       }
       for (const d of rewrittenDocs) {
-        await this.tryUpdateIndex(() => this.indexer.indexFile(d.path), { docPath: d.path }, '文書');
+        await this.tryUpdateIndex(
+          () => this.indexer.indexFile(d.path),
+          { docPath: d.path },
+          '文書',
+        );
       }
 
       return {

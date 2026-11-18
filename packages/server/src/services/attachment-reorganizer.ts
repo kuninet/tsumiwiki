@@ -13,15 +13,18 @@ import {
   EXCLUDED_SCHEME_RE,
   MD_LINK_REWRITE_RE,
   WIKILINK_REWRITE_RE,
+  buildByNameIndex,
   folderOfDoc,
   resolveAttachmentFromByName,
+  resolveMarkdownRelPath,
   resolveShortestEmbedTargetWith,
   splitFrontmatter,
   splitTargetSuffix,
-  type AttachmentCandidate,
 } from '../lib/attachment-links.js';
 import { computeCodeRanges, isWithinCode } from '../lib/code-ranges.js';
 import { InvalidPathError } from '../lib/paths.js';
+
+export { resolveMarkdownRelPath };
 
 export interface ReorgInputDoc {
   docPath: string;
@@ -46,42 +49,6 @@ export interface PlannedDocRewrite extends ReorganizeDocRewrite {
 export interface AttachmentReorgPlan {
   preview: ReorganizePreviewResponse;
   rewritesWithContent: PlannedDocRewrite[];
-}
-
-// 標準 Markdown リンクの相対パスを文書フォルダ基準で正規化する。
-// 先頭 '/' はライブラリルート基準とし、'..' でルート外に出る場合は null を返す。
-export function resolveMarkdownRelPath(docFolder: string, rawPathPart: string): string | null {
-  const unified = rawPathPart.normalize('NFC').replaceAll('\\', '/');
-  const isRoot = unified.startsWith('/');
-  const baseParts = isRoot || !docFolder ? [] : docFolder.split('/');
-  const relParts = unified.split('/');
-  const stack = [...baseParts];
-  for (const seg of relParts) {
-    if (seg === '' || seg === '.') continue;
-    if (seg === '..') {
-      if (stack.length === 0) return null;
-      stack.pop();
-    } else {
-      stack.push(seg);
-    }
-  }
-  if (stack.length === 0) return null;
-  return stack.join('/');
-}
-
-function buildByNameIndex(paths: string[]): Map<string, AttachmentCandidate[]> {
-  const byName = new Map<string, AttachmentCandidate[]>();
-  for (const relPath of paths) {
-    const name = path.posix.basename(relPath);
-    const nameKey = name.toLowerCase();
-    const dir = path.posix.dirname(relPath);
-    const folder = dir === '.' ? '' : dir;
-    const list = byName.get(nameKey);
-    const entry: AttachmentCandidate = { rel_path: relPath, folder };
-    if (list) list.push(entry);
-    else byName.set(nameKey, [entry]);
-  }
-  return byName;
 }
 
 function normalizeTemplateFolder(folder: string): string {

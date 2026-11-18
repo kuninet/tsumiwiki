@@ -6,6 +6,7 @@ import {
   isPdfFile,
   parseEmbedTarget,
   resolveImageSrc,
+  toFilesUrl,
 } from './resolve-embed-src';
 
 describe('parseEmbedTarget', () => {
@@ -149,6 +150,22 @@ describe('resolveImageSrc', () => {
   it('data URLはそのまま返す', () => {
     expect(resolveImageSrc('data:image/png;base64,AAAA', 'フォルダ')).toBe(
       'data:image/png;base64,AAAA',
+    );
+  });
+
+  it('markdown-it 等によりURIエンコード済みの相対パスが渡っても二重エンコードしない(#334)', () => {
+    expect(resolveImageSrc('../%E5%85%83/shared.png', '先')).toBe(
+      `/api/files/${encodeURIComponent('元')}/shared.png`,
+    );
+    expect(resolveImageSrc('a%2520b.png', 'dir')).toBe('/api/files/dir/a%2520b.png');
+  });
+});
+
+describe('toFilesUrl', () => {
+  it('リテラルで%を含むファイル名を誤ってデコードしない(#334)', () => {
+    expect(toFilesUrl('folder/a%20b.png')).toBe('/api/files/folder/a%2520b.png');
+    expect(toFilesUrl('元/画像 1.png')).toBe(
+      `/api/files/${encodeURIComponent('元')}/${encodeURIComponent('画像 1.png')}`,
     );
   });
 });
