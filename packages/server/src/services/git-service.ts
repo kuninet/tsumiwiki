@@ -258,6 +258,25 @@ export class GitService {
     return { rev, authorName, date, message };
   }
 
+  // 指定パスに触れた直近のコミットを本文(%b)込みで取得する(ごみ箱同伴添付トレーラー復元用)
+  async lastCommitWithBodyFor(relPath: string): Promise<(HistoryEntry & { body: string }) | null> {
+    const out = await this.literalPathRaw([
+      'log',
+      '-1',
+      '--pretty=format:%H%x09%an%x09%aI%x09%s%x00%b',
+      '--',
+      relPath,
+    ]);
+    if (!out) return null;
+    const nulIdx = out.indexOf('\0');
+    const header = (nulIdx === -1 ? out : out.slice(0, nulIdx)).trim();
+    if (!header) return null;
+    const body = nulIdx === -1 ? '' : out.slice(nulIdx + 1);
+    const [rev, authorName, date, message] = header.split('\t');
+    if (!rev) return null;
+    return { rev, authorName, date, message, body };
+  }
+
   // 過去版の内容(FR-HIST-03)
   async contentAt(rev: string, relPath: string): Promise<string> {
     // `rev:path` は pathspec ではなくツリー内のパス指定(マジックは効かない)。

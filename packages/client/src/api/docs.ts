@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CreateDocRequest,
   CreateFolderRequest,
+  DeleteDocResponse,
   DocResponse,
   MoveDocRequest,
   MoveDocsBatchRequest,
@@ -33,7 +34,7 @@ export function docQueryKey(path: string | undefined) {
 }
 
 export interface UseDocOptions {
-  // 閲覧中はロック状態の追随のため定期再取得する(設計04章4.3)。編集中はfalseにして上書きを避ける
+  // 閲覧中はロック状態の追従のため定期再取得する(設計04章4.3)。編集中はfalseにして上書きを避ける
   refetchInterval?: number | false;
 }
 
@@ -60,18 +61,23 @@ export function fetchDoc(path: string): Promise<DocResponse> {
 // 文書・フォルダの変更系mutation共通処理: 成功時にtree/tagsを更新し結果をトースト表示する
 function useLibraryMutation<TVariables, TData = unknown>(
   mutationFn: (variables: TVariables) => Promise<TData>,
-  successMessage: string,
+  successMessage: string | ((data: TData) => { kind: ToastKind; message: string }),
 ) {
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   return useMutation<TData, Error, TVariables>({
     mutationFn,
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: BACKLINKS_QUERY_KEY });
-      showToast('success', successMessage);
+      if (typeof successMessage === 'function') {
+        const formatted = successMessage(data);
+        showToast(formatted.kind, formatted.message);
+      } else {
+        showToast('success', successMessage);
+      }
     },
     onError: (err) => {
       showToast('error', err instanceof ApiRequestError ? err.message : '操作に失敗しました');
@@ -92,9 +98,10 @@ export function useCreateDoc() {
 }
 
 export function useDeleteDoc() {
-  return useLibraryMutation(
-    (path: string) => api('DELETE', `/api/docs?path=${encodeURIComponent(path)}`),
-    '文書を削除しました',
+  return useLibraryMutation<string, DeleteDocResponse | undefined>(
+    (path: string) =>
+      api<DeleteDocResponse | undefined>('DELETE', `/api/docs?path=${encodeURIComponent(path)}`),
+    (data) => formatMoveToastMessage('文書を削除しました', data?.skippedAttachments),
   );
 }
 
@@ -126,22 +133,10 @@ export function formatMoveToastMessage(
 }
 
 export function useMoveDoc() {
-  const queryClient = useQueryClient();
-  const showToast = useToastStore((s) => s.show);
-  return useMutation<MovedResponse, Error, MoveDocRequest>({
-    mutationFn: (body: MoveDocRequest) => api<MovedResponse>('POST', '/api/docs/move', body),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: TREE_QUERY_KEY });
-      queryClient.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
-      queryClient.invalidateQueries({ queryKey: ALL_HISTORY_QUERY_KEY });
-      queryClient.invalidateQueries({ queryKey: BACKLINKS_QUERY_KEY });
-      const formatted = formatMoveToastMessage('文書を移動しました', data.skippedAttachments);
-      showToast(formatted.kind, formatted.message);
-    },
-    onError: (err) => {
-      showToast('error', err instanceof ApiRequestError ? err.message : '操作に失敗しました');
-    },
-  });
+  return useLibraryMutation<MoveDocRequest, MovedResponse>(
+    (body: MoveDocRequest) => api<MovedResponse>('POST', '/api/docs/move', body),
+    (data) => formatMoveToastMessage('文書を移動しました', data.skippedAttachments),
+  );
 }
 
 // 素の移動関数(#72 / #334 一括移動用)。個別トースト・invalidateを避けたい場面で使う

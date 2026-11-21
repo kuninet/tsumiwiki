@@ -21,8 +21,20 @@ const ENTRIES = [
   },
 ];
 
-const NORMAL_USER: User = { id: 1, username: 'taro', displayName: '太郎', role: 'user', disabled: false };
-const ADMIN_USER: User = { id: 2, username: 'admin', displayName: '管理者', role: 'admin', disabled: false };
+const NORMAL_USER: User = {
+  id: 1,
+  username: 'taro',
+  displayName: '太郎',
+  role: 'user',
+  disabled: false,
+};
+const ADMIN_USER: User = {
+  id: 2,
+  username: 'admin',
+  displayName: '管理者',
+  role: 'admin',
+  disabled: false,
+};
 
 function stubFetch(user: User, overrides: Record<string, unknown> = {}) {
   const calls: Call[] = [];
@@ -37,9 +49,17 @@ function stubFetch(user: User, overrides: Record<string, unknown> = {}) {
     }
     const key = `${method} ${path}`;
     if (key in overrides) {
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(overrides[key]) });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(overrides[key]),
+      });
     }
-    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ entries: ENTRIES }) });
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entries: ENTRIES }),
+    });
   });
   vi.stubGlobal('fetch', fetchMock);
   return calls;
@@ -108,5 +128,25 @@ describe('TrashPage', () => {
     await waitFor(() => {
       expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/trash')).toBe(true);
     });
+  });
+
+  it('同伴添付があるエントリでは添付件数バッジを表示し、完全削除ダイアログでも案内する(#161)', async () => {
+    const entriesWithAttachments = [
+      {
+        ...ENTRIES[0],
+        attachmentCount: 2,
+      },
+    ];
+    stubFetch(ADMIN_USER, { 'GET /api/trash': { entries: entriesWithAttachments } });
+    renderTrashPage();
+
+    expect(await screen.findByText('添付 2 件')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '完全削除' }));
+    expect(
+      await screen.findByText(
+        /「古い文書\.md」と同伴の添付ファイル 2 件を完全に削除します。元に戻せません。/,
+      ),
+    ).toBeTruthy();
   });
 });

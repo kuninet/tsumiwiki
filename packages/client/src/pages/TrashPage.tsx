@@ -52,6 +52,11 @@ export function TrashPage() {
                 <td className="py-2 text-ink">
                   {entry.isFolder ? '📁 ' : ''}
                   {entry.name}
+                  {entry.attachmentCount && entry.attachmentCount > 0 ? (
+                    <span className="ml-2 rounded bg-hoverbg px-1.5 py-0.5 text-xs text-ink-faint">
+                      添付 {entry.attachmentCount} 件
+                    </span>
+                  ) : null}
                 </td>
                 <td className="py-2 text-ink-faint">{entry.originalPath ?? '不明'}</td>
                 <td className="py-2 text-ink-faint">{formatDateTime(entry.deletedAt)}</td>
@@ -83,7 +88,11 @@ export function TrashPage() {
       {purgeTarget && (
         <ConfirmDialog
           title="完全削除"
-          message={`「${purgeTarget.name}」を完全に削除します。元に戻せません。よろしいですか?`}
+          message={
+            purgeTarget.attachmentCount && purgeTarget.attachmentCount > 0
+              ? `「${purgeTarget.name}」と同伴の添付ファイル ${purgeTarget.attachmentCount} 件を完全に削除します。元に戻せません。よろしいですか?`
+              : `「${purgeTarget.name}」を完全に削除します。元に戻せません。よろしいですか?`
+          }
           onConfirm={handleConfirmPurge}
           onCancel={() => setPurgeTarget(null)}
         />

@@ -1,4 +1,14 @@
-import { link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  link,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  rmdir,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import matter from 'gray-matter';
@@ -22,6 +32,7 @@ import {
 import type {
   AttachmentSummary,
   BacklinksResponse,
+  DeleteDocResponse,
   DocResponse,
   DocSummary,
   FrontmatterOp,
@@ -69,6 +80,7 @@ import type { IndexerService } from './indexer-service.js';
 import type { LibrarySettingsService } from './library-settings-service.js';
 import { DocLockedError, type LockService } from './lock-service.js';
 import { normalizeTagName, parseDocMeta, splitTagString } from './markdown-meta.js';
+import { SerialQueue } from './serial-queue.js';
 import { applyPatches, guardFrontmatter, type PatchEdit } from '../mcp/note-patch.js';
 
 export { extractLinkTargets } from '../lib/attachment-links.js';
@@ -109,6 +121,106 @@ async function readTrashMeta(folderAbs: string): Promise<TrashMeta | null> {
     return isTrashMeta(parsed) ? parsed : null;
   } catch {
     return null;
+  }
+}
+
+// #161: ごみ箱送りされた文書と同伴添付の由来を `.trash/.tsumiwiki-trash.json` に保持する。
+// 既存の .gitignore で .tsumiwiki-trash.json が除外されているため Git 履歴には乗らない。
+interface TrashCompanionAttachment {
+  trashPath: string;
+  originalPath: string;
+}
+
+interface TrashFileMeta extends TrashMeta {
+  attachments?: TrashCompanionAttachment[];
+}
+
+interface TrashFileManifest {
+  version: 1;
+  items: Record<string, TrashFileMeta>;
+}
+
+function isTrashCompanionAttachment(v: unknown): v is TrashCompanionAttachment {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.trashPath === 'string' &&
+    o.trashPath.length > 0 &&
+    typeof o.originalPath === 'string' &&
+    o.originalPath.length > 0
+  );
+}
+
+function isTrashFileMeta(v: unknown): v is TrashFileMeta {
+  if (!isTrashMeta(v)) return false;
+  const o = v as unknown as Record<string, unknown>;
+  if (o.attachments !== undefined) {
+    if (!Array.isArray(o.attachments) || !o.attachments.every(isTrashCompanionAttachment)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function parseTrashFileManifest(raw: string): TrashFileManifest {
+  const empty: TrashFileManifest = { version: 1, items: {} };
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return empty;
+    const o = parsed as Record<string, unknown>;
+    if (o.version !== 1 || !o.items || typeof o.items !== 'object' || Array.isArray(o.items)) {
+      return empty;
+    }
+    const items: Record<string, TrashFileMeta> = {};
+    for (const [k, v] of Object.entries(o.items as Record<string, unknown>)) {
+      if (!k || k.includes('/') || k === TRASH_META_FILE) continue;
+      if (isTrashFileMeta(v)) {
+        items[k.normalize('NFC')] = v;
+      }
+    }
+    return { version: 1, items };
+  } catch {
+    return empty;
+  }
+}
+
+const TRASH_ATTACHMENT_TRAILER_PREFIX = 'Trashed-Attachment: ';
+
+function findCompanionInManifest(
+  manifest: TrashFileManifest,
+  trashPath: string,
+): { docTrashName: string; docMeta: TrashFileMeta; att: TrashCompanionAttachment } | null {
+  const target = trashPath.normalize('NFC');
+  for (const [docTrashName, docMeta] of Object.entries(manifest.items)) {
+    for (const att of docMeta.attachments ?? []) {
+      if (att.trashPath.normalize('NFC') === target) {
+        return { docTrashName, docMeta, att };
+      }
+    }
+  }
+  return null;
+}
+
+function removeCompanionPathFromManifest(
+  manifest: TrashFileManifest,
+  trashPath: string,
+  existingTrashFileNames?: Set<string>,
+): void {
+  const target = trashPath.normalize('NFC');
+  for (const [docTrashName, docMeta] of Object.entries(manifest.items)) {
+    if (!docMeta.attachments?.length) continue;
+    const filtered = docMeta.attachments.filter((a) => a.trashPath.normalize('NFC') !== target);
+    if (filtered.length !== docMeta.attachments.length) {
+      if (
+        filtered.length === 0 &&
+        existingTrashFileNames &&
+        !existingTrashFileNames.has(docTrashName)
+      ) {
+        delete manifest.items[docTrashName];
+      } else {
+        docMeta.attachments = filtered;
+      }
+    }
   }
 }
 
@@ -593,7 +705,7 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 function referencesFilename(content: string, filename: string): boolean {
-  const re = new RegExp(`(?:^|[^\\w\\-./])${escapeRegex(filename)}(?![\\w\\-.])`, 'u');
+  const re = new RegExp(`(?:^|[^\\w\\-.])${escapeRegex(filename)}(?![\\w\\-.])`, 'u');
   return re.test(content);
 }
 
@@ -611,6 +723,8 @@ export class DocService {
 
   // appendDocMcp のパスごとの直列化キュー(末尾の Promise)。完了時に自分が末尾なら削除する
   private readonly appendTails = new Map<string, Promise<unknown>>();
+  // .trash/.tsumiwiki-trash.json の読み書き競合を防ぐ直列化キュー
+  private readonly trashManifestQueue = new SerialQueue();
 
   // Gitコミット失敗はエラーにしない: ディスクが正本であり保存自体は完了している。
   // 未コミット差分は外部変更syncジョブ(設計06章6.4)が回収する
@@ -1410,7 +1524,7 @@ export class DocService {
     return `---\n${doc.toString()}---\n${body}`;
   }
 
-  async deleteDoc(relPath: string, userId: number, author: GitAuthor): Promise<void> {
+  async deleteDoc(relPath: string, userId: number, author: GitAuthor): Promise<DeleteDocResponse> {
     const normalized = this.validateDocPath(relPath);
     const abs = resolveInLibrary(this.libraryPath, normalized);
     if (!(await this.exists(abs))) {
@@ -1421,23 +1535,214 @@ export class DocService {
     const trashDir = path.join(this.libraryPath, '.trash');
     await mkdir(trashDir, { recursive: true });
 
-    // ごみ箱内の同名衝突は連番で回避
-    const baseName = path.posix.basename(normalized);
-    let trashName = baseName;
-    for (let i = 2; await this.exists(path.join(trashDir, trashName)); i++) {
-      const ext = path.posix.extname(baseName);
-      trashName = `${baseName.slice(0, baseName.length - ext.length)} (${i})${ext}`;
+    const attSettings = this.librarySettings
+      ? (await this.librarySettings.get()).settings.attachments
+      : attachmentSettingsFromEnv(this.config.attachmentDirMode);
+
+    // #161: same-folder / doc-subfolder の場合は他文書と非共有の専属添付を同伴対象にする(best-effort)
+    const skippedAttachments: SkippedAttachment[] = [];
+    const seenSkipped = new Set<string>();
+    const addSkipped = (fileName: string, reason: SkippedAttachment['reason']) => {
+      const key = `${reason}:${fileName}`;
+      if (seenSkipped.has(key)) return;
+      seenSkipped.add(key);
+      skippedAttachments.push({ fileName, reason });
+    };
+
+    const docFolder = folderOfDoc(normalized);
+    let docSubfolderDir: string | null = null;
+    let exclusiveAttRels: string[] = [];
+    if (attSettings.mode !== 'vault-folder') {
+      try {
+        const content = await readFile(abs, 'utf8');
+        const sourceDir =
+          attSettings.mode === 'same-folder'
+            ? docFolder
+            : docFolder
+              ? `${docFolder}/${attSettings.folder}`
+              : attSettings.folder;
+        if (attSettings.mode === 'doc-subfolder') {
+          docSubfolderDir = sourceDir;
+        }
+        const preIndexRows = this.db.prepare('SELECT rel_path FROM attachment_index').all() as {
+          rel_path: string;
+        }[];
+        const preIndexedPaths = preIndexRows.map((r) => r.rel_path);
+        const preIndexedSet = new Set(preIndexedPaths);
+        const preByName = buildByNameIndex(preIndexedPaths);
+        const resolvePreIndexedWikilink = (target: string, fromDoc: string): string | null =>
+          resolveAttachmentFromByName(target, fromDoc, (b) => preByName.get(b) ?? []);
+
+        const { body } = splitFrontmatter(content);
+        const candidateRels = await this.extractMovableAttachmentsForDoc(
+          body,
+          normalized,
+          docFolder,
+          sourceDir,
+          attSettings,
+          preIndexedSet,
+          resolvePreIndexedWikilink,
+        );
+        if (candidateRels.length > 0) {
+          const shared = await this.findSharedAttachments(
+            candidateRels,
+            new Set([normalized]),
+            attSettings,
+            preIndexedSet,
+            resolvePreIndexedWikilink,
+          );
+          for (const attRel of candidateRels) {
+            if (shared.has(attRel)) {
+              addSkipped(path.posix.basename(attRel), 'shared');
+            } else {
+              exclusiveAttRels.push(attRel);
+            }
+          }
+        }
+      } catch (e) {
+        this.logger?.warn(
+          { err: e, docPath: normalized },
+          '削除時の添付同伴走査に失敗しました(文書のみごみ箱へ移動します)',
+        );
+        exclusiveAttRels = [];
+      }
     }
-    await rename(abs, path.join(trashDir, trashName));
+
+    // ごみ箱内の同名衝突は連番で回避
+    const reservedTrashNames = new Set<string>([TRASH_META_FILE.toLowerCase()]);
+    const allocateTrashName = async (fileName: string): Promise<string> => {
+      const ext = path.posix.extname(fileName);
+      const stem = ext ? fileName.slice(0, fileName.length - ext.length) : fileName;
+      let candidate = fileName;
+      for (
+        let i = 2;
+        reservedTrashNames.has(candidate.toLowerCase()) ||
+        (await this.exists(path.join(trashDir, candidate)));
+        i++
+      ) {
+        candidate = `${stem} (${i})${ext}`;
+      }
+      reservedTrashNames.add(candidate.toLowerCase());
+      return candidate;
+    };
+
+    const trashName = await allocateTrashName(path.posix.basename(normalized));
+    const docTrashAbs = path.join(trashDir, trashName);
+    const attMoves: {
+      originalPath: string;
+      oldAbs: string;
+      trashName: string;
+      trashPath: string;
+      trashAbs: string;
+    }[] = [];
+    for (const attRel of exclusiveAttRels) {
+      const attTrashName = await allocateTrashName(path.posix.basename(attRel));
+      attMoves.push({
+        originalPath: attRel,
+        oldAbs: resolveInLibrary(this.libraryPath, attRel),
+        trashName: attTrashName,
+        trashPath: `.trash/${attTrashName}`,
+        trashAbs: path.join(trashDir, attTrashName),
+      });
+    }
+
+    const movedItems: { oldAbs: string; trashAbs: string }[] = [];
+    try {
+      await this.moveFile(abs, docTrashAbs);
+      movedItems.push({ oldAbs: abs, trashAbs: docTrashAbs });
+      for (const a of attMoves) {
+        await this.moveFile(a.oldAbs, a.trashAbs);
+        movedItems.push({ oldAbs: a.oldAbs, trashAbs: a.trashAbs });
+      }
+    } catch (e) {
+      for (const m of [...movedItems].reverse()) {
+        try {
+          await this.moveFile(m.trashAbs, m.oldAbs);
+        } catch (rbErr) {
+          this.logger?.error(
+            { err: rbErr, from: m.trashAbs, to: m.oldAbs },
+            'ごみ箱移動のロールバックに失敗しました',
+          );
+        }
+      }
+      throw e;
+    }
+
+    // 同伴添付がある場合は由来マニフェストを記録(既存マニフェストに同名残骸があれば掃除)
+    // 書き込み失敗時は移動済みファイルをすべてロールバックして不整合を防ぐ
+    const manifestAbs = path.join(trashDir, TRASH_META_FILE);
+    if (attMoves.length > 0 || (await this.exists(manifestAbs))) {
+      try {
+        await this.updateTrashFileManifest((manifest) => {
+          if (attMoves.length > 0) {
+            manifest.items[trashName] = {
+              originalPath: normalized,
+              deletedAt: new Date().toISOString(),
+              deletedBy: author.name,
+              attachments: attMoves.map((a) => ({
+                trashPath: a.trashPath,
+                originalPath: a.originalPath,
+              })),
+            };
+          } else {
+            delete manifest.items[trashName];
+          }
+        });
+      } catch (e) {
+        for (const m of [...movedItems].reverse()) {
+          try {
+            await this.moveFile(m.trashAbs, m.oldAbs);
+          } catch (rbErr) {
+            this.logger?.error(
+              { err: rbErr, from: m.trashAbs, to: m.oldAbs },
+              'ごみ箱移動のロールバックに失敗しました',
+            );
+          }
+        }
+        throw e;
+      }
+    }
+
+    // doc-subfolder で添付をすべて移動してサブフォルダが空になった場合は掃除する(文書フォルダ自体は残す)
+    if (attMoves.length > 0 && docSubfolderDir && attSettings.mode === 'doc-subfolder') {
+      await this.removeEmptySubdirsUpTo(docSubfolderDir, docFolder);
+    }
+
     // スコープコミット: 無関係な外部変更を巻き込まない(それらはsyncが拾う)
-    await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}`, author);
+    // 同伴添付がある場合はGitコミット本文にもトレーラーを残し、マニフェスト不在・破損時も元パスを特定できるようにする
+    const commitPaths = [
+      normalized,
+      `.trash/${trashName}`,
+      ...attMoves.flatMap((a) => [a.originalPath, a.trashPath]),
+    ];
+    const commitMessage =
+      attMoves.length > 0
+        ? `trash: ${normalized}\n\n${attMoves
+            .map(
+              (a) =>
+                `${TRASH_ATTACHMENT_TRAILER_PREFIX}${JSON.stringify({
+                  trashPath: a.trashPath,
+                  originalPath: a.originalPath,
+                })}`,
+            )
+            .join('\n')}`
+        : `trash: ${normalized}`;
+    await this.tryCommit(commitPaths, commitMessage, author);
     await this.tryUpdateIndex(
       async () => this.indexer.removeFile(normalized),
       { path: normalized },
       '文書',
     );
+    for (const a of attMoves) {
+      await this.tryUpdateIndex(
+        async () => this.indexer.removeAttachment(a.originalPath),
+        { relPath: a.originalPath },
+        '添付',
+      );
+    }
     this.locks.forceRelease(normalized);
     this.drafts.removeAll(normalized);
+    return { ok: true, skippedAttachments };
   }
 
   async moveDoc(
@@ -2579,6 +2884,13 @@ export class DocService {
       trashName = `${baseName.slice(0, baseName.length - ext.length)} (${i})${ext}`;
     }
     await rename(abs, path.join(trashDir, trashName));
+    const manifestAbs = path.join(trashDir, TRASH_META_FILE);
+    if (await this.exists(manifestAbs)) {
+      await this.updateTrashFileManifest((manifest) => {
+        delete manifest.items[trashName];
+        removeCompanionPathFromManifest(manifest, `.trash/${trashName}`);
+      });
+    }
     await this.tryCommit([normalized, `.trash/${trashName}`], `trash: ${normalized}`, author);
     await this.tryUpdateIndex(
       async () => this.indexer.removeAttachment(normalized),
@@ -2829,13 +3141,205 @@ export class DocService {
 
   // ---- ごみ箱(FR-DOC-07) ----
 
-  // .trash直下の項目パスとして検証する(ネスト・脱出は拒否)
+  private async readTrashFileManifest(): Promise<TrashFileManifest> {
+    const manifestAbs = path.join(this.libraryPath, '.trash', TRASH_META_FILE);
+    try {
+      const raw = await readFile(manifestAbs, 'utf8');
+      return parseTrashFileManifest(raw);
+    } catch {
+      return { version: 1, items: {} };
+    }
+  }
+
+  private async updateTrashFileManifest(
+    mutate: (manifest: TrashFileManifest) => void,
+  ): Promise<void> {
+    await this.trashManifestQueue.run(async () => {
+      const trashDir = path.join(this.libraryPath, '.trash');
+      const manifestAbs = path.join(trashDir, TRASH_META_FILE);
+      const manifest = await this.readTrashFileManifest();
+      mutate(manifest);
+      if (Object.keys(manifest.items).length === 0) {
+        await rm(manifestAbs, { force: true });
+        return;
+      }
+      await mkdir(trashDir, { recursive: true });
+      await this.writeAtomic(manifestAbs, `${JSON.stringify(manifest, null, 2)}\n`);
+    });
+  }
+
+  // doc-subfolder の添付をすべて移動した後に空になったサブフォルダを docFolder 直前まで掃除する
+  private async removeEmptySubdirsUpTo(subRel: string, stopParentRel: string): Promise<void> {
+    let current = subRel;
+    while (current && current !== stopParentRel) {
+      const currentAbs = resolveInLibrary(this.libraryPath, current);
+      try {
+        const entries = await readdir(currentAbs);
+        if (entries.length !== 0) break;
+        await rmdir(currentAbs);
+      } catch {
+        break;
+      }
+      const parent = path.posix.dirname(current);
+      current = parent === '.' ? '' : parent;
+    }
+  }
+
+  // 復元先の同名衝突で添付が連番リネームされた場合のみ、復元した文書内の該当リンクを追従させる
+  private rewriteRestoredDocAttachmentLinks(
+    content: string,
+    docDest: string,
+    allAttPathsForPostIndex: string[],
+    renamedAtts: { originalPath: string; destPath: string }[],
+  ): string {
+    if (renamedAtts.length === 0) return content;
+    const { prefix, body } = splitFrontmatter(content);
+    const docFolder = folderOfDoc(docDest);
+
+    const preIndexRows = this.db.prepare('SELECT rel_path FROM attachment_index').all() as {
+      rel_path: string;
+    }[];
+    const postPathSet = new Set<string>(preIndexRows.map((r) => r.rel_path));
+    for (const p of allAttPathsForPostIndex) {
+      postPathSet.add(p);
+    }
+    const postByName = buildByNameIndex([...postPathSet]);
+    const resolvePostWikilink = (target: string, fromDoc: string): string | null =>
+      resolveAttachmentFromByName(target, fromDoc, (b) => postByName.get(b) ?? []);
+
+    const renamedByOldLower = new Map<string, { originalPath: string; destPath: string }>();
+    for (const a of renamedAtts) {
+      renamedByOldLower.set(a.originalPath.toLowerCase(), a);
+    }
+
+    const wikilinkRanges = computeCodeRanges(body);
+    let working = body.replace(
+      WIKILINK_REWRITE_RE,
+      (full: string, open: string, rawTarget: string, close: string, offset: number): string => {
+        if (isWithinCode(wikilinkRanges, offset + open.length)) return full;
+        const { pathPart, suffix } = splitTargetSuffix(rawTarget);
+        if (!pathPart || EXCLUDED_SCHEME_RE.test(pathPart)) return full;
+        const norm = normalizeEmbedTarget(pathPart);
+        if (!norm) return full;
+        const ext = path.posix.extname(norm).toLowerCase();
+        if (!DocService.ATTACHMENT_EXTENSIONS.has(ext)) return full;
+
+        const normLower = norm.toLowerCase();
+        let matched: { originalPath: string; destPath: string } | undefined;
+        if (!norm.includes('/')) {
+          matched = renamedAtts.find(
+            (a) => path.posix.basename(a.originalPath).toLowerCase() === normLower,
+          );
+        } else {
+          matched = renamedAtts.find((a) => {
+            const origLower = a.originalPath.toLowerCase();
+            return origLower === normLower || origLower.endsWith(`/${normLower}`);
+          });
+        }
+        if (!matched) return full;
+
+        const nextTarget = resolveShortestEmbedTargetWith(
+          docDest,
+          matched.destPath,
+          resolvePostWikilink,
+        );
+        if (nextTarget === pathPart) return full;
+        return `${open}${nextTarget}${suffix}${close}`;
+      },
+    );
+
+    const mdRanges = computeCodeRanges(working);
+    working = working.replace(
+      MD_LINK_REWRITE_RE,
+      (full: string, open: string, rawTarget: string, close: string, offset: number): string => {
+        if (isWithinCode(mdRanges, offset + open.length)) return full;
+        const { pathPart, suffix } = splitTargetSuffix(rawTarget);
+        if (!pathPart || EXCLUDED_SCHEME_RE.test(pathPart)) return full;
+        const ext = path.posix.extname(pathPart).toLowerCase();
+        if (!DocService.ATTACHMENT_EXTENSIONS.has(ext)) return full;
+
+        const resolvedMd = resolveMarkdownRelPath(docFolder, pathPart);
+        let matched = resolvedMd ? renamedByOldLower.get(resolvedMd.toLowerCase()) : undefined;
+        if (!matched && !pathPart.includes('/') && open.startsWith('!') && ext !== '.pdf') {
+          const baseLower = pathPart.trim().toLowerCase();
+          matched = renamedAtts.find(
+            (a) => path.posix.basename(a.originalPath).toLowerCase() === baseLower,
+          );
+        }
+        if (!matched) return full;
+
+        const relFromDoc = path.posix.relative(docFolder || '.', matched.destPath);
+        if (relFromDoc === pathPart) return full;
+        return `${open}${relFromDoc}${suffix}${close}`;
+      },
+    );
+
+    return prefix + working;
+  }
+
+  // .trash直下の項目パスとして検証する(ネスト・脱出・マニフェスト本体は拒否)
   private validateTrashLeaf(relPath: string): string {
     const normalized = normalizeRelPath(relPath);
-    if (!/^\.trash\/[^/]+$/.test(normalized)) {
+    if (!/^\.trash\/[^/]+$/.test(normalized) || normalized === `.trash/${TRASH_META_FILE}`) {
       throw new InvalidPathError(relPath);
     }
     return normalized;
+  }
+
+  private async resolveTrashOriginFromGit(
+    trashPath: string,
+    isFolder: boolean,
+  ): Promise<{ originalPath: string | null; deletedAt: string | null; deletedBy: string | null }> {
+    let commit: Awaited<ReturnType<GitService['lastCommitWithBodyFor']>> = null;
+    try {
+      commit = await this.git.lastCommitWithBodyFor(trashPath);
+    } catch (e) {
+      this.logger?.warn({ err: e, trashPath }, 'ごみ箱項目の由来取得に失敗しました');
+    }
+    if (!commit) {
+      return { originalPath: null, deletedAt: null, deletedBy: null };
+    }
+    const targetNfc = trashPath.normalize('NFC');
+    if (!isFolder && commit.body) {
+      for (const line of commit.body.split(/\r?\n/)) {
+        if (!line.startsWith(TRASH_ATTACHMENT_TRAILER_PREFIX)) continue;
+        try {
+          const parsed = JSON.parse(line.slice(TRASH_ATTACHMENT_TRAILER_PREFIX.length)) as {
+            trashPath?: unknown;
+            originalPath?: unknown;
+          };
+          if (
+            typeof parsed.trashPath === 'string' &&
+            typeof parsed.originalPath === 'string' &&
+            parsed.trashPath.normalize('NFC') === targetNfc
+          ) {
+            return {
+              originalPath: parsed.originalPath,
+              deletedAt: commit.date ?? null,
+              deletedBy: commit.authorName ?? null,
+            };
+          }
+        } catch {
+          // 壊れたトレーラー行は無視して次のフォールバックへ進む
+        }
+      }
+    }
+    const m = commit.message.match(/^trash: (.+?)\/?$/);
+    let originalPath: string | null = m ? m[1] : null;
+    // 文書削除コミットに相乗りした添付でマニフェスト・トレーラーが共に無い場合、
+    // 拡張子が異なる親文書パス(.md)へ画像等を復元して上書きしないようガードする
+    if (!isFolder && originalPath) {
+      const trashExt = path.posix.extname(targetNfc).toLowerCase();
+      const origExt = path.posix.extname(originalPath).toLowerCase();
+      if (trashExt !== origExt) {
+        originalPath = null;
+      }
+    }
+    return {
+      originalPath,
+      deletedAt: commit.date ?? null,
+      deletedBy: commit.authorName ?? null,
+    };
   }
 
   async listTrash(): Promise<TrashEntry[]> {
@@ -2846,13 +3350,39 @@ export class DocService {
     } catch {
       return []; // .trash未作成
     }
+    const visibleEntries = entries.filter((entry) => {
+      const name = entry.name.normalize('NFC');
+      return name !== TRASH_META_FILE && !name.startsWith('.tsumiwiki-tmp-');
+    });
+    const existingFileNames = new Set(
+      visibleEntries.filter((e) => !e.isDirectory()).map((e) => e.name.normalize('NFC')),
+    );
+    const manifest = await this.readTrashFileManifest();
+
+    // 親文書が .trash/ 内に存在する間は、同伴添付を一覧で重複表示しない(#161)。
+    // 親文書が外部操作で消えた場合のみ、孤立添付を一覧に出して復元・掃除できるようにする。
+    const hiddenCompanionPaths = new Set<string>();
+    for (const [docTrashName, meta] of Object.entries(manifest.items)) {
+      if (!existingFileNames.has(docTrashName)) continue;
+      for (const att of meta.attachments ?? []) {
+        hiddenCompanionPaths.add(att.trashPath.normalize('NFC'));
+      }
+    }
+
+    const topLevelEntries = visibleEntries.filter((entry) => {
+      if (entry.isDirectory()) return true;
+      const trashPath = `.trash/${entry.name.normalize('NFC')}`;
+      return !hiddenCompanionPaths.has(trashPath);
+    });
+
     // 削除者・削除日時・元パスの取得方針:
     // - フォルダは `.trash/<name>/.tsumiwiki-trash.json` の由来メタデータを最優先で読む
     //   (空フォルダ削除でgitに差分が乗らずgit log経由の復元が効かない対策)
-    // - ファイル、またはメタデータ不在時は trash: コミットからの復元にフォールバック
+    // - 同伴添付付きファイル・孤立添付は `.trash/.tsumiwiki-trash.json` のマニフェスト(順引き/逆引き)を最優先で読む
+    // - メタデータ不在時は trash: コミット(本文の Trashed-Attachment トレーラー含む)からの復元にフォールバック
     // - 項目単位で並列取得し、1項目のGitエラーで一覧全体を落とさない
     const result: TrashEntry[] = await Promise.all(
-      entries.map(async (entry) => {
+      topLevelEntries.map(async (entry) => {
         const name = entry.name.normalize('NFC');
         const trashPath = `.trash/${name}`;
         const isFolder = entry.isDirectory();
@@ -2868,21 +3398,42 @@ export class DocService {
               deletedBy: meta.deletedBy,
             };
           }
+        } else {
+          const fileMeta = manifest.items[name];
+          if (fileMeta) {
+            const attachmentCount = (fileMeta.attachments ?? []).filter((a) =>
+              existingFileNames.has(path.posix.basename(a.trashPath.normalize('NFC'))),
+            ).length;
+            return {
+              trashPath,
+              name,
+              isFolder: false,
+              originalPath: fileMeta.originalPath,
+              deletedAt: fileMeta.deletedAt,
+              deletedBy: fileMeta.deletedBy,
+              ...(attachmentCount > 0 ? { attachmentCount } : {}),
+            };
+          }
+          const companion = findCompanionInManifest(manifest, trashPath);
+          if (companion) {
+            return {
+              trashPath,
+              name,
+              isFolder: false,
+              originalPath: companion.att.originalPath,
+              deletedAt: companion.docMeta.deletedAt,
+              deletedBy: companion.docMeta.deletedBy,
+            };
+          }
         }
-        let commit = null;
-        try {
-          commit = await this.git.lastCommitFor(trashPath);
-        } catch (e) {
-          this.logger?.warn({ err: e, trashPath }, 'ごみ箱項目の由来取得に失敗しました');
-        }
-        const m = commit?.message.match(/^trash: (.+?)\/?$/);
+        const gitOrigin = await this.resolveTrashOriginFromGit(trashPath, isFolder);
         return {
           trashPath,
           name,
           isFolder,
-          originalPath: m ? m[1] : null,
-          deletedAt: commit?.date ?? null,
-          deletedBy: commit?.authorName ?? null,
+          originalPath: gitOrigin.originalPath,
+          deletedAt: gitOrigin.deletedAt,
+          deletedBy: gitOrigin.deletedBy,
         };
       }),
     );
@@ -2901,23 +3452,31 @@ export class DocService {
       throw new DocNotFoundError(normalized);
     }
 
+    const trashName = path.posix.basename(normalized);
+    let fileMeta: TrashFileMeta | null = null;
+    let companionRef: ReturnType<typeof findCompanionInManifest> = null;
     // フォルダは由来メタデータを最優先で読む(空フォルダ削除の対策。上記listTrashと同方針)
     let original: string | null = null;
     if (isFolder) {
       const meta = await readTrashMeta(abs);
       if (meta) original = meta.originalPath;
+    } else {
+      const manifest = await this.readTrashFileManifest();
+      fileMeta = manifest.items[trashName] ?? null;
+      if (fileMeta) {
+        original = fileMeta.originalPath;
+      } else {
+        companionRef = findCompanionInManifest(manifest, normalized);
+        if (companionRef) {
+          original = companionRef.att.originalPath;
+        }
+      }
     }
     if (!original) {
-      // ファイル、またはメタデータ不在時は trash: コミットからの復元にフォールバック
-      let commit = null;
-      try {
-        commit = await this.git.lastCommitFor(normalized);
-      } catch (e) {
-        this.logger?.warn({ err: e, trashPath: normalized }, 'ごみ箱項目の由来取得に失敗しました');
-      }
-      const m = commit?.message.match(/^trash: (.+?)\/?$/);
+      // ファイル、またはメタデータ不在時は trash: コミット(トレーラー含む)からの復元にフォールバック
+      const gitOrigin = await this.resolveTrashOriginFromGit(normalized, isFolder);
       // 元パス不明(手動で.trashに置かれた等)ならルート直下へ戻す
-      original = m ? m[1] : path.posix.basename(normalized);
+      original = gitOrigin.originalPath ?? trashName;
     }
 
     // 元パスが不正(..等の細工コミット)な場合もbasenameへフォールバックする
@@ -2926,10 +3485,10 @@ export class DocService {
     try {
       dest = normalizeRelPath(original);
     } catch {
-      dest = path.posix.basename(normalized);
+      dest = trashName;
     }
     if (!dest || isProtectedPath(dest) || dest.split('/').includes('.trash')) {
-      dest = path.posix.basename(normalized);
+      dest = trashName;
     }
     // 復元先の衝突は連番で回避(existsチェック→renameの間の競合は
     // 実運用頻度が低く許容。Gitコミット自体は直列キューで保護される)
@@ -2940,8 +3499,119 @@ export class DocService {
     }
 
     const destAbs = resolveInLibrary(this.libraryPath, dest);
-    await mkdir(path.dirname(destAbs), { recursive: true });
-    await rename(abs, destAbs);
+
+    // 同伴添付の復元計画(#161)
+    interface RestoredAttPlan {
+      trashPath: string;
+      trashAbs: string;
+      originalPath: string;
+      destPath: string;
+      destAbs: string;
+      renamed: boolean;
+    }
+    const attPlans: RestoredAttPlan[] = [];
+    if (!isFolder && fileMeta?.attachments?.length) {
+      const claimedDestLower = new Set<string>([dest.toLowerCase()]);
+      for (const att of fileMeta.attachments) {
+        let attTrashNorm: string;
+        try {
+          attTrashNorm = this.validateTrashLeaf(att.trashPath);
+        } catch {
+          continue;
+        }
+        const attTrashAbs = resolveInLibrary(this.libraryPath, attTrashNorm);
+        if (!(await this.exists(attTrashAbs))) {
+          this.logger?.warn(
+            { trashPath: normalized, missingAttachment: attTrashNorm },
+            '復元対象の同伴添付ファイルが見つかりませんでした(スキップ)',
+          );
+          continue;
+        }
+        const attTrashBase = path.posix.basename(attTrashNorm);
+        let attOriginal: string;
+        try {
+          attOriginal = normalizeRelPath(att.originalPath);
+        } catch {
+          attOriginal = attTrashBase;
+        }
+        if (
+          !attOriginal ||
+          isProtectedPath(attOriginal) ||
+          attOriginal.split('/').includes('.trash')
+        ) {
+          attOriginal = attTrashBase;
+        }
+        const attExt = path.posix.extname(attOriginal);
+        const attStem = attExt
+          ? attOriginal.slice(0, attOriginal.length - attExt.length)
+          : attOriginal;
+        let attDest = attOriginal;
+        for (
+          let i = 2;
+          claimedDestLower.has(attDest.toLowerCase()) ||
+          (await this.exists(resolveInLibrary(this.libraryPath, attDest)));
+          i++
+        ) {
+          attDest = `${attStem} (${i})${attExt}`;
+        }
+        claimedDestLower.add(attDest.toLowerCase());
+        attPlans.push({
+          trashPath: attTrashNorm,
+          trashAbs: attTrashAbs,
+          originalPath: attOriginal,
+          destPath: attDest,
+          destAbs: resolveInLibrary(this.libraryPath, attDest),
+          renamed: attDest !== attOriginal,
+        });
+      }
+    }
+
+    const movedBack: { fromAbs: string; toAbs: string }[] = [];
+    try {
+      await mkdir(path.dirname(destAbs), { recursive: true });
+      await this.moveFile(abs, destAbs);
+      movedBack.push({ fromAbs: abs, toAbs: destAbs });
+      for (const a of attPlans) {
+        await mkdir(path.dirname(a.destAbs), { recursive: true });
+        await this.moveFile(a.trashAbs, a.destAbs);
+        movedBack.push({ fromAbs: a.trashAbs, toAbs: a.destAbs });
+      }
+    } catch (e) {
+      for (const m of [...movedBack].reverse()) {
+        try {
+          await this.moveFile(m.toAbs, m.fromAbs);
+        } catch (rbErr) {
+          this.logger?.error(
+            { err: rbErr, from: m.toAbs, to: m.fromAbs },
+            'ごみ箱復元のロールバックに失敗しました',
+          );
+        }
+      }
+      throw e;
+    }
+
+    // 復元先で添付が同名衝突により連番リネームされた場合は、復元文書内のリンクも追従させる
+    const renamedAtts = attPlans.filter((a) => a.renamed);
+    if (!isFolder && dest.toLowerCase().endsWith('.md') && renamedAtts.length > 0) {
+      try {
+        const restoredContent = await readFile(destAbs, 'utf8');
+        const rewritten = this.rewriteRestoredDocAttachmentLinks(
+          restoredContent,
+          dest,
+          attPlans.map((a) => a.destPath),
+          renamedAtts,
+        );
+        if (rewritten !== restoredContent) {
+          await this.writeAtomic(destAbs, rewritten);
+        }
+      } catch (e) {
+        this.logger?.warn(
+          { err: e, dest },
+          '復元文書の添付リンク書き換えに失敗しました(復元自体は完了)',
+        );
+      }
+    }
+
     // フォルダ復元時は「TsumiWikiが書き込んだ」メタデータのみ削除する。
     // ユーザーが独自に置いた同名ファイル(有効なTrashMeta形式でない)は破壊しない(#86 fix-forward)
     if (isFolder) {
@@ -2957,14 +3627,45 @@ export class DocService {
           );
         }
       }
+    } else if (fileMeta || companionRef) {
+      let existingNames = new Set<string>();
+      try {
+        const entries = await readdir(path.join(this.libraryPath, '.trash'), {
+          withFileTypes: true,
+        });
+        existingNames = new Set(
+          entries.filter((e) => !e.isDirectory()).map((e) => e.name.normalize('NFC')),
+        );
+      } catch {
+        // .trash が無ければ空集合で扱う
+      }
+      await this.updateTrashFileManifest((m) => {
+        if (fileMeta) {
+          delete m.items[trashName];
+        }
+        if (companionRef) {
+          removeCompanionPathFromManifest(m, normalized, existingNames);
+        }
+      });
     }
-    await this.tryCommit([normalized, dest], `untrash: ${dest}${isFolder ? '/' : ''}`, author);
+
+    const commitPaths = [normalized, dest, ...attPlans.flatMap((a) => [a.trashPath, a.destPath])];
+    await this.tryCommit(commitPaths, `untrash: ${dest}${isFolder ? '/' : ''}`, author);
     if (isFolder) {
       await this.tryUpdateIndex(() => this.indexer.scanAll(), { dest }, 'フォルダ配下の全走査');
     } else if (dest.toLowerCase().endsWith('.md')) {
       await this.tryUpdateIndex(() => this.indexer.indexFile(dest), { path: dest }, '文書');
     } else if (isIndexedFileName(dest)) {
       await this.tryUpdateIndex(() => this.indexer.indexAttachment(dest), { dest }, '添付');
+    }
+    for (const a of attPlans) {
+      if (isIndexedFileName(a.destPath)) {
+        await this.tryUpdateIndex(
+          () => this.indexer.indexAttachment(a.destPath),
+          { dest: a.destPath },
+          '添付',
+        );
+      }
     }
     return { path: dest };
   }
@@ -2973,11 +3674,65 @@ export class DocService {
   async purgeTrash(trashPath: string, author: GitAuthor): Promise<void> {
     const normalized = this.validateTrashLeaf(trashPath);
     const abs = resolveInLibrary(this.libraryPath, normalized);
-    if (!(await this.exists(abs))) {
+    let isFolder: boolean;
+    try {
+      isFolder = (await stat(abs)).isDirectory();
+    } catch {
       throw new DocNotFoundError(normalized);
     }
+    const trashName = path.posix.basename(normalized);
+    const commitPaths = [normalized];
+    let fileMeta: TrashFileMeta | null = null;
+    let companionRef: ReturnType<typeof findCompanionInManifest> = null;
+    const companionTargets: { trashNorm: string; abs: string }[] = [];
+    if (!isFolder) {
+      const manifest = await this.readTrashFileManifest();
+      fileMeta = manifest.items[trashName] ?? null;
+      if (fileMeta) {
+        for (const att of fileMeta.attachments ?? []) {
+          let attTrashNorm: string;
+          try {
+            attTrashNorm = this.validateTrashLeaf(att.trashPath);
+          } catch {
+            continue;
+          }
+          const attAbs = resolveInLibrary(this.libraryPath, attTrashNorm);
+          if (await this.exists(attAbs)) {
+            companionTargets.push({ trashNorm: attTrashNorm, abs: attAbs });
+          }
+        }
+      } else {
+        companionRef = findCompanionInManifest(manifest, normalized);
+      }
+    }
+    // 親本体を先に削除し、親の削除失敗時に同伴添付だけが失われる不整合を防ぐ
     await rm(abs, { recursive: true, force: true });
-    await this.tryCommit([normalized], `purge: ${normalized}`, author);
+    for (const target of companionTargets) {
+      await rm(target.abs, { force: true });
+      commitPaths.push(target.trashNorm);
+    }
+    if (fileMeta || companionRef) {
+      let existingNames = new Set<string>();
+      try {
+        const entries = await readdir(path.join(this.libraryPath, '.trash'), {
+          withFileTypes: true,
+        });
+        existingNames = new Set(
+          entries.filter((e) => !e.isDirectory()).map((e) => e.name.normalize('NFC')),
+        );
+      } catch {
+        // .trash が無ければ空集合で扱う
+      }
+      await this.updateTrashFileManifest((m) => {
+        if (fileMeta) {
+          delete m.items[trashName];
+        }
+        if (companionRef) {
+          removeCompanionPathFromManifest(m, normalized, existingNames);
+        }
+      });
+    }
+    await this.tryCommit(commitPaths, `purge: ${normalized}`, author);
   }
 
   // ---- 履歴(FR-HIST) ----

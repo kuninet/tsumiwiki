@@ -2031,4 +2031,56 @@ describe('FolderTree', () => {
       expect(document.activeElement).toBe(pdfRow);
     });
   });
+
+  it('文書削除時に共有添付が残置された場合は情報トーストで件数を通知する(#161)', async () => {
+    useToastStore.setState({ toast: null });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        const method = (init?.method ?? 'GET').toUpperCase();
+        const [reqPath] = url.split('?');
+        if (method === 'GET' && reqPath === '/api/tree') {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(TREE) });
+        }
+        if (method === 'DELETE' && reqPath === '/api/docs') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                ok: true,
+                skippedAttachments: [{ fileName: 'shared.png', reason: 'shared' }],
+              }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ ok: true }),
+        });
+      }),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<FolderTree />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const docRow = (await screen.findByText('ルート文書')).closest('button')!;
+    docRow.focus();
+    fireEvent.keyDown(docRow, { key: 'Delete' });
+    fireEvent.click(await screen.findByRole('button', { name: '削除' }));
+
+    await waitFor(() => {
+      const toast = useToastStore.getState().toast;
+      expect(toast?.kind).toBe('info');
+      expect(toast?.message).toContain('文書を削除しました');
+      expect(toast?.message).toContain('共有中の添付 1 件は元のフォルダに残しました');
+    });
+  });
 });

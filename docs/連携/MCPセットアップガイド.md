@@ -230,7 +230,7 @@ Read 9 種 + 履歴 5 種 + Write 11 種 + 添付 1 種 + ごみ箱 2 種 + 記�
 | `move_note` | `path: string`, `newFolder: string`, `newTitle: string` | リネーム / 移動 |
 | `create_folder` | `path: string` | フォルダを作成(途中のフォルダもまとめて作る)。空フォルダは Git 管理外 |
 | `move_folder` | `path: string`, `newPath: string` | フォルダの改名・移動(例: `議事録/2026` → `議事録/2026年度`)。配下のノートごと移動する。配下を UI で誰かが編集中なら拒否。移動先に同名フォルダがある場合や自分自身の配下への移動もエラー。`path` がファイルのときもエラー(ノートの移動は `move_note` を使う) |
-| `delete_note` | `path: string` | `.trash/` へ送る(完全削除ではない) |
+| `delete_note` | `path: string` | `.trash/` へ送る(完全削除ではない)。`same-folder` / `doc-subfolder` 設定時は専属添付も同伴移動し、共有添付で残置したものがあれば `skippedAttachments` を返す |
 | `create_daily_note` | `date?: string (YYYY-MM-DD)` | ライブラリ設定 `dailyNotes.folder` / `template` / `filenamePattern` に基づき指定日(省略時は今日)の Daily Note を生成 or 既存を返す。実在しない日付・形式不正は `isError` かつ `structuredContent.code` が `INVALID_DATE` |
 | `append_to_daily_note` | `text: string`, `heading?: string`(既定 `## メモ`), `source?: string` | 今日のデイリーノートの指定見出しの節末尾に `HH:MM [source] text` を1件追記(なければノート・見出しごと作成)。本文全体の読み書きは不要。戻り値は `path` / `created` / `updatedAt`。箇条書きにしたいときは `text` を `- ` で始める。日付と時刻はサーバーのローカル時刻(`TZ` 環境変数)で決まる。UI で編集中のノートには書けず、`isError` かつ `structuredContent.code` が `DOC_LOCKED` になる |
 | `append_to_note` | `path: string`, `text: string`, `heading?: string`, `timestamp?: boolean`, `source?: string`, `baseUpdatedAt?: string` | 既存ノートの末尾または指定見出しの節末尾にテキストを追記する。本文全体の読み書きは不要。`heading` 省略時は本文末尾に追記。`timestamp: true` で先頭に `HH:MM [source] ` を付与。`baseUpdatedAt` 指定時のみ競合検知する。UI で編集中のノートには書けず `DOC_LOCKED`。戻り値は `path` / `updatedAt` |
@@ -260,8 +260,8 @@ Read 9 種 + 履歴 5 種 + Write 11 種 + 添付 1 種 + ごみ箱 2 種 + 記�
 
 | ツール | 引数 | 用途 |
 |---|---|---|
-| `list_trash` | (なし) | ごみ箱(`.trash`)内のノート・フォルダ一覧を取得(削除日時の新しい順) |
-| `restore_from_trash` | `trashPath: string` | ごみ箱内のノートまたはフォルダを元のパスへ復元する。元のパスに同名が存在する場合は自動で連番(例: `ノート (2).md`)が付与される。ロック不要 |
+| `list_trash` | (なし) | ごみ箱(`.trash`)内のノート・フォルダ一覧を取得(削除日時の新しい順)。親ノートが `.trash/` に残っている間は同伴添付を非表示とし、親エントリに `attachmentCount` を付与(#161) |
+| `restore_from_trash` | `trashPath: string` | ごみ箱内のノートまたはフォルダを元のパスへ復元する。元のパスに同名が存在する場合は自動で連番(例: `ノート (2).md`)が付与される。同伴添付も `originalPath` へ同時復元し、衝突リネーム時はノート内リンクも追従更新する(#161)。ロック不要 |
 
 ### 記録の手順
 

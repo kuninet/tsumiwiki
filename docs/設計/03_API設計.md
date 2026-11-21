@@ -38,7 +38,7 @@
 | GET | `/api/docs?path=` | 文書取得。`{path, frontmatter, frontmatterStatus, body, updatedAt, lock: {userId, displayName} \| null}`。`frontmatterStatus` は `'ok' \| 'none' \| 'invalid'`(#282) |
 | POST | `/api/docs` | 新規作成 `{folder, title}` → 空文書作成+コミット。作成後パスを返す |
 | PUT | `/api/docs` | 保存 `{path, body, tags?, frontmatterOps?, baseUpdatedAt}`。ロック保持者のみ。保存+コミット(06章)。`frontmatterOps`（set/delete/renameの操作列）をYAML ASTに外科的保全適用し、応答に `{updatedAt, frontmatter}` を返す(#282)。キー名不正や解釈不能な場合は `FRONTMATTER_INVALID`(400)。`baseUpdatedAt` 不一致は `CONFLICT`(外部変更との衝突検知) |
-| DELETE | `/api/docs?path=` | ごみ箱(`.trash/`)へ移動+コミット(FR-DOC-07) |
+| DELETE | `/api/docs?path=` | ごみ箱(`.trash/`)へ移動+コミット(FR-DOC-07)。`same-folder` / `doc-subfolder` 設定時は専属添付も `.trash/` へ同伴移動(空になったサブフォルダも整理)し、他文書と共有中の添付は残置して `{ok: true, skippedAttachments?: [{fileName, reason: 'shared'}]}` を返す(#161)。`vault-folder` 設定時は添付を移動しない |
 | POST | `/api/docs/move` | `{path, newFolder, newTitle}` リネーム/移動+コミット。ロック中は不可。`same-folder` / `doc-subfolder` 設定時は移動元フォルダ配下の専属添付も同伴移動し、共有・同名衝突で残置した添付は `skippedAttachments` で返す(#334) |
 | POST | `/api/docs/move-batch` | `{moves: [{path, newFolder, newTitle}]}` 複数文書の一括移動（#334・1 リクエスト最大 200 件）。事前検証で 1 件でもロック中や移動先衝突がある場合はバッチ全体を拒否（`409` 等、1 件も移動しない）し、グループ内のみで共有する添付を同伴移動・リンク追従して単一 Git コミットに記録する。残置添付は `skippedAttachments` で返す |
 | GET | `/api/docs/backlinks?path=` | 指定文書へのバックリンク一覧取得(#267)。`{backlinks:[{sourcePath, sourceTitle, sourceFolder, sourceUpdatedAt, links:[{line, context, anchor, alias}]}], truncated}`。自己リンク除外、更新日時降順・パス昇順。上限200件 |
@@ -123,9 +123,9 @@
 
 | メソッド | パス | 内容 |
 |---|---|---|
-| GET | `/api/trash` | `.trash/` 内の一覧(元パス・削除日時・削除者は直近コミットから取得) |
-| POST | `/api/trash/restore` | `{trashPath}` 元の場所へ復元+コミット(元パスに同名があれば連番付与) |
-| DELETE | `/api/trash?path=` | **admin** 完全削除(ファイル削除+コミット。Git履歴には残る) |
+| GET | `/api/trash` | `.trash/` 内の一覧(元パス・削除日時・削除者は直近コミットおよび `.trash/.tsumiwiki-trash.json` から取得)。親文書が `.trash/` 内に残っている同伴添付は一覧から隠し、親文書エントリの `attachmentCount` に同伴件数を設定(#161) |
+| POST | `/api/trash/restore` | `{trashPath}` 元の場所へ復元+コミット(元パスに同名があれば連番付与)。同伴添付がある場合は `originalPath` へ同時復元し、復元先衝突で添付が連番リネームされた場合は復元文書内のリンクも追従書き換えする(#161)。`.trash/.tsumiwiki-trash.json` 自体の操作は 400 |
+| DELETE | `/api/trash?path=` | **admin** 完全削除(ファイル削除+コミット。Git履歴には残る)。親文書に同伴添付がある場合は `.trash/` 内の同伴添付およびマニフェスト記録も同時に削除する(#161)。`.trash/.tsumiwiki-trash.json` 自体の操作は 400 |
 
 ### ユーザー管理(FR-AUTH-02。admin専用)
 
