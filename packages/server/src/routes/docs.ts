@@ -120,10 +120,7 @@ export function registerDocRoutes(app: FastifyInstance): void {
     if (!docPath) {
       return sendError(reply, 400, 'VALIDATION_ERROR', 'pathを指定してください');
     }
-    return handling(reply, async () => {
-      await app.docService.deleteDoc(docPath, req.user!.id, authorOf(req));
-      return { ok: true };
-    });
+    return handling(reply, () => app.docService.deleteDoc(docPath, req.user!.id, authorOf(req)));
   });
 
   app.post('/api/docs/move', async (req, reply) => {

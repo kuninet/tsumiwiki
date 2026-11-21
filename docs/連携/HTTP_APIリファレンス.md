@@ -184,6 +184,9 @@ Cookie を無効化。
 
 `.trash/<名前>` へ移動(復元可能)。ロック必須。
 
+- 添付保存先設定が `same-folder` または `doc-subfolder` の場合は専属添付も `.trash/` へ同伴移動し、空になったサブフォルダを削除する（`vault-folder` 設定時は添付を移動しない）
+- 他文書から参照されている共有添付は元フォルダに残置し、レスポンス `{ "ok": true, "skippedAttachments": [{ "fileName": "...", "reason": "shared" }] }` で返却する（残置がなければ `skippedAttachments` は省略、#161）
+
 ### POST /api/docs/move — 移動・リネーム
 
 ```json
@@ -351,7 +354,7 @@ SQLite FTS5 trigram インデックスによる全文検索。
 
 ### GET /api/trash
 
-`TrashEntry[]`。
+`TrashEntry[]`（`attachmentCount?: number` を含む）。親文書が `.trash/` 内に残っている間は同伴移動された専属添付を一覧から非表示とし、親文書の `attachmentCount` に同伴件数を返す（#161）。
 
 ### POST /api/trash/restore
 
@@ -359,11 +362,11 @@ SQLite FTS5 trigram インデックスによる全文検索。
 { "trashPath": ".trash/2026-07-05.md" }
 ```
 
-元パス(または元パス直近)に戻す。ロック不要(削除済みの復元なので競合しない)。
+元パス(または元パス直近)に戻す。ロック不要(削除済みの復元なので競合しない)。同伴添付も元の `originalPath` へ同時復元し、復元先で同名衝突により添付が連番リネームされた場合は復元文書内の参照リンクも追従書き換えする（`.trash/.tsumiwiki-trash.json` 自体の指定は 400）。
 
 ### DELETE /api/trash?path=<...>
 
-物理削除(`purge:` コミット)。復元不可。
+物理削除(`purge:` コミット)。復元不可。親文書に同伴添付がある場合は同時に削除し、`.trash/.tsumiwiki-trash.json` からも除去する（`.trash/.tsumiwiki-trash.json` 自体の指定は 400）。
 
 ---
 

@@ -250,6 +250,12 @@ export const restoreRequestSchema = z.object({
 });
 export type RestoreRequest = z.infer<typeof restoreRequestSchema>;
 
+export const deleteDocResponseSchema = z.object({
+  ok: z.literal(true),
+  skippedAttachments: z.array(skippedAttachmentSchema).optional(),
+});
+export type DeleteDocResponse = z.infer<typeof deleteDocResponseSchema>;
+
 // ---- ごみ箱(FR-DOC-07) ----
 
 export const trashEntrySchema = z.object({
@@ -259,6 +265,7 @@ export const trashEntrySchema = z.object({
   originalPath: z.string().nullable(), // trash:コミットから復元(不明ならnull)
   deletedAt: z.string().nullable(),
   deletedBy: z.string().nullable(),
+  attachmentCount: z.number().int().nonnegative().optional(),
 });
 export type TrashEntry = z.infer<typeof trashEntrySchema>;
 

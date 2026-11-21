@@ -4531,3 +4531,65 @@ describe('restore_history (issue #312)', () => {
     });
   });
 });
+
+describe('delete_note / trash での専属添付同伴と復元(#161)', () => {
+  let seq = 9000;
+  const dummyPng = Buffer.from(
+    '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082',
+    'hex',
+  );
+
+  beforeEach(async () => {
+    await buildMcpApp();
+  });
+
+  async function callTool(name: string, args: Record<string, unknown>) {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: seq++,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().result;
+  }
+
+  it('AC-7: delete_note で専属添付を .trash へ同伴し、共有添付を残置して list_trash / restore_from_trash できる', async () => {
+    await callTool('create_note', {
+      path: 'メモ/記事.md',
+      content: '![[solo.png]]\n![[shared.png]]\n',
+    });
+    await callTool('create_note', {
+      path: '別/参照.md',
+      content: '![[メモ/shared.png]]\n',
+    });
+    await writeFile(join(lib, 'メモ', 'solo.png'), dummyPng);
+    await writeFile(join(lib, 'メモ', 'shared.png'), dummyPng);
+    await app.indexerService.indexAttachment('メモ/solo.png');
+    await app.indexerService.indexAttachment('メモ/shared.png');
+
+    const del = await callTool('delete_note', { path: 'メモ/記事.md' });
+    expect(del.isError).toBeFalsy();
+    expect(del.structuredContent).toEqual({
+      ok: true,
+      skippedAttachments: [{ fileName: 'shared.png', reason: 'shared' }],
+    });
+    expect(statSync(join(lib, '.trash', '記事.md')).isFile()).toBe(true);
+    expect(statSync(join(lib, '.trash', 'solo.png')).isFile()).toBe(true);
+    expect(statSync(join(lib, 'メモ', 'shared.png')).isFile()).toBe(true);
+
+    const list = await callTool('list_trash', {});
+    expect(list.isError).toBeFalsy();
+    expect(list.structuredContent.items).toHaveLength(1);
+    expect(list.structuredContent.items[0]).toMatchObject({
+      trashPath: '.trash/記事.md',
+      attachmentCount: 1,
+    });
+
+    const restored = await callTool('restore_from_trash', { trashPath: '.trash/記事.md' });
+    expect(restored.isError).toBeFalsy();
+    expect(restored.structuredContent.path).toBe('メモ/記事.md');
+    expect(statSync(join(lib, 'メモ', '記事.md')).isFile()).toBe(true);
+    expect(statSync(join(lib, 'メモ', 'solo.png')).isFile()).toBe(true);
+  });
+});

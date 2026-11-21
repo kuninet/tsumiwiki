@@ -49,15 +49,22 @@ export function registerWriteTools(mcp: McpServer, app: FastifyInstance): void {
           .optional()
           .describe(
             '更新するフロントマターのプロパティ(部分更新・マージ)。指定キーのみ上書きし、' +
-            '値にnullを渡すとそのキーを削除する。未指定キーは原文のまま保持。' +
-            'tags は tags 引数で、updated はサーバー管理のため指定不可。' +
-            '変更するキーだけを渡すこと(read_noteの日付値はISO形式に変換されているため、そのまま戻すと書式が変わる)',
+              '値にnullを渡すとそのキーを削除する。未指定キーは原文のまま保持。' +
+              'tags は tags 引数で、updated はサーバー管理のため指定不可。' +
+              '変更するキーだけを渡すこと(read_noteの日付値はISO形式に変換されているため、そのまま戻すと書式が変わる)',
           ),
       },
     },
     async ({ path: docPath, body, baseUpdatedAt, tags, frontmatter }) =>
       asResult(
-        await app.docService.saveDocMcp(docPath, body, tags, baseUpdatedAt, MCP_AUTHOR, frontmatter),
+        await app.docService.saveDocMcp(
+          docPath,
+          body,
+          tags,
+          baseUpdatedAt,
+          MCP_AUTHOR,
+          frontmatter,
+        ),
       ),
   );
 
@@ -74,7 +81,13 @@ export function registerWriteTools(mcp: McpServer, app: FastifyInstance): void {
     },
     async ({ path: docPath, newFolder, newTitle }) =>
       asResult(
-        await app.docService.moveDoc(docPath, newFolder, newTitle, MCP_SENTINEL_USER_ID, MCP_AUTHOR),
+        await app.docService.moveDoc(
+          docPath,
+          newFolder,
+          newTitle,
+          MCP_SENTINEL_USER_ID,
+          MCP_AUTHOR,
+        ),
       ),
   );
 
@@ -82,14 +95,15 @@ export function registerWriteTools(mcp: McpServer, app: FastifyInstance): void {
     'delete_note',
     {
       title: 'ノート削除',
-      description: 'ノートをごみ箱(.trash)へ移動する(完全削除ではない)',
+      description:
+        'ノートと専属の添付ファイルをごみ箱(.trash)へ移動する(完全削除ではない。他ノートと共有中の添付は元フォルダに残る)',
       inputSchema: {
         path: z.string().min(1).describe('削除対象ノートの相対パス'),
       },
     },
     async ({ path: docPath }) => {
-      await app.docService.deleteDoc(docPath, MCP_SENTINEL_USER_ID, MCP_AUTHOR);
-      return asResult({ ok: true });
+      const result = await app.docService.deleteDoc(docPath, MCP_SENTINEL_USER_ID, MCP_AUTHOR);
+      return asResult(result);
     },
   );
 
@@ -111,17 +125,22 @@ export function registerWriteTools(mcp: McpServer, app: FastifyInstance): void {
           .optional()
           .describe(
             '更新するフロントマターのプロパティ(部分更新・マージ)。指定キーのみ上書きし、' +
-            '値にnullを渡すとそのキーを削除する。未指定キーは原文のまま保持。' +
-            'tags は tags 引数で、updated はサーバー管理のため指定不可。' +
-            '変更するキーだけを渡すこと(read_noteの日付値はISO形式に変換されているため、そのまま戻すと書式が変わる)',
+              '値にnullを渡すとそのキーを削除する。未指定キーは原文のまま保持。' +
+              'tags は tags 引数で、updated はサーバー管理のため指定不可。' +
+              '変更するキーだけを渡すこと(read_noteの日付値はISO形式に変換されているため、そのまま戻すと書式が変わる)',
           ),
         tags: z.array(z.string()).optional().describe('フロントマターのタグを全て置き換える'),
-        addTags: z.array(z.string()).optional().describe('フロントマターのタグに追加する(重複は無視)'),
+        addTags: z
+          .array(z.string())
+          .optional()
+          .describe('フロントマターのタグに追加する(重複は無視)'),
         removeTags: z.array(z.string()).optional().describe('フロントマターのタグから削除する'),
         baseUpdatedAt: z
           .string()
           .optional()
-          .describe('read_noteで取得したupdatedAt。指定時のみ競合検知する(本文を書き換えないので任意)'),
+          .describe(
+            'read_noteで取得したupdatedAt。指定時のみ競合検知する(本文を書き換えないので任意)',
+          ),
       },
     },
     async ({ path: docPath, frontmatter, tags, addTags, removeTags, baseUpdatedAt }) => {
