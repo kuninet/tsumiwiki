@@ -51,7 +51,12 @@ beforeEach(async () => {
   app = buildApp({ config, db, logger: false });
   await app.ready();
   app.userService.create({ username: 'yamada', displayName: '山田', password: 'p', role: 'user' });
-  app.userService.create({ username: 'admin', displayName: '管理者', password: 'p', role: 'admin' });
+  app.userService.create({
+    username: 'admin',
+    displayName: '管理者',
+    password: 'p',
+    role: 'admin',
+  });
   yamada = await loginAs('yamada');
   admin = await loginAs('admin');
 });
@@ -134,16 +139,44 @@ describe('GET /api/templates', () => {
   }, 30_000);
 
   it('BOM 付き md でも frontmatter を認識してリストに載せる', async () => {
-    await writeTemplate(
-      '_templates/bom.md',
-      '﻿---\ntarget_folder: 別\n---\n\n本文\n',
-    );
+    await writeTemplate('_templates/bom.md', '﻿---\ntarget_folder: 別\n---\n\n本文\n');
     const res = await apiAs(yamada, 'GET', '/api/templates');
-    const t = res
-      .json()
-      .templates.find((x: { path: string }) => x.path === '_templates/bom.md');
+    const t = res.json().templates.find((x: { path: string }) => x.path === '_templates/bom.md');
     expect(t).toBeTruthy();
     expect(t.targetFolder).toBe('別');
+  }, 30_000);
+
+  it('?folder= を指定すると保存済み設定ではなくそのフォルダ配下を列挙する(#100)', async () => {
+    await writeTemplate('_templates/既定.md', '# 既定\n');
+    await writeTemplate('other/x.md', '# x\n');
+    const res = await apiAs(admin, 'GET', `/api/templates?folder=${encodeURIComponent('other')}`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().templates.map((t: { path: string }) => t.path)).toEqual(['other/x.md']);
+  }, 30_000);
+
+  it('?folder= は一般ユーザーだと403(#100)', async () => {
+    await writeTemplate('other/x.md', '# x\n');
+    const res = await apiAs(yamada, 'GET', '/api/templates?folder=other');
+    expect(res.statusCode).toBe(403);
+  }, 30_000);
+
+  it('?folder= にライブラリ外を指すパスや空文字を渡すと空配列(#100)', async () => {
+    await writeTemplate('_templates/既定.md', '# 既定\n');
+    for (const folder of ['../', '../x', '/etc', '']) {
+      const res = await apiAs(admin, 'GET', `/api/templates?folder=${encodeURIComponent(folder)}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ templates: [] });
+    }
+  }, 30_000);
+
+  it('?folder= で .git 等のドット始まりフォルダを指定しても列挙しない(#100)', async () => {
+    await writeTemplate('.tsumiwiki/秘密.md', '# x\n');
+    const res = await apiAs(
+      admin,
+      'GET',
+      `/api/templates?folder=${encodeURIComponent('.tsumiwiki')}`,
+    );
+    expect(res.json()).toEqual({ templates: [] });
   }, 30_000);
 
   it('templates.folder が空文字だとテンプレ機能無効として空配列を返す(ルートスキャン防止)', async () => {
@@ -322,10 +355,7 @@ describe('POST /api/templates/apply', () => {
   }, 30_000);
 
   it('BOM 付きテンプレでも frontmatter を認識して展開し、BOM を新文書に持ち込まない', async () => {
-    await writeTemplate(
-      '_templates/bom-apply.md',
-      '﻿---\ntarget_folder: 別\n---\n\n# {{title}}\n',
-    );
+    await writeTemplate('_templates/bom-apply.md', '﻿---\ntarget_folder: 別\n---\n\n# {{title}}\n');
     const res = await apiAs(yamada, 'POST', '/api/templates/apply', {
       templatePath: '_templates/bom-apply.md',
       title: 'ノート',
@@ -446,10 +476,7 @@ describe('POST /api/templates/expand (#84 Phase C)', () => {
   }, 30_000);
 
   it('BOM 付きテンプレでも frontmatter を認識して展開する', async () => {
-    await writeTemplate(
-      '_templates/bom-exp.md',
-      '﻿---\ncategory: log\n---\n\n本文 {{title}}\n',
-    );
+    await writeTemplate('_templates/bom-exp.md', '﻿---\ncategory: log\n---\n\n本文 {{title}}\n');
     const res = await apiAs(yamada, 'POST', '/api/templates/expand', {
       templatePath: '_templates/bom-exp.md',
       title: 'X',

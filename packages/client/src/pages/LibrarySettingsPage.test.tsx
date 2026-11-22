@@ -11,6 +11,7 @@ import { LibrarySettingsPage } from './LibrarySettingsPage';
 interface Call {
   method: string;
   path: string;
+  url: string;
   body?: unknown;
 }
 
@@ -63,6 +64,8 @@ function stubFetch(
   settings = LIBRARY_SETTINGS_DEFAULTS,
   options?: {
     previewResponse?: typeof SAMPLE_PREVIEW;
+    // #100: `?folder=` ごとのテンプレ一覧。未指定のフォルダは空配列を返す
+    templatesByFolder?: Record<string, string[]>;
   },
 ) {
   const calls: Call[] = [];
@@ -70,7 +73,7 @@ function stubFetch(
     const method = (init?.method ?? 'GET').toUpperCase();
     const [path] = url.split('?');
     const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
-    calls.push({ method, path, body });
+    calls.push({ method, path, url, body });
 
     if (path === '/api/auth/me') {
       return Promise.resolve({
@@ -100,6 +103,22 @@ function stubFetch(
         ok: true,
         status: 200,
         json: () => Promise.resolve({ settings: body }),
+      });
+    }
+    if (path === '/api/templates' && method === 'GET') {
+      const folder = new URL(url, 'http://localhost').searchParams.get('folder') ?? '';
+      const paths = options?.templatesByFolder?.[folder] ?? [];
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            templates: paths.map((p) => ({
+              path: p,
+              name: p.replace(/^.*\//, '').replace(/\.md$/, ''),
+              targetFolder: null,
+            })),
+          }),
       });
     }
     if (path === '/api/attachments/reorganize/preview' && method === 'POST') {
@@ -319,5 +338,120 @@ describe('LibrarySettingsPage', () => {
     expect(lockWarn.textContent).toContain('山田');
     const execBtn = screen.getByRole('button', { name: '整理を実行' }) as HTMLButtonElement;
     expect(execBtn.disabled).toBe(true);
+  });
+
+  describe('適用するテンプレートの選択(#100)', () => {
+    const withTemplate = (template: string) => ({
+      ...LIBRARY_SETTINGS_DEFAULTS,
+      templates: { folder: '_templates' },
+      dailyNotes: { ...LIBRARY_SETTINGS_DEFAULTS.dailyNotes, template },
+    });
+
+    function templateSelect(): HTMLSelectElement {
+      return screen.getByLabelText('適用するテンプレート') as HTMLSelectElement;
+    }
+
+    function optionValues(): string[] {
+      return Array.from(templateSelect().options).map((o) => o.value);
+    }
+
+    it('Given 保存済みのテンプレが一覧にある When 開く Then select でそれが選ばれ、警告は出ない', async () => {
+      stubFetch(false, withTemplate('_templates/日誌.md'), {
+        templatesByFolder: { _templates: ['_templates/日誌.md', '_templates/週報.md'] },
+      });
+      renderPage();
+
+      await waitFor(() => {
+        expect(optionValues()).toEqual(['', '_templates/日誌.md', '_templates/週報.md']);
+      });
+      expect(templateSelect().value).toBe('_templates/日誌.md');
+      expect(screen.queryByText(/見つかりません/)).toBeNull();
+    });
+
+    it('Given 保存済みの値が一覧に無い When 開く Then 値は選ばれたまま警告が出て、保存しても値は変わらない', async () => {
+      const calls = stubFetch(false, withTemplate('_templates/日誌.md.md'), {
+        templatesByFolder: { _templates: ['_templates/日誌.md'] },
+      });
+      renderPage();
+
+      await screen.findByText(/テンプレートフォルダ内に見つかりません/);
+      expect(templateSelect().value).toBe('_templates/日誌.md.md');
+      expect(optionValues()).toEqual(['', '_templates/日誌.md.md', '_templates/日誌.md']);
+
+      // 別の項目だけ変えて保存しても、テンプレの値は勝手に書き換わらない
+      fireEvent.change(screen.getByPlaceholderText('YYYY-MM-DD'), {
+        target: { value: 'YYYY/MM/DD' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: '保存' }));
+      await waitFor(() => {
+        expect(calls.some((c) => c.path === '/api/library/settings' && c.method === 'PUT')).toBe(
+          true,
+        );
+      });
+      const put = calls.find((c) => c.path === '/api/library/settings' && c.method === 'PUT');
+      expect((put?.body as { dailyNotes: { template: string } }).dailyNotes.template).toBe(
+        '_templates/日誌.md.md',
+      );
+    });
+
+    it('When テンプレフォルダ欄を書き換える Then ?folder=<新しい値> で再取得され、選択肢が入れ替わる', async () => {
+      const calls = stubFetch(false, withTemplate(''), {
+        templatesByFolder: {
+          _templates: ['_templates/日誌.md'],
+          snippets: ['snippets/a.md', 'snippets/b.md'],
+        },
+      });
+      renderPage();
+
+      await waitFor(() => {
+        expect(optionValues()).toEqual(['', '_templates/日誌.md']);
+      });
+
+      fireEvent.change(screen.getByPlaceholderText('_templates'), {
+        target: { value: 'snippets' },
+      });
+
+      await waitFor(() => {
+        expect(optionValues()).toEqual(['', 'snippets/a.md', 'snippets/b.md']);
+      });
+      expect(calls.some((c) => c.url === '/api/templates?folder=snippets')).toBe(true);
+    });
+
+    it('Given テンプレフォルダが空欄 Then 「空欄のため選べない」と出て「.md がありません」は出ない', async () => {
+      stubFetch(false, {
+        ...withTemplate(''),
+        templates: { folder: '' },
+      });
+      renderPage();
+
+      await screen.findByText(/テンプレートフォルダが空欄のため/);
+      expect(screen.queryByText(/\.md ファイルがありません/)).toBeNull();
+    });
+
+    it('Given テンプレフォルダに .md が無い Then 「.md ファイルがありません」と出る', async () => {
+      stubFetch(false, withTemplate(''), { templatesByFolder: { _templates: [] } });
+      renderPage();
+
+      await screen.findByText(/\.md ファイルがありません/);
+      expect(screen.queryByText(/テンプレートフォルダが空欄のため/)).toBeNull();
+    });
+
+    it('When 「使わない」を選んで保存する Then PUT の dailyNotes.template が空文字になる', async () => {
+      const calls = stubFetch(false, withTemplate('_templates/日誌.md'), {
+        templatesByFolder: { _templates: ['_templates/日誌.md'] },
+      });
+      renderPage();
+
+      await waitFor(() => {
+        expect(templateSelect().value).toBe('_templates/日誌.md');
+      });
+      fireEvent.change(templateSelect(), { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+      await waitFor(() => {
+        const put = calls.find((c) => c.path === '/api/library/settings' && c.method === 'PUT');
+        expect((put?.body as { dailyNotes: { template: string } }).dailyNotes.template).toBe('');
+      });
+    });
   });
 });
