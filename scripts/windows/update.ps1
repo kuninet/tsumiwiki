@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # TsumiWiki update script for Windows / PowerShell.
 #
 # 1. Preflight: git / pnpm must be on PATH (an elevated prompt may lack
