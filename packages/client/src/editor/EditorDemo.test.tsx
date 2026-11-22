@@ -1,6 +1,16 @@
 import { render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EditorDemo } from './EditorDemo';
+
+// サンプル文書の mermaid ブロックで本物の mermaid を読み込むと、Mac の初回実行で
+// 読み込みだけで数秒かかりタイムアウトする(#339)。このテストはMarkdown出力の保全だけを
+// 確かめるので、code-block-view.test.tsx と同じくモックする。
+vi.mock('mermaid', () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn().mockResolvedValue({ svg: '<svg data-mermaid-mock="true"></svg>' }),
+  },
+}));
 
 describe('EditorDemo', () => {
   it('エディタが起動し、サンプルのwikilinkがMarkdown出力に保全される', async () => {
