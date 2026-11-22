@@ -1,0 +1,5 @@
+# Windows 向けスクリプトは cmd.exe / PowerShell が CRLF を前提に解釈するため、取り出し時に CRLF にする(#183)。
+# .ps1 は Windows PowerShell 5.1 が BOM なし UTF-8 を ANSI として読むので、BOM 付き UTF-8 でコミットしている(CI で確認)。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

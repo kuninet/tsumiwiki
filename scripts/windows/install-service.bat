@@ -88,7 +88,9 @@ if errorlevel 1 goto :fail
 "%NSSM_EXE%" set "%SERVICE_NAME%" AppStderr      "%LOG_DIR%\service-stderr.log"
 "%NSSM_EXE%" set "%SERVICE_NAME%" AppRotateFiles 1
 "%NSSM_EXE%" set "%SERVICE_NAME%" AppRotateBytes 10485760
-REM Graceful stop: send Ctrl+C, wait up to 15s, then kill process tree.
+REM Graceful stop: NSSM tries Ctrl+C, WM_CLOSE and thread exit in this order,
+REM waiting up to 15s for each, then kills the process tree.
+REM The waits add up, so a stop can take about 45s in the worst case.
 "%NSSM_EXE%" set "%SERVICE_NAME%" AppStopMethodSkip     0
 "%NSSM_EXE%" set "%SERVICE_NAME%" AppStopMethodConsole  15000
 "%NSSM_EXE%" set "%SERVICE_NAME%" AppStopMethodWindow   15000

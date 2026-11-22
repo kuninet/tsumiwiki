@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # TsumiWiki を Windows サービスとして登録する(NSSM 経由)
 #
 # 前提:
@@ -74,7 +74,8 @@ if ($LASTEXITCODE -ne 0) { throw 'nssm install が失敗しました。' }
 & $nssm set $ServiceName AppStderr             (Join-Path $LogDir 'service-stderr.log')
 & $nssm set $ServiceName AppRotateFiles        1
 & $nssm set $ServiceName AppRotateBytes        10485760
-# 停止手順: Ctrl+C を送って 15 秒待ち、駄目ならプロセスツリーを kill
+# 停止手順: Ctrl+C → WM_CLOSE → スレッド終了の順に試し、それぞれ最大 15 秒待つ。
+# どれでも止まらなければプロセスツリーを kill する。待ち時間は足し算になるので、最悪で約 45 秒かかる
 & $nssm set $ServiceName AppStopMethodSkip     0
 & $nssm set $ServiceName AppStopMethodConsole  15000
 & $nssm set $ServiceName AppStopMethodWindow   15000
