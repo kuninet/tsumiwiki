@@ -19,11 +19,20 @@ export const TEMPLATES_QUERY_KEY = ['templates'] as const;
 
 // テンプレ一覧はモーダルが mount された時だけ呼ばれる(呼び出し側で条件付き render するのが前提)。
 // 頻繁には変わらない想定なので staleTime を長めに置いてモーダル再オープン時の再フェッチを避ける。
-export function useTemplates() {
+// #100: folder を渡すと、保存済み設定ではなくそのフォルダ配下を列挙する(ライブラリ設定画面用)。
+// queryKey は ['templates', { folder }] にして、TEMPLATES_QUERY_KEY の前方一致で一括無効化できるようにする
+export function useTemplates(folder?: string, options?: { enabled?: boolean }) {
   return useQuery({
-    queryKey: TEMPLATES_QUERY_KEY,
-    queryFn: () => api<ListTemplatesResponse>('GET', '/api/templates'),
+    queryKey: folder === undefined ? TEMPLATES_QUERY_KEY : [...TEMPLATES_QUERY_KEY, { folder }],
+    queryFn: () =>
+      api<ListTemplatesResponse>(
+        'GET',
+        folder === undefined
+          ? '/api/templates'
+          : `/api/templates?folder=${encodeURIComponent(folder)}`,
+      ),
     staleTime: 30_000,
+    enabled: options?.enabled ?? true,
   });
 }
 

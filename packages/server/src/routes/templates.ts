@@ -20,6 +20,7 @@ import { authorOf, handling } from './docs.js';
 
 // #84 Phase B/C: テンプレート機能。
 // - GET  /api/templates       : `settings.templates.folder` 配下の `.md` を再帰列挙する
+//                               (`?folder=` 指定時はそのフォルダ配下。#100)
 // - POST /api/templates/apply : 選択したテンプレの変数を展開し、新規文書として作成する(Phase B)
 // - POST /api/templates/expand: 選択したテンプレの変数を展開して Markdown を返す(Phase C。
 //                               既存文書への挿入/追記用。新規文書は作らない)
@@ -76,10 +77,7 @@ function stripTemplateMeta(raw: string): { body: string; targetFolder?: string }
   return { body: `---\n${doc.toString()}---\n${remainingBody}`, targetFolder };
 }
 
-async function listTemplatesUnder(
-  libAbs: string,
-  folderRel: string,
-): Promise<TemplateSummary[]> {
+async function listTemplatesUnder(libAbs: string, folderRel: string): Promise<TemplateSummary[]> {
   // 中#6: templates.folder が空 = テンプレ機能未セットアップとみなして空を返す
   // (ルートから全 md を走査してテンプレ非管理の文書を混入させないため)
   if (!folderRel || folderRel.trim() === '') return [];
@@ -199,8 +197,24 @@ async function readTemplate(
 export const templatesRoutes: FastifyPluginCallback = (app, _opts, done) => {
   app.get('/api/templates', async (req, reply) => {
     if (!req.user) return sendError(reply, 401, 'UNAUTHORIZED', '認証が必要です');
-    const { settings } = await app.librarySettingsService.get();
-    const templates = await listTemplatesUnder(app.config.libraryPath, settings.templates.folder);
+    // #100: `?folder=` があればそのフォルダ配下を列挙する。ライブラリ設定画面で、
+    // 保存前のテンプレフォルダ入力値に合わせてドロップダウンの候補を出すため。
+    // 不正なパスや空文字は listTemplatesUnder が空配列にする(列挙のみで本文は返さない)
+    // 任意フォルダの全 .md を stat + 先頭読みさせられるため、`?folder=` は管理者(設定画面の利用者)に限る
+    const folderQuery = (req.query as { folder?: unknown } | undefined)?.folder;
+    if (folderQuery !== undefined && req.user.role !== 'admin') {
+      return sendError(
+        reply,
+        403,
+        'FORBIDDEN',
+        'フォルダ指定でのテンプレ一覧は管理者のみが取得できます',
+      );
+    }
+    const folder =
+      typeof folderQuery === 'string'
+        ? folderQuery
+        : (await app.librarySettingsService.get()).settings.templates.folder;
+    const templates = await listTemplatesUnder(app.config.libraryPath, folder);
     return { templates };
   });
 

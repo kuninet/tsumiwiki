@@ -18,6 +18,7 @@ import {
   useLibrarySettings,
   useUpdateLibrarySettings,
 } from '../api/library-settings';
+import { useTemplates } from '../api/templates';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
 // #84 Phase 1: ライブラリ全体のテンプレート・デイリーノート等設定編集画面(admin専用)。
@@ -89,6 +90,23 @@ export function LibrarySettingsPage() {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [lastResult, setLastResult] = useState<ReorganizeExecuteResponse | null>(null);
+
+  // #100: 「適用するテンプレート」の候補は、入力中のテンプレフォルダ配下から取る。
+  //       キー入力ごとに API を叩かないよう 300ms 待ってから反映する(初回は即時)
+  const templatesFolderInput = form?.templates.folder;
+  const [templatesFolder, setTemplatesFolder] = useState<string | null>(null);
+  useEffect(() => {
+    if (templatesFolderInput === undefined) return;
+    if (templatesFolder === null) {
+      setTemplatesFolder(templatesFolderInput);
+      return;
+    }
+    const timer = setTimeout(() => setTemplatesFolder(templatesFolderInput), 300);
+    return () => clearTimeout(timer);
+  }, [templatesFolderInput, templatesFolder]);
+  const templatesQuery = useTemplates(templatesFolder ?? undefined, {
+    enabled: templatesFolder !== null,
+  });
 
   // #99: admin が settings.yaml を手動で修復した後、キャッシュを更新して再取得するための導線
   function handleReload() {
@@ -238,19 +256,13 @@ export function LibrarySettingsPage() {
                 className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
               />
             </label>
-            <label className="mt-3 block text-sm font-medium text-ink-soft">
-              適用するテンプレート
-              <input
-                type="text"
-                value={form.dailyNotes.template}
-                onChange={(e) => handleChange('dailyNotes', 'template', e.target.value)}
-                placeholder="_templates/日誌.md"
-                className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
-              />
-              <span className="mt-1 block text-xs text-ink-faint">
-                空にすると空白のノートが作られます。
-              </span>
-            </label>
+            <DailyTemplateSelect
+              value={form.dailyNotes.template}
+              onChange={(v) => handleChange('dailyNotes', 'template', v)}
+              templatePaths={templatesQuery.data?.templates.map((t) => t.path)}
+              isError={templatesQuery.isError}
+              folderEmpty={(templatesFolder ?? '').trim() === ''}
+            />
             <label className="mt-3 block text-sm font-medium text-ink-soft">
               ファイル名パターン
               <input
@@ -583,6 +595,77 @@ export function LibrarySettingsPage() {
           onCancel={() => setConfirmOpen(false)}
         />
       )}
+    </div>
+  );
+}
+
+// #100: デイリーノートに適用するテンプレートを、テンプレフォルダ配下の実ファイルから選ぶ。
+// 手入力だと `.md` の付け忘れ・二重付与やタイポで、テンプレが当たらない空の日誌ができていた。
+// 既存の settings.yaml に一覧に無いパスが入っている場合も、値を勝手に消さず選択中のまま残して警告する。
+function DailyTemplateSelect({
+  value,
+  onChange,
+  templatePaths,
+  isError,
+  folderEmpty,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  // undefined = 一覧を取得中(または未取得)
+  templatePaths: string[] | undefined;
+  isError: boolean;
+  // テンプレフォルダが空欄 = テンプレ機能オフ。候補が無い理由を「.md が無い」と区別して示す
+  folderEmpty: boolean;
+}) {
+  const paths = templatePaths ?? [];
+  const inList = paths.includes(value);
+  // 一覧の取得が済んで、そこに今の値が無いときだけ「見つからない」と判定する
+  const missing = value !== '' && templatePaths !== undefined && !inList;
+  return (
+    <div className="mt-3">
+      <label htmlFor="daily-note-template" className="block text-sm font-medium text-ink-soft">
+        適用するテンプレート
+      </label>
+      <select
+        id="daily-note-template"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full rounded border border-line bg-panel-2 px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none"
+      >
+        <option value="">(テンプレートを使わない)</option>
+        {value !== '' && !inList && (
+          <option value={value}>{missing ? `${value}(見つかりません)` : value}</option>
+        )}
+        {paths.map((p) => (
+          <option key={p} value={p}>
+            {p}
+          </option>
+        ))}
+      </select>
+      {missing && (
+        <span className="mt-1 block text-xs text-warning">
+          このテンプレートはテンプレートフォルダ内に見つかりません:{' '}
+          <span className="font-mono">{value}</span>
+        </span>
+      )}
+      {isError && (
+        <span className="mt-1 block text-xs text-warning">
+          テンプレートの一覧を取得できませんでした。
+        </span>
+      )}
+      {folderEmpty && (
+        <span className="mt-1 block text-xs text-ink-faint">
+          テンプレートフォルダが空欄のため、選べるテンプレートはありません。
+        </span>
+      )}
+      {!folderEmpty && templatePaths !== undefined && paths.length === 0 && (
+        <span className="mt-1 block text-xs text-ink-faint">
+          テンプレートフォルダに .md ファイルがありません。
+        </span>
+      )}
+      <span className="mt-1 block text-xs text-ink-faint">
+        「使わない」にすると空白のノートが作られます。
+      </span>
     </div>
   );
 }

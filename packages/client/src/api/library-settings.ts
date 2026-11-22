@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { LibrarySettings } from '@tsumiwiki/shared';
 import { ApiRequestError, api } from './client';
+import { TEMPLATES_QUERY_KEY } from './templates';
 import { useToastStore } from '../stores/toast';
 
 // #84 Phase 1: ライブラリ設定(テンプレ・デイリーノート)の R/W
@@ -39,6 +40,8 @@ export function useUpdateLibrarySettings() {
         settings: res.settings,
         corrupted: false,
       } satisfies LibrarySettingsData);
+      // #100: テンプレフォルダが変わると、テンプレ選択モーダルの一覧(保存済みフォルダ基準)も古くなる
+      void queryClient.invalidateQueries({ queryKey: TEMPLATES_QUERY_KEY });
       showToast('success', 'ライブラリ設定を保存しました');
     },
     onError: (err) => {
