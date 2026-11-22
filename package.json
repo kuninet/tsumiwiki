@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "packageManager": "pnpm@10.34.3",
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "pnpm --parallel --recursive dev",
