@@ -6,9 +6,9 @@ TsumiWikiをWindows PCで本番運用するための手順(設計01章1.4)。
 
 | ソフトウェア | バージョン | 備考 |
 |---|---|---|
-| Node.js | 20.19以上(22系推奨。Dockerイメージは22) | https://nodejs.org/ |
+| Node.js | 22以上(Dockerイメージも22) | https://nodejs.org/ |
 | Git for Windows | 2.30以上 | https://gitforwindows.org/ 。履歴管理・バックアップに必須 |
-| pnpm | 10系(package.jsonでpin) | corepackで有効化。11系はNode 22必須で非採用 |
+| pnpm | 10系(package.jsonでpin) | corepackで有効化。11系への更新は別途検討(現状は10系でpin) |
 | NSSM | 2.24以上 | https://nssm.cc/ 。Windowsサービス化(6章) |
 
 インストール後、PowerShellで確認:

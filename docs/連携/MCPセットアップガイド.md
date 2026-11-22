@@ -10,7 +10,7 @@ TsumiWiki を Remote MCP サーバーとして起動し、Claude Desktop / Claud
 
 ## 1. 前提条件
 
-- TsumiWiki サーバーが動く環境(Node.js 20.19 以上)。詳細は [Windowsセットアップ](../導入/Windowsセットアップ.md)
+- TsumiWiki サーバーが動く環境(Node.js 22 以上)。詳細は [Windowsセットアップ](../導入/Windowsセットアップ.md)
 - **HTTPS 必須**。Bearer トークンを平文で送るため、素の HTTP で外部公開しない
   - 自宅内 → Tailscale / WireGuard で VPN 経由
   - 外部公開 → Cloudflare Tunnel / Caddy / Nginx でリバースプロキシ + Let's Encrypt

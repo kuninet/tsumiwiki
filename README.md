@@ -26,7 +26,7 @@ TsumiWikiは、ObsidianライクなWYSIWYG Markdownエディタを備えた、�
 
 ## 開発
 
-必要環境: Node.js 20.19以上、pnpm 10(corepackで自動選択されます)
+必要環境: Node.js 22以上、pnpm 10(corepackで自動選択されます)
 
 ```bash
 corepack enable          # 初回のみ。package.json記載のpnpmが使われる
