@@ -57,7 +57,7 @@ curl -i -X POST http://localhost:3000/mcp
 # WWW-Authenticate: Bearer realm="tsumiwiki-mcp"
 ```
 
-正しいトークンで `tools/list` を叩き、31 個のツールが返ることを確認:
+正しいトークンで `tools/list` を叩き、33 個のツールが返ることを確認:
 
 ```bash
 export MCP_TOKEN=<設定したトークン>
@@ -192,7 +192,7 @@ Claude Desktop は `headers` を省く:
 
 ## 5. 公開ツール一覧
 
-Read 9 種 + 履歴 5 種 + Write 11 種 + 添付 1 種 + ごみ箱 2 種 + 記録の手順 1 種 + ライブラリ運用 2 種の計 31 個。文書操作は全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。ライブラリ運用ツールは REST の `/api/library/*` と同じ処理を呼ぶ。
+Read 9 種 + 履歴 5 種 + Write 11 種 + 添付 3 種 + ごみ箱 2 種 + 記録の手順 1 種 + ライブラリ運用 2 種の計 33 個。文書操作は全て `docService` / `queryService` 経由で動作するため、UI 経由の書き込みと同じくパス検証・Git コミット・SQLite 索引更新を経由する。ライブラリ運用ツールは REST の `/api/library/*` と同じ処理を呼ぶ。
 
 ### Read
 
@@ -241,6 +241,8 @@ Read 9 種 + 履歴 5 種 + Write 11 種 + 添付 1 種 + ごみ箱 2 種 + 記�
 | ツール | 引数 | 用途 |
 |---|---|---|
 | `upload_attachment` | `docPath: string`, `fileName: string`, `dataBase64: string` | ノートに画像または PDF を添付ファイルとして保存する(長辺超過時は自動縮小・EXIF 除去)。本文への挿入は呼び出し側で行う(戻り値の `embed` または `![[${embedTarget}]]`) |
+| `read_attachment` | `docPath: string`, `name: string` | ノートに埋め込まれた添付を読む。SVG は本文テキスト、画像(png / jpg / jpeg / gif / webp)は image content、PDF はメタ情報のみ返す |
+| `list_attachments` | `docPath: string` | ノートが埋め込み(`![[...]]` / `![](...)`)で参照している添付の一覧(`name` / `path` / `size` / `mimeType` / `exists`)を返す |
 
 - **`upload_attachment` の仕様と使用例**:
   - **引数**:
@@ -255,6 +257,18 @@ Read 9 種 + 履歴 5 種 + Write 11 種 + 添付 1 種 + ごみ箱 2 種 + 記�
   - **注意**:
     - デコード後のファイルサイズが `MAX_UPLOAD_MB`(既定 20MB)を超える場合は `PAYLOAD_TOO_LARGE` エラーが返ります。
     - Fastify の `/mcp` ルートには base64 展開後のサイズを考慮した `bodyLimit` (約 27MB) が設定されています。これを超える巨大な HTTP リクエストは Fastify レベルで HTTP 413 (`FST_ERR_CTP_BODY_TOO_LARGE`) となり、ツール実行まで届きません。
+
+- **`read_attachment` / `list_attachments` の仕様**(読み取り専用。ロックは取らない):
+  - **`name`**: 埋め込みの書き方のままのファイル名(例: `image-20261116222509.svg`)。`docPath` のノートの位置を起点に、画面の `![[...]]` と同じ規則で実ファイルを解決する(添付の保存先設定に沿う)。先頭の `/` は画面と同じくライブラリ基準として扱う
+  - **返却形式**:
+    - SVG: `content[0]` が SVG 本文(text)、`content[1]` がメタ情報の JSON
+    - 画像: `content[0]` が image(base64 + `mimeType`)、`content[1]` がメタ情報の JSON
+    - PDF: メタ情報のみ(`structuredContent` と `content[0]` の JSON)
+    - メタ情報は `{ name, path, size, mimeType, updatedAt, kind }`(`kind` は `text` / `image` / `meta`)。本文つきの成功時は `structuredContent` を付けない(`structuredContent` を優先するクライアントで本文が落ちるのを避けるため)
+  - **返却サイズの上限**: 画像 5 MiB、SVG 256 KiB。超過時は内容を返さず、メタ情報と `limit` を添えて `PAYLOAD_TOO_LARGE`。PDF のメタ情報には上限なし
+  - **対象**: ノートに索引される添付(png / jpg / jpeg / gif / webp / svg / pdf)のみ。`.txt` / `.csv` / `.json` などは対象外
+  - **`list_attachments`**: 戻り値は `{ docPath, attachments: [...] }`。参照先が見つからない・ライブラリ外を指す場合は `path` / `size` が `null`、`exists: false`。`![](...)` は画面と同じく、URL デコード後にノートのフォルダ基準の相対パスで解決し、見つからなければファイル名で索引解決する。リンク付き画像 `[![alt](a.png)](https://...)` も含める。通常のリンク(`[仕様](spec.pdf)`)とコードブロック内の記述は含めない
+  - **エラー**(`isError` と `structuredContent.code`): `NOT_FOUND`(ノート・添付が無い)、`INVALID_PATH`(`..`・`C:` などのドライブ指定・UNC・シンボリックリンクなどでライブラリの外を指す)、`PAYLOAD_TOO_LARGE`
 
 ### ごみ箱
 

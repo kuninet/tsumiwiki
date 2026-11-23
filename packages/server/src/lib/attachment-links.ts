@@ -27,20 +27,62 @@ export function splitTargetSuffix(rawTarget: string): { pathPart: string; suffix
 }
 
 // 本文中のコードブロック・インラインコード外のリンク target 一覧を抽出する(#199)
-export function extractLinkTargets(body: string): string[] {
+export interface LinkRef {
+  target: string;
+  // 標準 Markdown 記法(`[](...)` / `![](...)`)か。false は Wikilink(`[[...]]` / `![[...]]`)
+  markdown: boolean;
+}
+
+// 本文中のコードブロック・インラインコード外のリンク参照を出現順に抽出する。
+// embedsOnly: true なら埋め込み(`![[...]]` / `![](...)`)だけを対象にする(#345)。
+// リンク付き画像 `[![alt](a.png)](https://x)` は MD_LINK_REWRITE_RE が外側の `[` から
+// マッチし m[1] が `[![alt](` になるため、alt 部分に `![` を含む場合も埋め込みとみなす
+function collectLinkRefs(body: string, embedsOnly: boolean): LinkRef[] {
   const ranges = computeCodeRanges(body);
-  const result = new Set<string>();
-  const consider = (m: RegExpMatchArray) => {
+  const result: LinkRef[] = [];
+  const seen = new Set<string>();
+  const consider = (m: RegExpMatchArray, markdown: boolean) => {
+    if (embedsOnly && !m[1].startsWith('!') && !(markdown && m[1].slice(1, -2).includes('!['))) {
+      return;
+    }
     const offset = (m.index ?? 0) + m[1].length;
     if (isWithinCode(ranges, offset)) return;
     const { pathPart } = splitTargetSuffix(m[2]);
     if (!pathPart) return;
     if (EXCLUDED_SCHEME_RE.test(pathPart)) return;
-    result.add(pathPart);
+    const key = `${markdown ? 'm' : 'w'}:${pathPart}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push({ target: pathPart, markdown });
   };
-  for (const m of body.matchAll(WIKILINK_REWRITE_RE)) consider(m);
-  for (const m of body.matchAll(MD_LINK_REWRITE_RE)) consider(m);
-  return [...result];
+  for (const m of body.matchAll(WIKILINK_REWRITE_RE)) consider(m, false);
+  for (const m of body.matchAll(MD_LINK_REWRITE_RE)) consider(m, true);
+  return result;
+}
+
+// 本文中のコードブロック・インラインコード外のリンク target 一覧を抽出する(#199)
+export function extractLinkTargets(body: string, options?: { embedsOnly?: boolean }): string[] {
+  return [...new Set(collectLinkRefs(body, options?.embedsOnly ?? false).map((r) => r.target))];
+}
+
+// 埋め込み(`![[...]]` / `![](...)`)の参照を、記法の種別つきで抽出する(#345)
+export function extractEmbedRefs(body: string): LinkRef[] {
+  return collectLinkRefs(body, true);
+}
+
+// URI エンコード済みのパスをセグメント単位で安全にデコードする
+// (クライアントの resolveImageSrc と同じ。不正なエスケープはそのまま残す)
+export function decodeUriPathSegments(rawPath: string): string {
+  return rawPath
+    .split('/')
+    .map((seg) => {
+      try {
+        return decodeURIComponent(seg);
+      } catch {
+        return seg;
+      }
+    })
+    .join('/');
 }
 
 export interface AttachmentCandidate {
