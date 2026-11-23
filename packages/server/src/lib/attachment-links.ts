@@ -27,10 +27,12 @@ export function splitTargetSuffix(rawTarget: string): { pathPart: string; suffix
 }
 
 // 本文中のコードブロック・インラインコード外のリンク target 一覧を抽出する(#199)
-export function extractLinkTargets(body: string): string[] {
+// embedsOnly: true なら埋め込み記法(`![[...]]` / `![](...)`)だけを対象にする(#345)
+export function extractLinkTargets(body: string, options?: { embedsOnly?: boolean }): string[] {
   const ranges = computeCodeRanges(body);
   const result = new Set<string>();
   const consider = (m: RegExpMatchArray) => {
+    if (options?.embedsOnly && !m[1].startsWith('!')) return;
     const offset = (m.index ?? 0) + m[1].length;
     if (isWithinCode(ranges, offset)) return;
     const { pathPart } = splitTargetSuffix(m[2]);

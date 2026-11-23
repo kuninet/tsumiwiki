@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
 import sharp from 'sharp';
@@ -9,7 +9,13 @@ import { buildApp } from '../app.js';
 import { loadConfig } from '../config.js';
 import { openDatabase } from '../db/index.js';
 import { InvalidPathError } from '../lib/paths.js';
-import { decodeBase64Strict } from './tools/attachments.js';
+import {
+  READ_ATTACHMENT_MAX_IMAGE_BYTES,
+  READ_ATTACHMENT_MAX_TEXT_BYTES,
+  classifyAttachment,
+  decodeBase64Strict,
+  isInvalidAttachmentName,
+} from './tools/attachments.js';
 import {
   DocNotFoundError,
   DocConflictError,
@@ -163,7 +169,7 @@ describe('POST /mcp JSON-RPC', () => {
     expect(res.json().result.serverInfo.name).toBe('tsumiwiki');
   });
 
-  it('tools/listで期待する31個のツール名が全て含まれる', async () => {
+  it('tools/listで期待する33個のツール名が全て含まれる', async () => {
     const res = await mcpRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(res.statusCode).toBe(200);
     const names = res.json().result.tools.map((t: { name: string }) => t.name);
@@ -199,12 +205,14 @@ describe('POST /mcp JSON-RPC', () => {
       'get_library_status',
       'rescan_library',
       'upload_attachment',
+      'read_attachment',
+      'list_attachments',
     ];
     for (const name of expected) {
       expect(names).toContain(name);
     }
-    expect(expected).toHaveLength(31);
-    expect(names).toHaveLength(31);
+    expect(expected).toHaveLength(33);
+    expect(names).toHaveLength(33);
   });
 
   it('search_notesを何もない状態で呼ぶと空配列が返る', async () => {
@@ -4591,5 +4599,350 @@ describe('delete_note / trash での専属添付同伴と復元(#161)', () => {
     expect(restored.structuredContent.path).toBe('メモ/記事.md');
     expect(statSync(join(lib, 'メモ', '記事.md')).isFile()).toBe(true);
     expect(statSync(join(lib, 'メモ', 'solo.png')).isFile()).toBe(true);
+  });
+});
+
+describe('添付ファイル読み取り(read_attachment / list_attachments)', () => {
+  let seq = 4700;
+
+  beforeEach(async () => {
+    await buildMcpApp();
+  });
+
+  async function callTool(name: string, args: Record<string, unknown> = {}) {
+    const res = await mcpRequest({
+      jsonrpc: '2.0',
+      id: seq++,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json().result;
+  }
+
+  const TINY_PNG_BASE64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const SVG =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>';
+
+  // ライブラリへ直接ファイルを置いて索引へ反映する(外部エディタで置かれた添付の想定)
+  async function putAttachment(rel: string, data: Buffer | string): Promise<void> {
+    await mkdir(join(lib, ...rel.split('/').slice(0, -1)), { recursive: true });
+    await writeFile(join(lib, ...rel.split('/')), data);
+    await app.indexerService.indexAttachment(rel);
+  }
+
+  describe('正常系', () => {
+    it('SVG: ![[fig.svg]] の添付を本文テキストで返し、メタ情報が付く', async () => {
+      // Given: 同階層に SVG があり、ノートが埋め込んでいる
+      await callTool('create_note', { path: '設計/メモ.md', content: '![[fig.svg]]\n' });
+      await putAttachment('設計/fig.svg', SVG);
+
+      // When
+      const res = await callTool('read_attachment', { docPath: '設計/メモ.md', name: 'fig.svg' });
+
+      // Then
+      expect(res.isError).toBeFalsy();
+      expect(res.content[0]).toEqual({ type: 'text', text: SVG });
+      expect(res.structuredContent).toMatchObject({
+        name: 'fig.svg',
+        path: '設計/fig.svg',
+        size: Buffer.byteLength(SVG),
+        mimeType: 'image/svg+xml',
+        kind: 'text',
+      });
+      expect(typeof res.structuredContent.updatedAt).toBe('string');
+    });
+
+    it('PNG: image content(base64 + mimeType)で返し、元のバイト列と一致する', async () => {
+      // Given: upload_attachment で保存した PNG
+      await callTool('create_note', { path: 'memo.md', content: '# メモ\n' });
+      const up = await callTool('upload_attachment', {
+        docPath: 'memo.md',
+        fileName: 'shot.png',
+        dataBase64: TINY_PNG_BASE64,
+      });
+      const saved = await readFile(join(lib, up.structuredContent.path));
+
+      // When
+      const res = await callTool('read_attachment', {
+        docPath: 'memo.md',
+        name: up.structuredContent.embedTarget,
+      });
+
+      // Then
+      expect(res.isError).toBeFalsy();
+      expect(res.content[0].type).toBe('image');
+      expect(res.content[0].mimeType).toBe('image/png');
+      expect(Buffer.from(res.content[0].data, 'base64').equals(saved)).toBe(true);
+      expect(res.structuredContent).toMatchObject({ mimeType: 'image/png', kind: 'image' });
+    });
+
+    it('PDF: 内容は返さずメタ情報のみ', async () => {
+      // Given
+      await callTool('create_note', { path: 'memo.md', content: '![[spec.pdf]]\n' });
+      const pdf = Buffer.from('%PDF-1.4\n%%EOF\n');
+      await putAttachment('spec.pdf', pdf);
+
+      // When
+      const res = await callTool('read_attachment', { docPath: 'memo.md', name: 'spec.pdf' });
+
+      // Then
+      expect(res.isError).toBeFalsy();
+      expect(res.content).toHaveLength(1);
+      expect(res.content[0].type).toBe('text');
+      expect(res.content[0].text).not.toContain('%PDF');
+      expect(res.structuredContent).toMatchObject({
+        name: 'spec.pdf',
+        path: 'spec.pdf',
+        size: pdf.length,
+        mimeType: 'application/pdf',
+        kind: 'meta',
+      });
+      expect(typeof res.structuredContent.updatedAt).toBe('string');
+    });
+
+    it('添付設定 doc-subfolder でも、![[name]] の解決規則どおり読める', async () => {
+      // Given
+      await callTool('create_note', { path: '企画/メモ.md', content: '# 企画\n' });
+      const base = (await app.librarySettingsService.get()).settings;
+      await app.librarySettingsService.update(
+        { ...base, attachments: { mode: 'doc-subfolder', folder: 'assets' } },
+        { name: 'admin', email: 'admin@example.com' },
+      );
+      const up = await callTool('upload_attachment', {
+        docPath: '企画/メモ.md',
+        fileName: 'd.png',
+        dataBase64: TINY_PNG_BASE64,
+      });
+      expect(up.structuredContent.path).toBe(`企画/assets/${up.structuredContent.fileName}`);
+
+      // When: 保存先フォルダを書かずファイル名だけで読む
+      const res = await callTool('read_attachment', {
+        docPath: '企画/メモ.md',
+        name: up.structuredContent.fileName,
+      });
+
+      // Then
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.path).toBe(up.structuredContent.path);
+    });
+
+    it('先頭 / 付きの名前は画面と同じく剥がして解決する', async () => {
+      await callTool('create_note', { path: 'memo.md', content: '![[/pics/a.svg]]\n' });
+      await putAttachment('pics/a.svg', SVG);
+
+      const res = await callTool('read_attachment', { docPath: 'memo.md', name: '/pics/a.svg' });
+
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.path).toBe('pics/a.svg');
+    });
+
+    it('list_attachments: 埋め込みの参照一覧を exists 付きで返す', async () => {
+      // Given: 実在 2 件 + 欠落 1 件 + ノート埋め込み + 通常リンク + コードブロック内 + 重複
+      await putAttachment('a.png', Buffer.from(TINY_PNG_BASE64, 'base64'));
+      await putAttachment('b.pdf', Buffer.from('%PDF-1.4\n'));
+      await callTool('create_note', { path: '別ノート.md', content: '# 別\n' });
+      await callTool('create_note', {
+        path: 'memo.md',
+        content: [
+          '![[a.png]]',
+          '![](b.pdf)',
+          '![[missing.png|300]]',
+          '![[別ノート]]',
+          '[仕様](b.pdf)',
+          '![[a.png]]',
+          '```',
+          '![[in-code.png]]',
+          '```',
+          '',
+        ].join('\n'),
+      });
+
+      // When
+      const res = await callTool('list_attachments', { docPath: 'memo.md' });
+
+      // Then
+      expect(res.isError).toBeFalsy();
+      const items = res.structuredContent.attachments;
+      expect(items).toHaveLength(3);
+      expect(items).toContainEqual({
+        name: 'a.png',
+        path: 'a.png',
+        size: Buffer.from(TINY_PNG_BASE64, 'base64').length,
+        mimeType: 'image/png',
+        exists: true,
+      });
+      expect(items).toContainEqual({
+        name: 'b.pdf',
+        path: 'b.pdf',
+        size: 9,
+        mimeType: 'application/pdf',
+        exists: true,
+      });
+      expect(items).toContainEqual({
+        name: 'missing.png',
+        path: null,
+        size: null,
+        mimeType: 'image/png',
+        exists: false,
+      });
+    });
+
+    it('list_attachments: 参照が無いノートは空配列', async () => {
+      await callTool('create_note', { path: 'memo.md', content: '# なし\n' });
+      const res = await callTool('list_attachments', { docPath: 'memo.md' });
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.attachments).toEqual([]);
+    });
+  });
+
+  describe('異常系', () => {
+    it('存在しない添付は NOT_FOUND', async () => {
+      await callTool('create_note', { path: 'memo.md', content: '# メモ\n' });
+      const res = await callTool('read_attachment', { docPath: 'memo.md', name: 'nothing.png' });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+    });
+
+    it('存在しないノートは NOT_FOUND(read / list とも)', async () => {
+      const r = await callTool('read_attachment', { docPath: 'none.md', name: 'a.png' });
+      expect(r.isError).toBe(true);
+      expect(r.structuredContent.code).toBe('NOT_FOUND');
+      const l = await callTool('list_attachments', { docPath: 'none.md' });
+      expect(l.isError).toBe(true);
+      expect(l.structuredContent.code).toBe('NOT_FOUND');
+    });
+
+    it('docPath がライブラリ外を指す場合は INVALID_PATH', async () => {
+      const r = await callTool('read_attachment', { docPath: '../x.md', name: 'a.png' });
+      expect(r.isError).toBe(true);
+      expect(r.structuredContent.code).toBe('INVALID_PATH');
+      const l = await callTool('list_attachments', { docPath: '../x.md' });
+      expect(l.isError).toBe(true);
+      expect(l.structuredContent.code).toBe('INVALID_PATH');
+    });
+
+    it('.. ・ドライブ指定・UNC の name は INVALID_PATH', async () => {
+      await callTool('create_note', { path: 'memo.md', content: '# メモ\n' });
+      for (const name of [
+        '../secret.png',
+        'a/../../b.png',
+        '..\\b.png',
+        'C:\\x.png',
+        '\\\\h\\s\\x.png',
+      ]) {
+        const res = await callTool('read_attachment', { docPath: 'memo.md', name });
+        expect(res.isError, name).toBe(true);
+        expect(res.structuredContent.code, name).toBe('INVALID_PATH');
+      }
+    });
+
+    it('OS の絶対パス(/etc/passwd)は先頭 / を剥がして索引を引くだけなので NOT_FOUND', async () => {
+      await callTool('create_note', { path: 'memo.md', content: '# メモ\n' });
+      const res = await callTool('read_attachment', { docPath: 'memo.md', name: '/etc/passwd' });
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('NOT_FOUND');
+    });
+
+    it('ライブラリ外へのシンボリックリンクは INVALID_PATH で、外部の内容を返さない', async (ctx) => {
+      // Given: ライブラリ外のファイルへの symlink を索引に載せる
+      const outside = await mkdtemp(join(tmpdir(), 'tsumiwiki-outside-'));
+      try {
+        await writeFile(join(outside, 'secret.svg'), '<svg>SECRET</svg>');
+        try {
+          await symlink(join(outside, 'secret.svg'), join(lib, 'link.svg'));
+        } catch {
+          ctx.skip(); // symlink を作れない環境(権限のない Windows 等)
+          return;
+        }
+        await app.indexerService.indexAttachment('link.svg');
+        await callTool('create_note', { path: 'memo.md', content: '![[link.svg]]\n' });
+
+        // When
+        const res = await callTool('read_attachment', { docPath: 'memo.md', name: 'link.svg' });
+        const list = await callTool('list_attachments', { docPath: 'memo.md' });
+
+        // Then
+        expect(res.isError).toBe(true);
+        expect(res.structuredContent.code).toBe('INVALID_PATH');
+        expect(JSON.stringify(res)).not.toContain('SECRET');
+        expect(list.structuredContent.attachments).toEqual([
+          { name: 'link.svg', path: null, size: null, mimeType: 'image/svg+xml', exists: false },
+        ]);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('ライブラリ内を指すシンボリックリンクは読める', async (ctx) => {
+      await writeFile(join(lib, 'real.svg'), SVG);
+      try {
+        await symlink(join(lib, 'real.svg'), join(lib, 'inner.svg'));
+      } catch {
+        ctx.skip();
+        return;
+      }
+      await app.indexerService.indexAttachment('inner.svg');
+      await callTool('create_note', { path: 'memo.md', content: '![[inner.svg]]\n' });
+      const res = await callTool('read_attachment', { docPath: 'memo.md', name: 'inner.svg' });
+      expect(res.isError).toBeFalsy();
+    });
+
+    it('画像が上限(5MiB)を超えると PAYLOAD_TOO_LARGE で、内容は返さずメタ情報を付ける', async () => {
+      await callTool('create_note', { path: 'memo.md', content: '![[big.png]]\n' });
+      await putAttachment('big.png', Buffer.alloc(READ_ATTACHMENT_MAX_IMAGE_BYTES + 1));
+
+      const res = await callTool('read_attachment', { docPath: 'memo.md', name: 'big.png' });
+
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent).toMatchObject({
+        code: 'PAYLOAD_TOO_LARGE',
+        name: 'big.png',
+        path: 'big.png',
+        size: READ_ATTACHMENT_MAX_IMAGE_BYTES + 1,
+        mimeType: 'image/png',
+        limit: READ_ATTACHMENT_MAX_IMAGE_BYTES,
+      });
+      expect(res.content.every((c: { type: string }) => c.type === 'text')).toBe(true);
+    });
+
+    it('SVG が上限(256KiB)を超えると PAYLOAD_TOO_LARGE で、本文は返さない', async () => {
+      await callTool('create_note', { path: 'memo.md', content: '![[big.svg]]\n' });
+      await putAttachment('big.svg', 'x'.repeat(READ_ATTACHMENT_MAX_TEXT_BYTES + 1));
+
+      const res = await callTool('read_attachment', { docPath: 'memo.md', name: 'big.svg' });
+
+      expect(res.isError).toBe(true);
+      expect(res.structuredContent.code).toBe('PAYLOAD_TOO_LARGE');
+      expect(JSON.stringify(res)).not.toContain('xxxxxxxx');
+    });
+
+    it('上限ちょうどの SVG は読める', async () => {
+      await callTool('create_note', { path: 'memo.md', content: '![[edge.svg]]\n' });
+      await putAttachment('edge.svg', 'x'.repeat(READ_ATTACHMENT_MAX_TEXT_BYTES));
+      const res = await callTool('read_attachment', { docPath: 'memo.md', name: 'edge.svg' });
+      expect(res.isError).toBeFalsy();
+    });
+  });
+
+  describe('純粋関数', () => {
+    it('classifyAttachment: svg=text / 画像=image / それ以外=meta', () => {
+      expect(classifyAttachment('.svg')).toBe('text');
+      expect(classifyAttachment('.SVG')).toBe('text');
+      for (const e of ['.png', '.jpg', '.jpeg', '.gif', '.webp']) {
+        expect(classifyAttachment(e)).toBe('image');
+      }
+      expect(classifyAttachment('.pdf')).toBe('meta');
+    });
+
+    it('isInvalidAttachmentName', () => {
+      expect(isInvalidAttachmentName('a.png')).toBe(false);
+      expect(isInvalidAttachmentName('/dir/a.png')).toBe(false);
+      expect(isInvalidAttachmentName('dir/..a.png')).toBe(false);
+      expect(isInvalidAttachmentName('../a.png')).toBe(true);
+      expect(isInvalidAttachmentName('C:/a.png')).toBe(true);
+      expect(isInvalidAttachmentName('a\u0000.png')).toBe(true);
+    });
   });
 });
