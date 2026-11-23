@@ -3,10 +3,16 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { extractLinkTargets } from '../../lib/attachment-links.js';
+import {
+  decodeUriPathSegments,
+  extractEmbedRefs,
+  folderOfDoc,
+  resolveMarkdownRelPath,
+  type LinkRef,
+} from '../../lib/attachment-links.js';
 import { MIME_BY_EXT } from '../../lib/attachments.js';
 import { resizeAttachmentImage } from '../../lib/image-resize.js';
-import { InvalidPathError, resolveInLibrary } from '../../lib/paths.js';
+import { InvalidPathError, isProtectedPath, resolveInLibrary } from '../../lib/paths.js';
 import { DocService } from '../../services/doc-service.js';
 import { MCP_AUTHOR } from '../server.js';
 import { docError, toolError, toolResult } from '../tool-result.js';
@@ -83,6 +89,35 @@ export async function resolveAttachmentFile(
   } catch {
     return { ok: false, reason: 'NOT_FOUND' };
   }
+}
+
+// 埋め込み参照を実ファイルに解決する(list_attachments 用)。
+// - Wikilink(`![[...]]`): 画面と同じ添付索引の解決(resolveAttachment)
+// - 標準記法(`![](...)`): 画面(resolveImageSrc → 失敗時 imageFallbackSrc)と同じく、
+//   セグメント単位の URL デコード → ノートのフォルダ基準の相対解決 → だめなら basename で索引解決
+// どちらも解決後は realpath → ライブラリ配下検査 → stat を通す(ルート外・symlink 脱出は ok: false)
+async function resolveEmbedRef(
+  app: FastifyInstance,
+  ref: LinkRef,
+  docPath: string,
+): Promise<{ name: string; rel: string | null; file: ResolvedFile | null }> {
+  const libraryPath = app.config.libraryPath;
+  if (!ref.markdown) {
+    const name = path.posix.basename(ref.target.replaceAll('\\', '/'));
+    const rel = app.indexerService.resolveAttachment(ref.target, docPath);
+    return { name, rel, file: rel ? await resolveAttachmentFile(libraryPath, rel) : null };
+  }
+
+  const decoded = decodeUriPathSegments(ref.target);
+  const name = path.posix.basename(decoded.replaceAll('\\', '/'));
+  const direct = resolveMarkdownRelPath(folderOfDoc(docPath), decoded);
+  if (direct && !isProtectedPath(direct) && !direct.split('/').includes('.trash')) {
+    const file = await resolveAttachmentFile(libraryPath, direct);
+    if (file.ok) return { name, rel: direct, file };
+  }
+  // 画面と同じ basename フォールバック(添付索引の名前一致)
+  const rel = name ? app.indexerService.resolveAttachment(name, docPath) : null;
+  return { name, rel, file: rel ? await resolveAttachmentFile(libraryPath, rel) : null };
 }
 
 export function registerAttachmentTools(mcp: McpServer, app: FastifyInstance): void {
@@ -231,17 +266,15 @@ export function registerAttachmentTools(mcp: McpServer, app: FastifyInstance): v
 
       const metaText = { type: 'text' as const, text: JSON.stringify(meta, null, 2) };
       if (kind === 'text') {
-        return {
-          content: [{ type: 'text' as const, text: data.toString('utf8') }, metaText],
-          structuredContent: meta,
-        };
+        // 本文つきの成功時は structuredContent を付けない(content と形を揃える規約。
+        // structuredContent を優先するクライアントで本文が落ちるのを避ける)。メタは content の JSON に残す
+        return { content: [{ type: 'text' as const, text: data.toString('utf8') }, metaText] };
       }
       return {
         content: [
           { type: 'image' as const, data: data.toString('base64'), mimeType: meta.mimeType },
           metaText,
         ],
-        structuredContent: meta,
       };
     },
   );
@@ -272,14 +305,14 @@ export function registerAttachmentTools(mcp: McpServer, app: FastifyInstance): v
         exists: boolean;
       }[] = [];
       const seen = new Set<string>();
-      for (const target of extractLinkTargets(body, { embedsOnly: true })) {
-        const base = path.posix.basename(target.replaceAll('\\', '/'));
-        const ext = path.posix.extname(base).toLowerCase();
+      for (const ref of extractEmbedRefs(body)) {
+        const ext = path.posix
+          .extname(ref.markdown ? decodeUriPathSegments(ref.target) : ref.target)
+          .toLowerCase();
         const mimeType = MIME_BY_EXT[ext];
         if (!mimeType) continue; // 添付以外(ノート埋め込みなど)は対象外
 
-        const rel = app.indexerService.resolveAttachment(target, docPath);
-        const file = rel ? await resolveAttachmentFile(app.config.libraryPath, rel) : null;
+        const { name, rel, file } = await resolveEmbedRef(app, ref, docPath);
         if (rel && file?.ok) {
           if (seen.has(rel)) continue;
           seen.add(rel);
@@ -292,10 +325,10 @@ export function registerAttachmentTools(mcp: McpServer, app: FastifyInstance): v
           });
         } else {
           // 未解決・実体なし・ライブラリ外を指す場合は、外部の情報を出さず exists: false にする
-          const key = `?${base.normalize('NFC').toLowerCase()}`;
+          const key = `?${name.normalize('NFC').toLowerCase()}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          attachments.push({ name: base, path: null, size: null, mimeType, exists: false });
+          attachments.push({ name, path: null, size: null, mimeType, exists: false });
         }
       }
       return toolResult({ docPath, attachments });

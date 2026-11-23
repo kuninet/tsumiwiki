@@ -261,13 +261,13 @@ Read 9 種 + 履歴 5 種 + Write 11 種 + 添付 3 種 + ごみ箱 2 種 + 記�
 - **`read_attachment` / `list_attachments` の仕様**(読み取り専用。ロックは取らない):
   - **`name`**: 埋め込みの書き方のままのファイル名(例: `image-20261116222509.svg`)。`docPath` のノートの位置を起点に、画面の `![[...]]` と同じ規則で実ファイルを解決する(添付の保存先設定に沿う)。先頭の `/` は画面と同じくライブラリ基準として扱う
   - **返却形式**:
-    - SVG: `content[0]` が SVG 本文(text)
-    - 画像: `content[0]` が image(base64 + `mimeType`)
-    - PDF: メタ情報のみ
-    - いずれも `structuredContent` に `{ name, path, size, mimeType, updatedAt, kind }`(`kind` は `text` / `image` / `meta`)
+    - SVG: `content[0]` が SVG 本文(text)、`content[1]` がメタ情報の JSON
+    - 画像: `content[0]` が image(base64 + `mimeType`)、`content[1]` がメタ情報の JSON
+    - PDF: メタ情報のみ(`structuredContent` と `content[0]` の JSON)
+    - メタ情報は `{ name, path, size, mimeType, updatedAt, kind }`(`kind` は `text` / `image` / `meta`)。本文つきの成功時は `structuredContent` を付けない(`structuredContent` を優先するクライアントで本文が落ちるのを避けるため)
   - **返却サイズの上限**: 画像 5 MiB、SVG 256 KiB。超過時は内容を返さず、メタ情報と `limit` を添えて `PAYLOAD_TOO_LARGE`。PDF のメタ情報には上限なし
   - **対象**: ノートに索引される添付(png / jpg / jpeg / gif / webp / svg / pdf)のみ。`.txt` / `.csv` / `.json` などは対象外
-  - **`list_attachments`**: 戻り値は `{ docPath, attachments: [...] }`。参照先が見つからない・ライブラリ外を指す場合は `path` / `size` が `null`、`exists: false`。通常のリンク(`[仕様](spec.pdf)`)とコードブロック内の記述は含めない
+  - **`list_attachments`**: 戻り値は `{ docPath, attachments: [...] }`。参照先が見つからない・ライブラリ外を指す場合は `path` / `size` が `null`、`exists: false`。`![](...)` は画面と同じく、URL デコード後にノートのフォルダ基準の相対パスで解決し、見つからなければファイル名で索引解決する。リンク付き画像 `[![alt](a.png)](https://...)` も含める。通常のリンク(`[仕様](spec.pdf)`)とコードブロック内の記述は含めない
   - **エラー**(`isError` と `structuredContent.code`): `NOT_FOUND`(ノート・添付が無い)、`INVALID_PATH`(`..`・`C:` などのドライブ指定・UNC・シンボリックリンクなどでライブラリの外を指す)、`PAYLOAD_TOO_LARGE`
 
 ### ごみ箱

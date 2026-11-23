@@ -4644,14 +4644,17 @@ describe('添付ファイル読み取り(read_attachment / list_attachments)', (
       // Then
       expect(res.isError).toBeFalsy();
       expect(res.content[0]).toEqual({ type: 'text', text: SVG });
-      expect(res.structuredContent).toMatchObject({
+      // 本文つきの成功時は structuredContent を付けず、メタは content[1] の JSON に入る
+      expect(res.structuredContent).toBeUndefined();
+      const meta = JSON.parse(res.content[1].text);
+      expect(meta).toMatchObject({
         name: 'fig.svg',
         path: '設計/fig.svg',
         size: Buffer.byteLength(SVG),
         mimeType: 'image/svg+xml',
         kind: 'text',
       });
-      expect(typeof res.structuredContent.updatedAt).toBe('string');
+      expect(typeof meta.updatedAt).toBe('string');
     });
 
     it('PNG: image content(base64 + mimeType)で返し、元のバイト列と一致する', async () => {
@@ -4675,7 +4678,11 @@ describe('添付ファイル読み取り(read_attachment / list_attachments)', (
       expect(res.content[0].type).toBe('image');
       expect(res.content[0].mimeType).toBe('image/png');
       expect(Buffer.from(res.content[0].data, 'base64').equals(saved)).toBe(true);
-      expect(res.structuredContent).toMatchObject({ mimeType: 'image/png', kind: 'image' });
+      expect(res.structuredContent).toBeUndefined();
+      expect(JSON.parse(res.content[1].text)).toMatchObject({
+        mimeType: 'image/png',
+        kind: 'image',
+      });
     });
 
     it('PDF: 内容は返さずメタ情報のみ', async () => {
@@ -4725,7 +4732,7 @@ describe('添付ファイル読み取り(read_attachment / list_attachments)', (
 
       // Then
       expect(res.isError).toBeFalsy();
-      expect(res.structuredContent.path).toBe(up.structuredContent.path);
+      expect(JSON.parse(res.content[1].text).path).toBe(up.structuredContent.path);
     });
 
     it('先頭 / 付きの名前は画面と同じく剥がして解決する', async () => {
@@ -4735,7 +4742,7 @@ describe('添付ファイル読み取り(read_attachment / list_attachments)', (
       const res = await callTool('read_attachment', { docPath: 'memo.md', name: '/pics/a.svg' });
 
       expect(res.isError).toBeFalsy();
-      expect(res.structuredContent.path).toBe('pics/a.svg');
+      expect(JSON.parse(res.content[1].text).path).toBe('pics/a.svg');
     });
 
     it('list_attachments: 埋め込みの参照一覧を exists 付きで返す', async () => {
@@ -4787,6 +4794,96 @@ describe('添付ファイル読み取り(read_attachment / list_attachments)', (
         mimeType: 'image/png',
         exists: false,
       });
+    });
+
+    it('list_attachments: リンク付き画像 [![alt](a.png)](https://x) も参照として一覧に出る', async () => {
+      await putAttachment('a.png', Buffer.from(TINY_PNG_BASE64, 'base64'));
+      await putAttachment('b.pdf', Buffer.from('%PDF-1.4\n'));
+      await callTool('create_note', {
+        path: 'memo.md',
+        content: '[![図](a.png)](https://example.com)\n\n[通常リンク](b.pdf)\n',
+      });
+
+      const res = await callTool('list_attachments', { docPath: 'memo.md' });
+
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.attachments.map((a: { name: string }) => a.name)).toEqual([
+        'a.png',
+      ]);
+      expect(res.structuredContent.attachments[0].exists).toBe(true);
+    });
+
+    it('list_attachments: ![](../img/a.png) はノートのフォルダ基準の相対パスで解決する', async () => {
+      // Given: 同名の a.png が別フォルダにもあり、相対パス指定のものが優先されるべき構成
+      const png = Buffer.from(TINY_PNG_BASE64, 'base64');
+      await putAttachment('img/a.png', png);
+      await putAttachment('other/a.png', Buffer.concat([png, Buffer.from([0])]));
+      await callTool('create_note', { path: 'docs/memo.md', content: '![](../img/a.png)\n' });
+
+      const res = await callTool('list_attachments', { docPath: 'docs/memo.md' });
+
+      expect(res.structuredContent.attachments).toEqual([
+        { name: 'a.png', path: 'img/a.png', size: png.length, mimeType: 'image/png', exists: true },
+      ]);
+    });
+
+    it('list_attachments: ![](my%20pic.png) は URL デコードして解決する', async () => {
+      await putAttachment('my pic.png', Buffer.from(TINY_PNG_BASE64, 'base64'));
+      await callTool('create_note', { path: 'memo.md', content: '![](my%20pic.png)\n' });
+
+      const res = await callTool('list_attachments', { docPath: 'memo.md' });
+
+      expect(res.structuredContent.attachments).toMatchObject([
+        { name: 'my pic.png', path: 'my pic.png', exists: true },
+      ]);
+    });
+
+    it('list_attachments: ![](dir/a.png) が相対解決できなければ basename の索引解決に回す(画面と同じ)', async () => {
+      await putAttachment('assets/a.png', Buffer.from(TINY_PNG_BASE64, 'base64'));
+      await callTool('create_note', { path: 'memo.md', content: '![](wrong/dir/a.png)\n' });
+
+      const res = await callTool('list_attachments', { docPath: 'memo.md' });
+
+      expect(res.structuredContent.attachments).toMatchObject([
+        { path: 'assets/a.png', exists: true },
+      ]);
+    });
+
+    it('list_attachments: ![](../../outside.png) のようにルート外へ出る参照は、外を読まず exists: false', async () => {
+      await callTool('create_note', {
+        path: 'memo.md',
+        content: '![](../../outside.png)\n![](../../../etc/passwd.png)\n',
+      });
+
+      const res = await callTool('list_attachments', { docPath: 'memo.md' });
+
+      expect(res.isError).toBeFalsy();
+      expect(res.structuredContent.attachments).toEqual([
+        { name: 'outside.png', path: null, size: null, mimeType: 'image/png', exists: false },
+        { name: 'passwd.png', path: null, size: null, mimeType: 'image/png', exists: false },
+      ]);
+    });
+
+    it('list_attachments: ![](link.png) がライブラリ外への symlink なら exists: false', async (ctx) => {
+      const outside = await mkdtemp(join(tmpdir(), 'tsumiwiki-outside-'));
+      try {
+        await writeFile(join(outside, 'secret.png'), 'SECRET');
+        try {
+          await symlink(join(outside, 'secret.png'), join(lib, 'link.png'));
+        } catch {
+          ctx.skip();
+          return;
+        }
+        await callTool('create_note', { path: 'memo.md', content: '![](link.png)\n' });
+
+        const res = await callTool('list_attachments', { docPath: 'memo.md' });
+
+        expect(res.structuredContent.attachments).toEqual([
+          { name: 'link.png', path: null, size: null, mimeType: 'image/png', exists: false },
+        ]);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
     });
 
     it('list_attachments: 参照が無いノートは空配列', async () => {
